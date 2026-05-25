@@ -211,7 +211,7 @@ export function ChatScreen({ theme, messages, toolResults = [], state, elapsedMs
         {showBusy && <text fg={theme.statusThinking}>  {spinnerFrame(elapsedMs)} thinking</text>}
       </scrollbox>
 
-      <CommandDropdown inputValue={inputValue} theme={theme} onPick={(cmd) => {
+      <CommandDropdown inputValue={inputValue} theme={theme} onSubmit={(v) => { setInputValue(""); handleSubmitLocal(v); }} onPick={(cmd) => {
         if (ARG_BEARING.has(cmd)) {
           const rest = inputValue.slice(cmd.length).trim();
           if (rest) {

@@ -62,13 +62,24 @@ describe("tools", () => {
     expect(out.content).toBe("hello world");
   });
 
-  it("read_file truncates content over 8000 chars", () => {
-    const file = join(ws, "big.txt");
-    writeFileSync(file, "x".repeat(10000), "utf-8");
+  it("read_file reads specific line range", () => {
+    const file = join(ws, "lines.txt");
+    writeFileSync(file, Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join("\n"), "utf-8");
     const readFile = tools.find((t) => t.name === "read_file")!;
-    const out = JSON.parse(readFile.execute({ path: "big.txt", limit: 8000 }, ws));
+    const out = JSON.parse(readFile.execute({ path: "lines.txt", offset: 10, limit: 5 }, ws));
     expect(out.ok).toBe(true);
-    expect(out.content.length).toBe(8000);
+    expect(out.content).toBe("line 11\nline 12\nline 13\nline 14\nline 15");
+    expect(out.truncated).toBe(true);
+  });
+
+  it("read_file sets truncated when file has more lines", () => {
+    const file = join(ws, "many.txt");
+    writeFileSync(file, Array.from({ length: 50 }, () => "line").join("\n"), "utf-8");
+    const readFile = tools.find((t) => t.name === "read_file")!;
+    const out = JSON.parse(readFile.execute({ path: "many.txt", limit: 10 }, ws));
+    expect(out.ok).toBe(true);
+    expect(out.content.split("\n").length).toBe(10);
+    expect(out.truncated).toBe(true);
   });
 
   it("write_file creates file and returns path", () => {

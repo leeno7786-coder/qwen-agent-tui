@@ -145,8 +145,8 @@ function checkAndAutoCompact(agent: AgentCore, setMessages: React.Dispatch<React
         ? [
             {
               id: Math.random().toString(36).slice(2, 10),
-              role: "system" as const,
-              content: `Rolling window compaction: ${removed.length} messages summarized. Token count: ~${currentTokenCount.toLocaleString()} / ${contextSize.toLocaleString()} (threshold: ${compactThreshold.toLocaleString()}). Reserved ${Math.round(summaryReservedPercent * 100)}% for summary. ${summaryContent}`,
+              role: "user" as const,
+               content: `[Summarized ${removed.length} earlier messages: ${summaryContent}]`,
               timestamp: Date.now(),
             },
           ]
@@ -644,8 +644,8 @@ export function App({ renderer }: { renderer: CliRenderer }) {
                 ? [
                     {
                       id: Math.random().toString(36).slice(2, 10),
-                      role: "system" as const,
-                      content: `Rolling window compact: ${removed.length} messages summarized. Tokens: ~${currentTokenCount.toLocaleString()} / ${contextSize.toLocaleString()} (75% threshold: ${compactThreshold.toLocaleString()}). Reserved ${Math.round(summaryReservedPercent * 100)}% for summary. ${summaryContent}`,
+                      role: "user" as const,
+                       content: `[Compact: ${removed.length} messages summarized. ${summaryContent}]`,
                       timestamp: Date.now(),
                     },
                   ]

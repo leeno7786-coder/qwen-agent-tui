@@ -41,6 +41,7 @@ interface CommandDropdownProps {
   inputValue: string;
   theme: Theme;
   onPick: (command: string) => void;
+  onSubmit?: (value: string) => void;
   skillCommands?: SkillCommand[];
 }
 
@@ -48,6 +49,7 @@ export function CommandDropdown({
   inputValue,
   theme,
   onPick,
+  onSubmit,
   skillCommands: propSkillCommands,
 }: CommandDropdownProps) {
   const [selected, setSelected] = useState(0);
@@ -140,7 +142,16 @@ export function CommandDropdown({
 
   useKeyboard(
     (keyEvent) => {
-      if (!open || commandCount === 0) return;
+      if (!open) return;
+
+      if (commandCount === 0) {
+        if (keyEvent.name === "return" || keyEvent.name === "Enter") {
+          keyEvent.preventDefault?.();
+          keyEvent.stopPropagation?.();
+          onSubmit?.(inputValue);
+        }
+        return;
+      }
 
       if (keyEvent.name === "up" || keyEvent.name === "ArrowUp") {
         setSelected((s) => Math.max(0, s - 1));

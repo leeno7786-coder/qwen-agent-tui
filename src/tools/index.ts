@@ -24,8 +24,9 @@ export interface Tool {
   execute: (args: any, workspace: string, cfg?: Config) => string;
 }
 
-const DEFAULT_READ_LIMIT = 20000;
-const SMALL_MODEL_READ_LIMIT = 4000; // Smaller limit for 4B/nemotron models
+const DEFAULT_READ_LIMIT = 200;
+const SMALL_MODEL_READ_LIMIT = 100;
+const MAX_READ_CHARS = 100000;
 const MAX_SEARCH_RESULTS = 80;
 const SKIP_DIRS = new Set([
   // Version control
@@ -55,7 +56,9 @@ function rel(abs: string, ws: string): string {
 }
 
 function truncate(text: string, limit = DEFAULT_READ_LIMIT): { content: string; truncated: boolean; originalLength: number } {
-  return { content: text.slice(0, limit), truncated: text.length > limit, originalLength: text.length };
+  const lines = text.split("\n");
+  const joined = lines.slice(0, limit).join("\n");
+  return { content: joined, truncated: lines.length > limit, originalLength: lines.length };
 }
 
 function walk(root: string, ws: string, cfg: Config | undefined, visit: (file: string) => boolean | void, depth = 0, maxDepth = 8): void {
@@ -254,18 +257,21 @@ export const tools: Tool[] = [
 {
   name: "read_file",
     description: "Read a file from the workspace",
-  parameters: { type: "object", properties: { path: { type: "string", description: "File path to read" }, offset: { type: "number", description: "Line offset to start reading from (optional)" }, limit: { type: "number", description: "Maximum lines to read (default: 20000)" } }, required: ["path"] },
+  parameters: { type: "object", properties: { path: { type: "string", description: "File path to read" }, offset: { type: "number", description: "Line offset to start reading from (0-indexed, optional)" }, limit: { type: "number", description: "Maximum lines to read (optional)" } }, required: ["path"] },
   execute: (args, ws, cfg) => {
     try {
       const p = safe(args.path, ws, cfg);
       const st = statSync(p);
       if (!st.isFile()) return JSON.stringify({ ok: false, error: `Not a file: ${args.path}` });
       const text = readFileSync(p, "utf-8");
+      const lines = text.split("\n");
       const offset = Math.max(0, Number(args.offset || 0));
       const isSmall = checkSmallModel(cfg);
-      const limit = Math.max(1, Math.min(Number(args.limit || (isSmall ? SMALL_MODEL_READ_LIMIT : DEFAULT_READ_LIMIT)), 100000));
-      const sliced = truncate(text.slice(offset), limit);
-      return JSON.stringify({ ok: true, path: rel(p, ws), content: sliced.content, truncated: sliced.truncated || offset + limit < text.length, offset, originalLength: text.length });
+      const limit = Math.max(1, Math.min(Number(args.limit || (isSmall ? SMALL_MODEL_READ_LIMIT : DEFAULT_READ_LIMIT)), 2000));
+      const sliced = lines.slice(offset, offset + limit);
+      const content = sliced.join("\n");
+      const safeContent = content.length > MAX_READ_CHARS ? content.slice(0, MAX_READ_CHARS) : content;
+      return JSON.stringify({ ok: true, path: rel(p, ws), content: safeContent, truncated: offset + limit < lines.length || safeContent.length < content.length, offset, originalLength: lines.length });
     } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
   },
 },
