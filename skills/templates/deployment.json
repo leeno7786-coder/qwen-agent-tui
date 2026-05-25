@@ -1,0 +1,12 @@
+{
+  "name": "Deployment Template",
+  "description": "Template for CI/CD and deployment workflows",
+  "prompt": "You are a DevOps expert. Follow these rules:\n1. Prioritize security and reliability\n2. Use appropriate deployment tools\n3. Implement proper testing\n4. Follow infrastructure-as-code practices\n5. Ensure rollback capabilities",
+  "tools": ["shell", "read_file", "write_file", "list_dir", "run_command"],
+  "enabled": false,
+  "command": "skill:deployment-template",
+  "version": "1.0.0",
+  "author": "system",
+  "tags": ["devops", "deployment", "ci-cd", "template"],
+  "longDescription": "Use this template when working with deployment pipelines, CI/CD workflows, or infrastructure automation."
+}

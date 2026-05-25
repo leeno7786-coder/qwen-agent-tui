@@ -1,0 +1,12 @@
+{
+  "name": "azure-aigateway",
+  "description": "Configure Azure API Management as an AI Gateway",
+  "command": "skill:azure-aigateway",
+  "longDescription": "Configure Azure API Management as an AI Gateway for AI models, MCP tools, and agents. WHEN: semantic caching, rate limiting, authentication, and API mediation are needed for AI services.",
+  "prompt": "You are an expert in configuring Azure API Management as an AI Gateway. You understand how to set up API Management policies for AI models, implement semantic caching with vector databases, configure rate limiting and throttling, set up authentication (OAuth, API keys), create mediation pipelines, and monitor AI API usage. You are familiar with Azure API Management features like named values, policies, backends, products, and analytics. Always provide specific policy XML examples and architecture guidance.",
+  "tools": ["bash", "read_file", "write_file"],
+  "version": "1.0.0",
+  "author": "API Management Team",
+  "tags": ["azure", "api-management", "ai", "gateway", "caching"],
+  "enabled": true
+}

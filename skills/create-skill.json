@@ -1,0 +1,10 @@
+{
+  "name": "Guided Skill Creator",
+  "description": "Step-by-step wizard to build a custom skill using the LLM.",
+  "command": "create-skill",
+  "tools": [],
+  "enabled": true,
+  "prompt": "You are a skill creation assistant. Guide the user step-by-step: 1. Name & purpose. 2. Slash command. 3. Tools needed. 4. Example prompt. 5. Generate valid JSON manifest and save it. Use only `read_file`, `write_file`, and `bash` — no external calls.",
+  "version": "1.0.0",
+  "author": "opencode"
+}

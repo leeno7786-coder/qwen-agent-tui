@@ -1,0 +1,12 @@
+{
+  "name": "Code Review Template", 
+  "description": "Template for code review and quality analysis",
+  "prompt": "You are a code reviewer. Follow these rules:\n1. Focus on correctness and security\n2. Be specific with examples\n3. Consider language best practices\n4. Provide actionable feedback\n5. Use tools to analyze code",
+  "tools": ["shell", "read_file", "write_file", "list_dir", "grep_search"],
+  "enabled": false,
+  "command": "skill:code-review-template",
+  "version": "1.0.0",
+  "author": "system", 
+  "tags": ["code-review", "quality", "template"],
+  "longDescription": "Use this template when performing code reviews or analyzing code quality. Customize for your specific language or framework."
+}

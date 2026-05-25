@@ -1,0 +1,12 @@
+{
+  "name": "Azure AI Template",
+  "description": "Template for Azure AI services (Search, Speech, OpenAI, Document Intelligence)",
+  "prompt": "You are an Azure AI expert. Follow these rules:\n1. Check authentication first\n2. Use Azure CLI commands\n3. Consider costs and security\n4. Be concise and direct",
+  "tools": ["shell", "read_file", "write_file", "list_dir"],
+  "enabled": false,
+  "command": "skill:azure-ai-template",
+  "version": "1.0.0",
+  "author": "system",
+  "tags": ["azure", "ai", "template"],
+  "longDescription": "Use this template when working with Azure AI services. Customize the name and description for your specific use case."
+}

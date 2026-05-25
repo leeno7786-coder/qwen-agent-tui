@@ -1,0 +1,174 @@
+/** @jsxImportSource @opentui/react */
+
+import { useState } from "react";
+import { useKeyboard } from "@opentui/react";
+import type { Session } from "../types";
+import type { Theme } from "./theme";
+
+/* ─── Help Overlay ─── */
+
+interface HelpOverlayProps {
+  theme: Theme;
+  onClose: () => void;
+}
+
+export function HelpOverlay({ theme, onClose }: HelpOverlayProps) {
+  useKeyboard((keyEvent) => {
+    if (keyEvent.name === "escape" || keyEvent.name === "Escape") {
+      onClose();
+    }
+  });
+
+  return (
+    <scrollbox
+      flexDirection="column"
+      borderStyle="double"
+      borderColor={theme.borderColor}
+      paddingX={2}
+      paddingY={1}
+      flexGrow={1}
+      backgroundColor={theme.bgPanel}
+    >
+      <text fg={theme.headerFg}>Agent — Help</text>
+      <text fg={theme.mutedFg}>Esc to close</text>
+      <text> </text>
+
+      <text fg={theme.userFg}>Commands:</text>
+      <text fg={theme.agentFg}>  /new           Start a new session (clear all)</text>
+      <text fg={theme.agentFg}>  /clear         Clear chat history</text>
+      <text fg={theme.agentFg}>  /compact       Compact conversation</text>
+      <text fg={theme.agentFg}>  /auto ...      Autonomous mode</text>
+      <text fg={theme.agentFg}>  /todo          Toggle todo sidebar</text>
+      <text fg={theme.agentFg}>  /reset-rounds  Reset round counter (after hitting max)</text>
+      <text fg={theme.agentFg}>  /todo add ...  Add a todo</text>
+      <text fg={theme.agentFg}>  /skill         List loaded skills</text>
+      <text fg={theme.agentFg}>  /skills        Manage skills (F8) - create, enable, disable</text>
+      <text fg={theme.agentFg}>  /sessions      List saved sessions</text>
+      <text fg={theme.agentFg}>  /resume [id]   Resume latest or specific session</text>
+      <text fg={theme.agentFg}>  /rename [name] Rename current session</text>
+      <text fg={theme.agentFg}>  /copy [id]     Copy message content to clipboard</text>
+      <text fg={theme.agentFg}>  /save [name]   Save conversation</text>
+      <text fg={theme.agentFg}>  /load          Load a saved conversation</text>
+      <text fg={theme.agentFg}>  /reload        Reload configuration</text>
+      <text fg={theme.agentFg}>  /theme [name]  Switch theme</text>
+      <text fg={theme.agentFg}>  /connect       Connect a provider - browse runtimes, enter API keys, select models</text>
+      <text fg={theme.agentFg}>  /cd [path]     Change the workspace for tools</text>
+      <text fg={theme.agentFg}>  /allow [path]  Approve extra tool access outside the workspace</text>
+      <text fg={theme.agentFg}>  /export        Export chat to markdown</text>
+      <text fg={theme.agentFg}>  /exit          Quit (auto-saves session)</text>
+      <text> </text>
+
+      <text fg={theme.userFg}>Shortcuts:</text>
+      <text fg={theme.mutedFg}>  F1      Help</text>
+      <text fg={theme.mutedFg}>  F2      Clear chat</text>
+      <text fg={theme.mutedFg}>  F3      Prefill /auto</text>
+      <text fg={theme.mutedFg}>  F4      Todo sidebar</text>
+      <text fg={theme.mutedFg}>  F5      Save session</text>
+      <text fg={theme.mutedFg}>  F6      Load session</text>
+      <text fg={theme.mutedFg}>  F7      Toggle mouse capture</text>
+      <text fg={theme.mutedFg}>  F9      Cycle theme</text>
+      <text fg={theme.mutedFg}>  F10     Exit</text>
+      <text> </text>
+
+      <text fg={theme.userFg}>Scrolling:</text>
+      <text fg={theme.mutedFg}>  ↑ / ↓         Scroll line by line</text>
+      <text fg={theme.mutedFg}>  Shift+↑/↓     Scroll page by page</text>
+      <text fg={theme.mutedFg}>  Mouse wheel   Scroll (terminal dependent)</text>
+      <text> </text>
+      <text fg={theme.userFg}>Input:</text>
+      <text fg={theme.mutedFg}>  Shift+Enter   Multi-line input</text>
+      <text fg={theme.mutedFg}>  Ctrl+↑/↓     Select message</text>
+      <text fg={theme.mutedFg}>  Ctrl+C       Copy selected message</text>
+      <text> </text>
+
+      <text fg={theme.userFg}>Copying text:</text>
+      <text fg={theme.mutedFg}>  Hold Shift + drag to select and copy</text>
+      <text fg={theme.mutedFg}>  Or press F7 to disable mouse capture, then drag normally</text>
+    </scrollbox>
+  );
+}
+
+/* ─── History Overlay ─── */
+
+interface HistoryOverlayProps {
+  theme: Theme;
+  sessions: Session[];
+  onLoad: (session: Session) => void;
+  onDelete: (id: string) => void;
+  onClose: () => void;
+}
+
+export function HistoryOverlay({
+  theme,
+  sessions,
+  onLoad,
+  onDelete,
+  onClose,
+}: HistoryOverlayProps) {
+  const [selected, setSelected] = useState(0);
+
+  useKeyboard((keyEvent) => {
+    if (keyEvent.name === "escape" || keyEvent.name === "Escape") {
+      onClose();
+      return;
+    }
+    if (keyEvent.name === "up" || keyEvent.name === "ArrowUp") {
+      setSelected((s) => Math.max(0, s - 1));
+      return;
+    }
+    if (keyEvent.name === "down" || keyEvent.name === "ArrowDown") {
+      setSelected((s) => Math.min(sessions.length - 1, s + 1));
+      return;
+    }
+    if (keyEvent.name === "return" || keyEvent.name === "Enter") {
+      const sess = sessions[selected];
+      if (sess) onLoad(sess);
+      return;
+    }
+    if (keyEvent.name === "delete" || keyEvent.name === "Delete") {
+      const sess = sessions[selected];
+      if (sess) {
+        onDelete(sess.id);
+        setSelected((s) => Math.max(0, s - 1));
+      }
+    }
+  });
+
+  return (
+    <scrollbox
+      flexDirection="column"
+      borderStyle="double"
+      borderColor={theme.borderColor}
+      paddingX={2}
+      paddingY={1}
+      flexGrow={1}
+      backgroundColor={theme.bgPanel}
+    >
+      <text fg={theme.headerFg}>Conversation History</text>
+      <text fg={theme.mutedFg}>↑↓ Navigate · Enter Load · Del Delete · Esc Close</text>
+      <text> </text>
+      {sessions.length === 0 ? (
+        <text fg={theme.mutedFg}>No saved sessions.</text>
+      ) : (
+        sessions.map((sess, i) => {
+          const isSel = i === selected;
+          const firstUser = sess.messages.find((m) => m.role === "user");
+          const preview = firstUser
+            ? firstUser.content.slice(0, 40).replace(/\n/g, " ")
+            : "Empty";
+          const date = new Date(sess.updatedAt).toLocaleString();
+          return (
+            <text
+              key={sess.id}
+              fg={isSel ? theme.headerFg : theme.mutedFg}
+              bg={isSel ? theme.bgSelected : undefined}
+            >
+              {isSel ? "> " : "  "}
+              {date} ({sess.messages.length}) {preview}
+            </text>
+          );
+        })
+      )}
+    </scrollbox>
+  );
+}

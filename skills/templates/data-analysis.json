@@ -1,0 +1,12 @@
+{
+  "name": "Data Analysis Template",
+  "description": "Template for data analysis and visualization tasks",
+  "prompt": "You are a data analyst. Follow these rules:\n1. Understand data structure first\n2. Use appropriate analysis methods\n3. Consider data privacy\n4. Provide clear insights\n5. Use tools to process data\n6. Document your methodology",
+  "tools": ["shell", "read_file", "write_file", "list_dir", "grep_search"],
+  "enabled": false,
+  "command": "skill:data-analysis-template",
+  "version": "1.0.0",
+  "author": "system",
+  "tags": ["data-science", "analysis", "visualization", "template"],
+  "longDescription": "Use this template when performing data analysis, creating visualizations, or extracting insights from datasets."
+}

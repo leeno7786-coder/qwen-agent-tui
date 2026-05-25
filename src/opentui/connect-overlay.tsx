@@ -1,0 +1,449 @@
+/** @jsxImportSource @opentui/react */
+
+import { useState, useMemo, useCallback } from "react";
+import { useKeyboard } from "@opentui/react";
+import type { Theme } from "./theme";
+import {
+  RUNTIME_PROVIDERS,
+  getProvider,
+  getProviderBaseURL,
+  providerRequiresAuth,
+  getApiKeyEnvVar,
+  fetchLocalModels,
+  checkRuntimeHealth,
+} from "../providers";
+import { saveApiKeyToEnv, getApiKey } from "../config";
+import type { RuntimeProvider, ModelInfo } from "../types";
+
+interface ConnectOverlayProps {
+  theme: Theme;
+  onClose: () => void;
+  onSelect?: (provider: RuntimeProvider, model: ModelInfo, apiKey?: string) => void;
+}
+
+type ConnectState =
+  | "selecting-provider"
+  | "entering-api-key"
+  | "selecting-model"
+  | "checking-runtime";
+
+const VISIBLE_PROVIDERS = 12;
+const VISIBLE_MODELS = 10;
+
+export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps) {
+  const [selectedProviderIndex, setSelectedProviderIndex] = useState(0);
+  const [selectedModelIndex, setSelectedModelIndex] = useState(0);
+  const [state, setState] = useState<ConnectState>("selecting-provider");
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [runtimeModels, setRuntimeModels] = useState<ModelInfo[]>([]);
+  const [isCheckingRuntime, setIsCheckingRuntime] = useState(false);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<string | null>(null);
+
+  const sortedProviders = useMemo(
+    () => [...RUNTIME_PROVIDERS].sort((a, b) => a.name.localeCompare(b.name)),
+    []
+  );
+
+  const selectedProvider = sortedProviders[selectedProviderIndex];
+
+  const providerModels = useMemo(() => {
+    if (!selectedProvider) return [];
+    if (runtimeModels.length > 0) return runtimeModels;
+    return selectedProvider.models || [];
+  }, [selectedProvider, runtimeModels]);
+
+  const selectedModel = providerModels[selectedModelIndex];
+
+  const requiresAuth = useMemo(() => {
+    return selectedProvider ? providerRequiresAuth(selectedProvider.id) : false;
+  }, [selectedProvider]);
+
+  const isLocal = useMemo(() => {
+    return selectedProvider?.isLocal === true;
+  }, [selectedProvider]);
+
+  const hasApiKey = useMemo(() => {
+    if (!selectedProvider) return false;
+    const envVar = getApiKeyEnvVar(selectedProvider.id);
+    if (!envVar) return false;
+    return !!getApiKey(envVar);
+  }, [selectedProvider]);
+
+  const handleProviderSelect = useCallback(async () => {
+    if (!selectedProvider) return;
+
+    if (isLocal) {
+      setState("checking-runtime");
+      setIsCheckingRuntime(true);
+      setRuntimeError(null);
+
+      try {
+        const baseURL = getProviderBaseURL(selectedProvider) || "http://localhost:1234/v1";
+        const isHealthy = await checkRuntimeHealth(baseURL);
+
+        if (isHealthy) {
+          setRuntimeStatus("Runtime is running");
+          const models = await fetchLocalModels(baseURL);
+          if (models.length > 0) {
+            setRuntimeModels(models);
+            setState("selecting-model");
+            setSelectedModelIndex(0);
+          } else {
+            setRuntimeError("No models found in runtime");
+            setState("selecting-provider");
+          }
+        } else {
+          setRuntimeError(`Runtime not accessible at ${baseURL}`);
+          setState("selecting-provider");
+        }
+      } catch (error) {
+        setRuntimeError(`Error checking runtime: ${error}`);
+        setState("selecting-provider");
+      } finally {
+        setIsCheckingRuntime(false);
+      }
+      return;
+    }
+
+    if (requiresAuth) {
+      if (hasApiKey) {
+        setState("selecting-model");
+        setSelectedModelIndex(0);
+      } else {
+        setState("entering-api-key");
+        setApiKeyInput("");
+      }
+    } else {
+      setState("selecting-model");
+      setSelectedModelIndex(0);
+    }
+  }, [selectedProvider, isLocal, requiresAuth, hasApiKey]);
+
+  const handleApiKeySubmit = useCallback(() => {
+    if (!selectedProvider || apiKeyInput.trim() === "") {
+      setState("selecting-provider");
+      return;
+    }
+
+    const envVar = getApiKeyEnvVar(selectedProvider.id);
+    if (!envVar) {
+      setState("selecting-provider");
+      return;
+    }
+
+    const saved = saveApiKeyToEnv(envVar, apiKeyInput.trim());
+    if (saved) {
+      setState("selecting-model");
+      setSelectedModelIndex(0);
+      setApiKeyInput("");
+    } else {
+      setState("selecting-provider");
+    }
+  }, [selectedProvider, apiKeyInput]);
+
+  const handleModelSelect = useCallback(() => {
+    if (!selectedProvider || !selectedModel) return;
+
+    const envVar = getApiKeyEnvVar(selectedProvider.id);
+    const apiKey = envVar ? getApiKey(envVar) : undefined;
+
+    onSelect?.(selectedProvider, selectedModel, apiKey);
+    onClose();
+  }, [selectedProvider, selectedModel, onSelect, onClose]);
+
+  const handleBack = useCallback(() => {
+    setState("selecting-provider");
+    setApiKeyInput("");
+    setRuntimeError(null);
+    setRuntimeStatus(null);
+    setRuntimeModels([]);
+  }, []);
+
+  useKeyboard(
+    (keyEvent) => {
+      if (keyEvent.name === "escape" || keyEvent.name === "Escape") {
+        if (state === "entering-api-key" || state === "selecting-model" || state === "checking-runtime") {
+          handleBack();
+        } else {
+          onClose();
+        }
+        keyEvent.preventDefault?.();
+        keyEvent.stopPropagation?.();
+        return;
+      }
+
+      if (keyEvent.name === "return" || keyEvent.name === "Enter") {
+        if (state === "entering-api-key") {
+          handleApiKeySubmit();
+          keyEvent.preventDefault?.();
+          keyEvent.stopPropagation?.();
+          return;
+        }
+        if (state === "selecting-provider") {
+          handleProviderSelect();
+          keyEvent.preventDefault?.();
+          keyEvent.stopPropagation?.();
+          return;
+        }
+        if (state === "selecting-model") {
+          handleModelSelect();
+          keyEvent.preventDefault?.();
+          keyEvent.stopPropagation?.();
+          return;
+        }
+        return;
+      }
+
+      // Let input component handle text when entering API key
+      if (state === "entering-api-key") {
+        return;
+      }
+
+      if (keyEvent.name === "up" || keyEvent.name === "ArrowUp") {
+        if (state === "selecting-provider") {
+          setSelectedProviderIndex((s) => {
+            const next = Math.max(0, s - 1);
+            setSelectedModelIndex(0);
+            setRuntimeError(null);
+            setRuntimeStatus(null);
+            return next;
+          });
+          keyEvent.preventDefault?.();
+          keyEvent.stopPropagation?.();
+        } else if (state === "selecting-model") {
+          setSelectedModelIndex((s) => Math.max(0, s - 1));
+          keyEvent.preventDefault?.();
+          keyEvent.stopPropagation?.();
+        }
+        return;
+      }
+
+      if (keyEvent.name === "down" || keyEvent.name === "ArrowDown") {
+        if (state === "selecting-provider") {
+          setSelectedProviderIndex((s) => {
+            const next = Math.min(sortedProviders.length - 1, s + 1);
+            setSelectedModelIndex(0);
+            setRuntimeError(null);
+            setRuntimeStatus(null);
+            return next;
+          });
+          keyEvent.preventDefault?.();
+          keyEvent.stopPropagation?.();
+        } else if (state === "selecting-model") {
+          setSelectedModelIndex((s) => Math.min(providerModels.length - 1, s + 1));
+          keyEvent.preventDefault?.();
+          keyEvent.stopPropagation?.();
+        }
+        return;
+      }
+
+      if (keyEvent.name === "pageup" || keyEvent.name === "PageUp") {
+        if (state === "selecting-provider") {
+          setSelectedProviderIndex((s) => {
+            const next = Math.max(0, s - VISIBLE_PROVIDERS);
+            setSelectedModelIndex(0);
+            return next;
+          });
+          keyEvent.preventDefault?.();
+          keyEvent.stopPropagation?.();
+        } else if (state === "selecting-model") {
+          setSelectedModelIndex((s) => Math.max(0, s - VISIBLE_MODELS));
+          keyEvent.preventDefault?.();
+          keyEvent.stopPropagation?.();
+        }
+        return;
+      }
+
+      if (keyEvent.name === "pagedown" || keyEvent.name === "PageDown") {
+        if (state === "selecting-provider") {
+          setSelectedProviderIndex((s) => {
+            const next = Math.min(sortedProviders.length - 1, s + VISIBLE_PROVIDERS);
+            setSelectedModelIndex(0);
+            return next;
+          });
+          keyEvent.preventDefault?.();
+          keyEvent.stopPropagation?.();
+        } else if (state === "selecting-model") {
+          setSelectedModelIndex((s) => Math.min(providerModels.length - 1, s + VISIBLE_MODELS));
+          keyEvent.preventDefault?.();
+          keyEvent.stopPropagation?.();
+        }
+        return;
+      }
+    },
+    { release: false }
+  );
+
+  const header = (
+    <box flexDirection="row" justifyContent="space-between" paddingX={2} paddingY={1}>
+      <text fg={theme.headerFg}>Connect a Provider</text>
+      <text fg={theme.mutedFg}>Esc to close</text>
+    </box>
+  );
+
+  if (state === "entering-api-key" && selectedProvider) {
+    return (
+      <box
+        flexDirection="column"
+        flexGrow={1}
+        borderStyle="double"
+        borderColor={theme.borderColor}
+        backgroundColor={theme.bgPanel}
+      >
+        {header}
+        <box flexDirection="column" paddingX={2} paddingY={1}>
+          <text fg={theme.headerFg}>
+            {selectedProvider.icon} {selectedProvider.name}
+          </text>
+          <text fg={theme.mutedFg}>
+            Enter your API key for {getApiKeyEnvVar(selectedProvider.id)}
+          </text>
+          <box flexDirection="row" paddingY={1}>
+            <text fg={theme.inputFg}>Key: </text>
+            <input
+              focused
+              flexGrow={0}
+              value={apiKeyInput}
+              onInput={setApiKeyInput}
+              placeholder="paste key here"
+            />
+          </box>
+          <text fg={theme.mutedFg}>Enter to save · Esc to cancel</text>
+        </box>
+      </box>
+    );
+  }
+
+  if (state === "checking-runtime" && selectedProvider) {
+    return (
+      <box
+        flexDirection="column"
+        flexGrow={1}
+        borderStyle="double"
+        borderColor={theme.borderColor}
+        backgroundColor={theme.bgPanel}
+      >
+        {header}
+        <box flexDirection="column" paddingX={2} paddingY={1}>
+          <text fg={theme.headerFg}>
+            {selectedProvider.icon} {selectedProvider.name}
+          </text>
+          <text fg={theme.mutedFg}>
+            {isCheckingRuntime ? "Checking runtime..." : runtimeStatus}
+          </text>
+          {runtimeError && <text fg={theme.errorFg}>Error: {runtimeError}</text>}
+          <text fg={theme.mutedFg} marginTop={1}>
+            Please ensure {selectedProvider.name} is running at {getProviderBaseURL(selectedProvider)}
+          </text>
+          <text fg={theme.mutedFg}>Esc to go back</text>
+        </box>
+      </box>
+    );
+  }
+
+  return (
+    <box
+      flexDirection="column"
+      flexGrow={1}
+      borderStyle="double"
+      borderColor={theme.borderColor}
+      backgroundColor={theme.bgPanel}
+    >
+      {header}
+      <box flexDirection="row" flexGrow={1}>
+        {/* Left: Providers */}
+        <box flexDirection="column" flexGrow={1} paddingX={1}>
+          <text fg={theme.headerFg}>Providers</text>
+          <scrollbox flexDirection="column" flexGrow={1}>
+            {sortedProviders.map((provider, i) => {
+              const isSel = i === selectedProviderIndex;
+              return (
+                <text
+                  key={provider.id}
+                  fg={isSel ? theme.headerFg : theme.mutedFg}
+                  bg={isSel ? theme.bgSelected : undefined}
+                >
+                  {isSel ? "> " : "  "}
+                  {provider.icon} {provider.name}
+                </text>
+              );
+            })}
+          </scrollbox>
+          <text fg={theme.mutedFg}>↑↓ Navigate · Enter Select</text>
+        </box>
+
+        {/* Divider */}
+        <box width={1} border={true} borderColor={theme.borderColor} />
+
+        {/* Right: Details */}
+        <box flexDirection="column" flexGrow={1} paddingX={1}>
+          <text fg={theme.headerFg}>Available Models</text>
+          {selectedProvider ? (
+            <>
+              <box flexDirection="column" marginTop={1}>
+                <text fg={theme.userFg}>
+                  {selectedProvider.icon} {selectedProvider.name}
+                </text>
+                {selectedProvider.description && (
+                  <text fg={theme.mutedFg}>{selectedProvider.description}</text>
+                )}
+                {requiresAuth && (
+                  <text fg={hasApiKey ? theme.agentFg : theme.mutedFg}>
+                    {hasApiKey ? "✓ API key configured" : "Requires API key"}
+                  </text>
+                )}
+                {isLocal && <text fg={theme.mutedFg}>Local runtime</text>}
+              </box>
+
+              {state === "selecting-model" ? (
+                providerModels.length > 0 ? (
+                  <scrollbox flexDirection="column" flexGrow={1} marginTop={1}>
+                    {providerModels.map((model, i) => {
+                      const isSel = i === selectedModelIndex;
+                      return (
+                        <text
+                          key={model.id}
+                          fg={isSel ? theme.agentFg : theme.mutedFg}
+                          bg={isSel ? theme.bgSelected : undefined}
+                        >
+                          {isSel ? "> " : "  "}
+                          {model.name}
+                          {model.default ? " [DEFAULT]" : ""}
+                        </text>
+                      );
+                    })}
+                  </scrollbox>
+                ) : (
+                  <box flexDirection="column" justifyContent="center" flexGrow={1}>
+                    <text fg={theme.mutedFg}>No models available</text>
+                  </box>
+                )
+              ) : (
+                <box flexDirection="column" justifyContent="center" flexGrow={1}>
+                  <text fg={theme.mutedFg}>Select provider and press Enter</text>
+                </box>
+              )}
+
+              {state === "selecting-model" && selectedModel && (
+                <text fg={theme.mutedFg} marginTop={1}>
+                  {selectedModel.description || "Select a model to connect"}
+                </text>
+              )}
+
+              <text fg={theme.mutedFg} marginTop={1}>
+                {state === "selecting-model"
+                  ? "↑↓ Select model · Enter Connect · Esc Back"
+                  : "Press Enter to continue"}
+              </text>
+            </>
+          ) : (
+            <box flexDirection="column" justifyContent="center" flexGrow={1}>
+              <text fg={theme.mutedFg}>Select a provider to view available models</text>
+            </box>
+          )}
+        </box>
+      </box>
+    </box>
+  );
+}

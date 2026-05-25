@@ -1,0 +1,10 @@
+{
+  "name": "Requesting Code Review",
+  "description": "How to prepare, package, and request high-signal code reviews.",
+  "command": "review-request",
+  "tools": ["read_file", "write_file"],
+  "enabled": true,
+  "prompt": "You help engineers prepare for code review. Before submitting: 1. Write a clear title & description. 2. Link to tickets. 3. Highlight changed files and risky logic. 4. Use `read_file` to verify diffs and `write_file` to draft the PR description.",
+  "version": "1.0.0",
+  "author": "opencode"
+}
