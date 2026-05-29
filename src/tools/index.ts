@@ -305,6 +305,35 @@ export const tools: Tool[] = [
     } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
   },
 },
+{
+  name: "edit_file_lines",
+    description: "Replace a range of lines in a file by line number. Use this when edit_file fails with 'old_text not found' or when you know the exact line numbers to change",
+  parameters: { type: "object", properties: { path: { type: "string", description: "File path to edit" }, start_line: { type: "number", description: "First line number to replace (1-indexed, inclusive)" }, end_line: { type: "number", description: "Last line number to replace (1-indexed, inclusive)" }, new_text: { type: "string", description: "Replacement text (can be multiple lines)" } }, required: ["path", "start_line", "end_line", "new_text"] },
+  execute: (args, ws, cfg) => {
+    try {
+      const p = safe(args.path, ws, cfg);
+      const startLine = Number(args.start_line);
+      const endLine = Number(args.end_line);
+      if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) {
+        return JSON.stringify({ ok: false, error: "start_line and end_line must be numbers" });
+      }
+      if (startLine < 1 || endLine < startLine) {
+        return JSON.stringify({ ok: false, error: "invalid line range: start_line must be >= 1 and end_line >= start_line" });
+      }
+      const text = readFileSync(p, "utf-8");
+      const lines = text.split(/\r?\n/);
+      if (startLine > lines.length) {
+        return JSON.stringify({ ok: false, error: `start_line ${startLine} exceeds file length (${lines.length} lines)` });
+      }
+      const newText = String(args.new_text ?? "");
+      const before = lines.slice(0, startLine - 1);
+      const after = lines.slice(Math.min(endLine, lines.length));
+      const result = [...before, newText, ...after].join("\n");
+      writeFileSync(p, result, "utf-8");
+      return JSON.stringify({ ok: true, path: rel(p, ws), start_line: startLine, end_line: Math.min(endLine, lines.length), lines_removed: Math.min(endLine, lines.length) - startLine + 1, lines_added: newText ? newText.split("\n").length : 0 });
+    } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
+  },
+},
 
 // Directory and Project Structure Tools
 {
@@ -441,6 +470,51 @@ export const tools: Tool[] = [
 },
 
 // Search and Analysis Tools
+{
+  name: "search_and_view",
+    description: "Search for a pattern and show matching lines with surrounding context. Use this to find where code is defined or used, then edit with edit_file_lines",
+  parameters: { type: "object", properties: { pattern: { type: "string", description: "Text or regex pattern to search for" }, path: { type: "string", description: "File or directory to search in (default: workspace root)" }, file_pattern: { type: "string", description: "Optional file filter (e.g. '*.ts', '*.py')" }, context_lines: { type: "number", description: "Lines of context before and after each match (default: 3)" }, regex: { type: "boolean", description: "Treat pattern as regex (default: false)" } }, required: ["pattern"] },
+  execute: (args, ws, cfg) => {
+    try {
+      const root = safe(args.path || ".", ws, cfg);
+      const q = String(args.pattern || "");
+      if (!q) return JSON.stringify({ ok: false, error: "pattern cannot be empty" });
+      const re = args.regex ? new RegExp(q, "i") : null;
+      const fileFilter = String(args.file_pattern || "").toLowerCase();
+      const ctxLines = Math.max(0, Math.min(20, Number(args.context_lines ?? 3)));
+      const isSmall = checkSmallModel(cfg);
+      const maxResults = isSmall ? 8 : 40;
+      const results: Array<{ path: string; line: number; context: string[] }> = [];
+      walk(root, ws, cfg, (file) => {
+        if (fileFilter && !file.toLowerCase().includes(fileFilter)) return;
+        const st = statSync(file);
+        const maxSize = isSmall ? 500_000 : 2_000_000;
+        if (st.size > maxSize) return;
+        let text = "";
+        try { text = readFileSync(file, "utf-8"); } catch { return; }
+        const lines = text.split(/\r?\n/);
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          const hit = re ? re.test(line) : line.toLowerCase().includes(q.toLowerCase());
+          if (hit) {
+            const start = Math.max(0, i - ctxLines);
+            const end = Math.min(lines.length, i + ctxLines + 1);
+            const snippet = lines.slice(start, end);
+            // Label the matching line with a ">" prefix
+            const annotated = snippet.map((l, idx) => {
+              const lineNum = start + idx + 1;
+              const marker = start + idx === i ? ">" : " ";
+              return `${marker} ${String(lineNum).padStart(4, " ")}│ ${l}`;
+            });
+            results.push({ path: rel(file, ws), line: i + 1, context: annotated });
+          }
+          if (results.length >= maxResults) return false;
+        }
+      });
+      return JSON.stringify({ ok: true, results, context_lines: ctxLines, truncated: results.length >= maxResults });
+    } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
+  },
+},
 {
   name: "find_files",
     description: "Find files by name or regex",

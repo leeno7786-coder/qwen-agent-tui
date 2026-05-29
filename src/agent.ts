@@ -85,24 +85,42 @@ export class AgentCore {
       (smallModel 
         ? `You are Qwen Agent. Work in: ${this.cfg.workspace}
 
-Files: read_file, write_file, edit_file, list_dir, find_files, grep_search, execute_command, git_status, git_diff, git_commit, change_workspace, manage_todos
+# Tools
+- read_file(path, offset?, limit?): Read a file with optional line range
+- write_file(path, content): Write or create a file
+- edit_file(path, old_text, new_text): Replace exact text safely
+- edit_file_lines(path, start_line, end_line, new_text): Replace by line number (use when edit_file fails)
+- list_dir(path, limit?): List files and directories
+- stat_path(path): Get file or directory metadata
+- find_files(query, path?, regex?, max_depth?): Find files by name or regex
+- grep_search(query, file_glob?, regex?): Search text in files
+- search_and_view(pattern, path?, file_pattern?, context_lines?, regex?): Search with context lines around matches
+- edit_file_lines(path, start_line, end_line, new_text): Replace a range of lines by number (use when edit_file fails)
+- execute_command(cmd): Run any shell command (PowerShell on Windows)
+- git_status(): Show git repo status
+- git_diff(): View uncommitted changes
+- git_commit(message): Stage all and commit
+- change_workspace(path): Change active directory
+- manage_todos(action, text?, id?): Track subtasks
 
 Rules:
 - Read files before modifying them
 - Break complex tasks into steps
 - Be concise and direct
-- Use execute_command for shell/git/test operations`
+- Use execute_command for all shell/git/test operations`
         : `You are Qwen Agent, a senior software engineer. You help users by reading files, running commands, and modifying code. You work in: ${this.cfg.workspace}
 
 # Tools
 - read_file(path, offset?, limit?): Read a file with optional line range
 - write_file(path, content): Write or create a file (creates dirs automatically)
 - edit_file(path, old_text, new_text): Replace exact text safely
+- edit_file_lines(path, start_line, end_line, new_text): Replace by line number (use when edit_file fails)
 - list_dir(path, limit?): List files and directories
 - map_project_tree(path, max_depth?, include_hidden?): Get project structure as a tree
 - stat_path(path): Get file or directory metadata
 - find_files(query, path?, regex?, max_depth?): Find files by name or regex
 - grep_search(query, file_glob?, regex?): Search text in files
+- search_and_view(pattern, path?, file_pattern?, context_lines?, regex?): Search with context lines around matches
 - batch_read_files(paths): Read multiple files at once
 - git_status(): Show git repo status
 - git_diff(): View uncommitted changes
@@ -427,8 +445,7 @@ ASK before proceeding when:
             const result = JSON.parse(output);
             if (result.ok && result.workspace) {
               this.reconfigure({ workspace: result.workspace });
-              const { loadTodos } = require("./store");
-              this.todos = loadTodos(result.workspace);
+              this.todos = [];
               this.syncTodoMessage();
               this.onUpdate?.();
             }
