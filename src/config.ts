@@ -27,7 +27,7 @@ function getDefault(): Config {
   return {
     baseURL: "http://127.0.0.1:1234/",
     model: "model-identifier",
-    apiKey: "sk-31aa1aa921374a6faeca82c866b2d0d1",
+    apiKey: "",
     maxIterations: 50,
     workspace: process.cwd(),
     // Small model defaults
@@ -155,9 +155,16 @@ export function validateConfig(cfg: Config): {
   const warnings: string[] = [];
   const errors: string[] = [];
 
-  const isLocal = /localhost|127\.0\.0\.1/.test(cfg.baseURL);
+  const isLocal = /localhost|127\.0\.0\.1|lm-studio|ollama/i.test(cfg.baseURL);
   if (!isLocal && (!cfg.apiKey || cfg.apiKey.trim() === "")) {
-    warnings.push("apiKey is empty — set DASHSCOPE_API_KEY or OPENAI_API_KEY");
+    warnings.push("apiKey is empty — set OPENAI_API_KEY or DASHSCOPE_API_KEY");
+  }
+
+  if (!isLocal && cfg.apiKey && cfg.apiKey.trim().length < 8) {
+    warnings.push("apiKey looks too short — most provider keys are 32+ characters");
+  }
+  if (!isLocal && cfg.apiKey && cfg.apiKey.trim().startsWith("sk-") && cfg.apiKey.trim().length < 20) {
+    warnings.push("apiKey looks like a malformed OpenAI-style key — expected ~51 chars, got " + cfg.apiKey.trim().length);
   }
 
   try {

@@ -10,8 +10,6 @@ import { loadConfig } from "../config";
 import { estimateModelContextSize, getModelCompactionSettings, countTokens, doesChatFitInContext } from "../llm";
 import { tools } from "../tools";
 import {
-  loadTodos,
-  saveTodos,
   saveSession,
   loadSessions,
   deleteSession,
@@ -48,6 +46,7 @@ function estimateTokenCount(text: string): number {
 
 /**
  * Calculate the approximate token count of the entire conversation.
+ * Accounts for message format overhead (roles, tool_call structure).
  * @param messages - Array of messages
  * @returns Total estimated token count
  */
@@ -55,28 +54,50 @@ function calculateConversationTokenCount(messages: Message[]): number {
   return messages.reduce((total, message) => {
     let count = 0;
     
-    // Count tokens in message content
     if (message.content) {
       count += estimateTokenCount(message.content);
     }
     
-    // Count tokens in tool calls if present
     if (message.toolCalls) {
       for (const toolCall of message.toolCalls) {
         count += estimateTokenCount(toolCall.name || '');
         if (toolCall.arguments) {
-          count += estimateTokenCount(JSON.stringify(toolCall.arguments));
+          count += estimateTokenCount(typeof toolCall.arguments === "string" ? toolCall.arguments : JSON.stringify(toolCall.arguments));
         }
       }
     }
     
-    // Count tokens in tool results if present
     if (message.role === 'tool' && message.content) {
       count += estimateTokenCount(message.content);
     }
     
+    // Per-message format overhead (role label, JSON structure, separators)
+    count += message.role.length + 4;
+    if (message.toolCallId) count += message.toolCallId.length + 10;
+    if (message.toolCalls && message.toolCalls.length > 0) count += message.toolCalls.length * 30;
+    
     return total + count;
   }, 0);
+}
+
+/**
+ * Calculate per-message format overhead tokens (role labels, tool_call structure).
+ * More accurate than counting only content text.
+ */
+function estimateMessageOverhead(m: Message): number {
+  let overhead = 0;
+  overhead += m.role.length + 4; // "role: " prefix, "content" wrapper
+  if (m.toolCalls) {
+    overhead += m.toolCalls.length * 50; // tool_call JSON structure overhead
+    for (const tc of m.toolCalls) {
+      overhead += (tc.name?.length || 0) + 2;
+      if (tc.arguments) overhead += typeof tc.arguments === "string" ? tc.arguments.length / 4 : JSON.stringify(tc.arguments).length / 4;
+    }
+  }
+  if (m.role === "tool" && m.toolCallId) {
+    overhead += m.toolCallId.length + 20;
+  }
+  return Math.ceil(overhead);
 }
 
 /**
@@ -86,76 +107,82 @@ function calculateConversationTokenCount(messages: Message[]): number {
  * @param setMessages - React state setter for messages
  */
 function checkAndAutoCompact(agent: AgentCore, setMessages: React.Dispatch<React.SetStateAction<Message[]>>) {
-  const settings = getModelCompactionSettings(agent.cfg.model, agent.cfg.maxTokens);
-  const { contextSize, compactThreshold, summaryReservedPercent, keepCount } = settings;
-  
-  // Calculate current conversation token count
-  const currentTokenCount = calculateConversationTokenCount(agent.messages);
-  
-  // If we're over the threshold, use rolling window compaction
-  if (currentTokenCount > compactThreshold) {
-    const sys = agent.messages.filter((m) => m.role === "system");
-    const rest = agent.messages.filter(
-      (m) =>
-        m.role !== "system" &&
-        !(m.role === "assistant" && !m.toolCalls && m.content.trim() === "")
-    );
+  try {
+    const settings = getModelCompactionSettings(agent.cfg.model, agent.cfg.maxTokens);
+    const { contextSize, compactThreshold, keepCount } = settings;
     
-    // Rolling window: keep the most recent messages
-    const kept = rest.slice(-keepCount);
-    const removed = rest.slice(0, -keepCount);
+    // Calculate current conversation token count with message format awareness
+    const currentTokenCount = calculateConversationTokenCount(agent.messages);
+    const overhead = agent.messages.reduce((t, m) => t + estimateMessageOverhead(m), 0);
+    const totalEstimated = currentTokenCount + overhead;
     
-    // Generate a summary of removed messages if there are any
-    let summaryContent = "";
-    if (removed.length > 0) {
-      // Extract key information from removed messages for summary
-      const toolCalls = removed.filter(m => m.toolCalls && m.toolCalls.length > 0);
-      const userMessages = removed.filter(m => m.role === "user");
-      const assistantMessages = removed.filter(m => m.role === "assistant" && m.content);
+    // If we're over the threshold, use rolling window compaction
+    if (totalEstimated > compactThreshold) {
+      const sys = agent.messages.filter((m) => m.role === "system");
+      const rest = agent.messages.filter(
+        (m) =>
+          m.role !== "system" &&
+          !(m.role === "assistant" && !m.toolCalls && m.content.trim() === "")
+      );
       
-      const summaryParts: string[] = [];
+      // Rolling window: keep the most recent messages
+      const kept = rest.slice(-keepCount);
+      const removed = rest.slice(0, -keepCount);
       
-      // Summarize tool usage
-      if (toolCalls.length > 0) {
-        const toolNames = new Set<string>();
-        toolCalls.forEach(tc => tc.toolCalls?.forEach(t => toolNames.add(t.name || "unknown")));
-        summaryParts.push(`Tools used: ${Array.from(toolNames).join(", ")}`);
-      }
-      
-      // Summarize user requests
-      if (userMessages.length > 0) {
-        const keyRequests = userMessages.slice(-3).map(m => m.content.slice(0, 100)).filter(Boolean);
-        if (keyRequests.length > 0) {
-          summaryParts.push(`Recent requests: ${keyRequests.join("; ")}`);
+      // Generate a summary of removed messages if there are any
+      let summaryContent = "";
+      if (removed.length > 0) {
+        const toolCalls = removed.filter(m => m.toolCalls && m.toolCalls.length > 0);
+        const userMessages = removed.filter(m => m.role === "user");
+        const assistantMessages = removed.filter(m => m.role === "assistant" && m.content);
+        
+        const summaryParts: string[] = [];
+        
+        if (toolCalls.length > 0) {
+          const toolNames = new Set<string>();
+          toolCalls.forEach(tc => tc.toolCalls?.forEach(t => toolNames.add(t.name || "unknown")));
+          summaryParts.push(`Tools used: ${Array.from(toolNames).join(", ")}`);
         }
+        
+        if (userMessages.length > 0) {
+          const keyRequests = userMessages.slice(-3).map(m => m.content.slice(0, 100)).filter(Boolean);
+          if (keyRequests.length > 0) {
+            summaryParts.push(`Recent requests: ${keyRequests.join("; ")}`);
+          }
+        }
+        
+        if (assistantMessages.length > 0) {
+          summaryParts.push(`Completed ${assistantMessages.length} response cycles`);
+        }
+        
+        summaryContent = `Summary of ${removed.length} earlier messages: ${summaryParts.join(". ")}.`;
       }
       
-      // Summarize assistant actions
-      if (assistantMessages.length > 0) {
-        summaryParts.push(`Completed ${assistantMessages.length} response cycles`);
-      }
+      // Build new message array with rolling window
+      agent.messages = [
+        ...sys,
+        ...(summaryContent
+          ? [
+              {
+                id: Math.random().toString(36).slice(2, 10),
+                role: "user" as const,
+                 content: `[Compact: ${removed.length} messages summarized. ${summaryContent}]`,
+                timestamp: Date.now(),
+              },
+            ]
+          : []),
+        ...kept,
+      ];
       
-      summaryContent = `Summary of ${removed.length} earlier messages: ${summaryParts.join(". ")}.`;
+      // Update React state to trigger re-render, user sees the compact message
+      setMessages([...agent.messages]);
+      if (process.env.QWEN_DEBUG_LLM) {
+        console.error(`[auto-compact] ${removed.length} messages removed, ${kept.length} kept, est ${totalEstimated} -> ~${calculateConversationTokenCount(agent.messages)} tokens`);
+      }
     }
-    
-    // Build new message array with rolling window
-    agent.messages = [
-      ...sys,
-      ...(summaryContent
-        ? [
-            {
-              id: Math.random().toString(36).slice(2, 10),
-              role: "user" as const,
-               content: `[Summarized ${removed.length} earlier messages: ${summaryContent}]`,
-              timestamp: Date.now(),
-            },
-          ]
-        : []),
-      ...kept,
-    ];
-    
-    // Update React state to trigger re-render
-    setMessages([...agent.messages]);
+  } catch (err) {
+    console.error("[auto-compact] compaction failed:", err);
+    // Don't crash the UI — compaction is a best-effort optimization
   }
 }
 
@@ -174,7 +201,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [state, setState] = useState<AgentState>("idle");
   const cfg = loadConfig();
-  const [todos, setTodos] = useState<Todo[]>(() => loadTodos(cfg.workspace));
+  const [todos, setTodos] = useState<Todo[]>([]);
   const [toolResults, setToolResults] = useState<ToolResult[]>([]);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [currentTool, setCurrentTool] = useState<
@@ -242,7 +269,6 @@ export function App({ renderer }: { renderer: CliRenderer }) {
 
     // Graceful shutdown on SIGINT (Ctrl+C)
     const handleSigint = () => {
-      saveTodos(agent.todos, cfg.workspace);
       if (agent && agent.messages.length > 0) {
         autoSaveSession(agent.messages, agent.todos, cfg.workspace);
       }
@@ -272,7 +298,6 @@ export function App({ renderer }: { renderer: CliRenderer }) {
         clearInterval(compactTimerRef.current);
         compactTimerRef.current = null;
       }
-      saveTodos(agent.todos, agent.cfg.workspace);
       // Auto-save session on exit
       if (agent && agent.messages.length > 0) {
         autoSaveSession(agent.messages, agent.todos, agent.cfg.workspace);
@@ -311,13 +336,6 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     }
   }, [state]);
 
-  useEffect(() => {
-    if (agentRef.current) {
-      agentRef.current.todos = todos;
-      saveTodos(todos, cfg.workspace);
-    }
-  }, [todos]);
-
   // Auto-enable pagination when messages exceed threshold
   const PAGINATION_THRESHOLD = 100;
   const MESSAGES_PER_PAGE = 50;
@@ -341,7 +359,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
       const session = {
         id: "autosave",
         messages: agent.messages,
-        todos: agent.todos,
+        todos: agent.todos.filter(t => !t.done),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
@@ -470,7 +488,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     const session: Session = {
       id,
       messages: agent.messages,
-      todos: agent.todos,
+      todos: agent.todos.filter(t => !t.done),
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -533,7 +551,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     const session: Session = {
       id,
       messages: agent.messages,
-      todos: agent.todos,
+      todos: agent.todos.filter(t => !t.done),
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -591,68 +609,26 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             return;
           case "compact": {
             if (!agent) return;
-            const modelName = agent.cfg.model.toLowerCase();
-            const settings = getModelCompactionSettings(agent.cfg.model, agent.cfg.maxTokens);
-            const { contextSize, compactThreshold, summaryReservedPercent, keepCount } = settings;
-            
-            // Calculate current conversation token count
-            const currentTokenCount = calculateConversationTokenCount(agent.messages);
-            
-            const sys = agent.messages.filter((m) => m.role === "system");
-            const rest = agent.messages.filter(
-              (m) =>
-                m.role !== "system" &&
-                !(m.role === "assistant" && !m.toolCalls && m.content.trim() === "")
-            );
-            
-            // Rolling window: keep the most recent messages
-            const kept = rest.slice(-keepCount);
-            const removed = rest.slice(0, -keepCount);
-            
-            // Generate a summary of removed messages
-            let summaryContent = "";
-            if (removed.length > 0) {
-              const toolCalls = removed.filter(m => m.toolCalls && m.toolCalls.length > 0);
-              const userMessages = removed.filter(m => m.role === "user");
-              const assistantMessages = removed.filter(m => m.role === "assistant" && m.content);
-              
-              const summaryParts: string[] = [];
-              
-              if (toolCalls.length > 0) {
-                const toolNames = new Set<string>();
-                toolCalls.forEach(tc => tc.toolCalls?.forEach(t => toolNames.add(t.name || "unknown")));
-                summaryParts.push(`Tools used: ${Array.from(toolNames).join(", ")}`);
-              }
-              
-              if (userMessages.length > 0) {
-                const keyRequests = userMessages.slice(-3).map(m => m.content.slice(0, 100)).filter(Boolean);
-                if (keyRequests.length > 0) {
-                  summaryParts.push(`Recent requests: ${keyRequests.join("; ")}`);
-                }
-              }
-              
-              if (assistantMessages.length > 0) {
-                summaryParts.push(`Completed ${assistantMessages.length} response cycles`);
-              }
-              
-              summaryContent = `Summary of ${removed.length} earlier messages: ${summaryParts.join(". ")}.`;
+            const before = agent.messages.length;
+            checkAndAutoCompact(agent, setMessages);
+            const compacted = before - agent.messages.length;
+            if (compacted > 0) {
+              agent.messages.push({
+                id: Math.random().toString(36).slice(2, 10),
+                role: "system",
+                content: `Manually compacted: ${compacted} messages removed.`,
+                timestamp: Date.now(),
+              });
+              setMessages([...agent.messages]);
+            } else {
+              agent.messages.push({
+                id: Math.random().toString(36).slice(2, 10),
+                role: "system",
+                content: "Compact: no compaction needed — conversation is within context budget.",
+                timestamp: Date.now(),
+              });
+              setMessages([...agent.messages]);
             }
-            
-            agent.messages = [
-              ...sys,
-              ...(summaryContent
-                ? [
-                    {
-                      id: Math.random().toString(36).slice(2, 10),
-                      role: "user" as const,
-                       content: `[Compact: ${removed.length} messages summarized. ${summaryContent}]`,
-                      timestamp: Date.now(),
-                    },
-                  ]
-                : []),
-              ...kept,
-            ];
-            setMessages([...agent.messages]);
             return;
           }
           case "connect":
@@ -757,8 +733,8 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               const result = JSON.parse(toolResult);
               if (result.ok && result.workspace) {
                 agent.reconfigure({ workspace: result.workspace });
-                agent.todos = loadTodos(result.workspace);
-                setTodos([...agent.todos]);
+                agent.todos = [];
+                setTodos([]);
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
                   role: "system",
