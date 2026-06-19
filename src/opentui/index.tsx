@@ -5,7 +5,11 @@ import { createRoot } from "@opentui/react";
 import { loadConfig, getApiKey } from "../config";
 import { App } from "./app";
 
-async function main() {
+/**
+ * Interactive TUI — default when you run `bun run start` or `qwen-agent` with no args.
+ * Headless commands (run, doctor, models) live in src/main.ts and share src/cli/reports.ts.
+ */
+export async function runTui() {
   let cfg;
   try {
     cfg = loadConfig();
@@ -43,4 +47,6 @@ async function main() {
   createRoot(appRenderer).render(<App renderer={appRenderer} />);
 }
 
-main().catch(console.error);
+if (import.meta.main) {
+  runTui().catch(console.error);
+}

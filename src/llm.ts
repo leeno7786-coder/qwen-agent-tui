@@ -60,13 +60,34 @@ export function isLocalProvider(baseURL?: string): boolean {
   return u.includes("localhost") || u.includes("127.0.0.1") || u.includes("lm-studio") || u.includes("ollama");
 }
 
-export function isSmallModel(modelId: string, maxTokens?: number): boolean {
+/**
+ * Heuristic: model is ≤8B parameters (local coding models).
+ * Uses model id and optional explicit config — not maxTokens (that is output budget).
+ */
+export function isSmallModel(
+  modelId: string,
+  _maxTokens?: number,
+  smallModelMode?: boolean
+): boolean {
+  if (smallModelMode === true) return true;
+  if (smallModelMode === false) return false;
+
   const lower = modelId.toLowerCase();
-  return lower.includes('4b') || 
-         lower.includes('nemotron') ||
-         lower.includes('phi') ||
-         lower.includes('gemma') ||
-         (maxTokens !== undefined && maxTokens <= 8192);
+
+  // Explicit parameter counts in id (1b–8b, nano, etc.)
+  if (/\b(0\.5|1\.5|1|2|3|4|7|8)[-.]?b\b/.test(lower)) return true;
+  if (lower.includes("4b") || lower.includes("nano")) return true;
+
+  // Families commonly run locally at ≤8B
+  if (lower.includes("nemotron") && (lower.includes("4b") || lower.includes("nano"))) return true;
+  if (lower.includes("phi")) return true;
+  if (lower.includes("gemma") && /\b(1|2|4|7|8)[-.]?b\b/.test(lower)) return true;
+  if (lower.includes("qwen") && /\b(0\.5|1\.5|1|2|3|4|7|8)[-.]?b\b/.test(lower)) return true;
+  if (lower.includes("llama") && /\b(1|3|7|8)[-.]?b\b/.test(lower)) return true;
+  if (lower.includes("mistral") && lower.includes("7b")) return true;
+  if (lower.includes("deepseek") && (lower.includes("1.5b") || lower.includes("7b"))) return true;
+
+  return false;
 }
 
 /**
@@ -133,14 +154,9 @@ export function estimateModelContextSize(modelId: string, maxTokens?: number): n
   if (lowerModelId.includes('8k')) return 8000;
   if (lowerModelId.includes('4k')) return 4000;
   
-  // Qwen models — user typically runs at 128K (effective range for this hardware)
+  // Qwen models — local ≤8B stacks often run at 128K+
   if (lowerModelId.includes('qwen')) {
-    if (lowerModelId.includes('4b')) {
-      if (lowerModelId.includes('3.5') || lowerModelId.includes('35') || lowerModelId.includes('v3.5')) {
-        return 128000;
-      }
-      return 128000;
-    }
+    if (/\b(0\.5|1\.5|1|2|3|4|7|8)[-.]?b\b/.test(lowerModelId)) return 128000;
     if (lowerModelId.includes('128k')) return 128000;
     if (lowerModelId.includes('32k')) return 32000;
     return 32000;
@@ -178,8 +194,11 @@ export function estimateModelContextSize(modelId: string, maxTokens?: number): n
     return 4000; // Default Llama context size
   }
   
-  if (lowerModelId.includes('mixtral') || lowerModelId.includes('mistral')) {
-    return 32000; // Mixtral/Mistral typically have 32k context
+  if (lowerModelId.includes('mixtral') || lowerModelId.includes('mistral') || lowerModelId.includes('codestral')) {
+    if (lowerModelId.includes('small') || lowerModelId.includes('ministral') || lowerModelId.includes('mixtral')) return 32000;
+    if (lowerModelId.includes('nemo')) return 128000;
+    if (lowerModelId.includes('codestral')) return 256000;
+    return 128000; // Mistral Large has 128k context
   }
   
   if (lowerModelId.includes('gemini')) {
@@ -199,22 +218,37 @@ export function estimateModelContextSize(modelId: string, maxTokens?: number): n
     return 32000; // Phi-3 and newer support longer context
   }
   
-  // Gemma models
+  // Gemma models (2b/8b often run at 128k locally)
   if (lowerModelId.includes('gemma')) {
-    return 8000; // Default Gemma context size
+    if (lowerModelId.includes('128k')) return 128000;
+    if (/\b(2|7|8)[-.]?b\b/.test(lowerModelId)) return 128000;
+    return 8192;
   }
+
+  // Generic 8b local stacks
+  if (/\b8[-.]?b\b/.test(lowerModelId)) return 128000;
   
   // Default fallback for unknown models
   return 32000;
 }
 
-export function effectiveContextSize(modelId: string, maxTokens?: number): number {
+export function effectiveContextSize(
+  modelId: string,
+  maxTokens?: number,
+  baseURL?: string,
+  runtime?: { contextLength?: number; maxContextLength?: number }
+): number {
+  if (runtime?.contextLength && runtime.contextLength > 0) {
+    return runtime.contextLength;
+  }
+  if (runtime?.maxContextLength && runtime.maxContextLength > 0) {
+    return runtime.maxContextLength;
+  }
+
   const archSize = estimateModelContextSize(modelId, maxTokens);
+  if (isLocalProvider(baseURL)) return archSize;
   if (maxTokens !== undefined) {
-    // Clamp effective context: small output limits mean the model can't
-    // effectively use a huge input window. Cap at maxTokens * 4 to keep
-    // the input proportional to the generation budget.
-    return Math.min(archSize, Math.max(maxTokens * 4, 8192));
+    return Math.min(archSize, Math.max(maxTokens * 4,  8192));
   }
   return archSize;
 }
@@ -224,33 +258,48 @@ export function effectiveContextSize(modelId: string, maxTokens?: number): numbe
  * @param modelId - The model identifier
  * @returns Compaction settings including threshold and summary options
  */
-export function getModelCompactionSettings(modelId: string, maxTokens?: number): {
+export function getModelCompactionSettings(
+  modelId: string,
+  maxTokens?: number,
+  options?: {
+    baseURL?: string;
+    smallModelMode?: boolean;
+    modelParamBillions?: number;
+    modelContextLength?: number;
+    modelMaxContextLength?: number;
+  }
+): {
   contextSize: number;
   compactThreshold: number;
   summaryReservedPercent: number;
   keepCount: number;
 } {
-  const contextSize = effectiveContextSize(modelId, maxTokens);
+  const contextSize = effectiveContextSize(modelId, maxTokens, options?.baseURL, {
+    contextLength: options?.modelContextLength,
+    maxContextLength: options?.modelMaxContextLength,
+  });
   const lowerModelId = modelId.toLowerCase();
   
-  // Reserve 25% of token window for summary after compaction
-  const summaryReservedPercent = 0.25;
+  const summaryReservedPercent = 0.30;
   
-  // Compact at 60% of effective context for small models, 75% for large
-  const small = isSmallModel(modelId, maxTokens);
+  const small =
+    options?.smallModelMode === true ||
+    (options?.modelParamBillions !== undefined
+      ? options.modelParamBillions <= 8
+      : isSmallModel(modelId, maxTokens, options?.smallModelMode));
   const compactThreshold = small
-    ? Math.floor(contextSize * 0.60)
-    : Math.floor(contextSize * 0.75);
+    ? Math.floor(contextSize * 0.65)
+    : Math.floor(contextSize * 0.80);
   
   // Determine how many messages to keep based on model type
-  let keepCount = 10;
+  let keepCount = 12;
   
   if (small) {
-    keepCount = 5;
+    keepCount = 6;
   } else if (lowerModelId.includes('qwen') && lowerModelId.includes('4b')) {
-    keepCount = 15;
+    keepCount = 18;
   } else if (lowerModelId.includes('nemotron') && lowerModelId.includes('4b')) {
-    keepCount = 25;
+    keepCount = 30;
   }
   
   return {
@@ -289,11 +338,18 @@ export function extractDeltaText(delta: any): {
  * @returns Configured OpenAI client.
  */
 export function createClient(cfg: Config) {
+  const isOpenRouter = cfg.baseURL.includes("openrouter.ai");
   return new OpenAI({
     apiKey: cfg.apiKey || (isLocalProvider(cfg.baseURL) ? "lm-studio" : ""),
     baseURL: cfg.baseURL,
     timeout: cfg.timeout ?? 60000,
     maxRetries: 0, // we handle retries ourselves for fine-grained control
+    defaultHeaders: isOpenRouter
+      ? {
+          "HTTP-Referer": "https://github.com/qwen-agent-tui",
+          "X-Title": "Qwen Agent TUI",
+        }
+      : undefined,
   });
 }
 
@@ -303,11 +359,22 @@ export function createClient(cfg: Config) {
  * @param attempt - Current retry attempt (1-based).
  * @returns Localised error message.
  */
-function errorMessage(status: number, attempt: number): string {
-  if (status === 401) return "Authentication failed. Check your DASHSCOPE_API_KEY.";
-  if (status === 404) return "Model not found. Try a different model name.";
-  if (status === 429) return "Rate limited. Retrying...";
+function errorMessage(
+  status: number,
+  attempt: number,
+  originalErr?: any,
+  maxAttempts = 3
+): string {
+  if (status === 401) return `Authentication failed (401). Check your API key.`;
+  if (status === 404) return `Model not found (404). Try a different model name.`;
+  if (status === 429) {
+    return attempt >= maxAttempts
+      ? "Rate limited by provider — wait a minute, then retry with fewer sub-agents."
+      : "Rate limited. Retrying...";
+  }
   if (status >= 500) return `Server error. Retrying (attempt ${attempt}/3)...`;
+  const apiMsg = originalErr?.message || originalErr?.error?.message || "";
+  if (apiMsg && !apiMsg.startsWith("HTTP ")) return `HTTP ${status}: ${apiMsg}`;
   return `HTTP ${status}`;
 }
 
@@ -316,11 +383,31 @@ function errorMessage(status: number, attempt: number): string {
  * @param status - HTTP status code (may be undefined for network errors).
  * @returns True if the request should be retried.
  */
-function shouldRetry(status?: number): boolean {
+function shouldRetry(status?: number, attempt?: number): boolean {
   if (status === undefined) return true; // network error
   if (status === 429) return true;
   if (status >= 500) return true;
+  // Some providers return transient 400s under load — retry once
+  if (status === 400 && attempt !== undefined && attempt < 2) return true;
   return false;
+}
+
+/**
+ * Cap max output tokens to the model's supported limit.
+ * Some providers (Mistral, Gemini) reject requests exceeding their max.
+ */
+function getMaxOutputTokens(modelId: string, configuredMax?: number): number {
+  const lower = modelId.toLowerCase();
+  if (lower.includes('mistral') || lower.includes('codestral') || lower.includes('ministral') || lower.includes('mixtral')) {
+    return Math.min(configuredMax ?? 8192, 8192);
+  }
+  if (lower.includes('gemini')) {
+    return Math.min(configuredMax ?? 8192, 8192);
+  }
+  if (lower.includes('gpt-3.5')) {
+    return Math.min(configuredMax ?? 4096, 4096);
+  }
+  return configuredMax ?? 65536;
 }
 
 /**
@@ -331,18 +418,27 @@ function shouldRetry(status?: number): boolean {
  * @param tools - Optional OpenAI-formatted tool definitions.
  * @returns The chat response including usage metadata.
  */
+export interface ChatRequestOptions {
+  /** Qwen thinking mode — off for sub-agents (tools may land in reasoning as XML). */
+  enableThinking?: boolean;
+}
+
 export async function chat(
   client: OpenAI,
   cfg: Config,
   messages: ChatMessage[],
   tools?: any[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: ChatRequestOptions
 ): Promise<ChatResponse> {
   const maxRetries = cfg.retryCount ?? 3;
   let lastError: Error | undefined;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
+      const isQwen = cfg.model.toLowerCase().includes("qwen");
+      const enableThinking =
+        options?.enableThinking ?? (isQwen ? true : false);
       const completion = await client.chat.completions.create(
         {
           model: cfg.model,
@@ -364,21 +460,25 @@ export async function chat(
             return { role: m.role, content: m.content };
           }) as any,
           temperature: cfg.temperature ?? 0.2,
-          max_tokens: cfg.maxTokens ?? 65536,
-          tools: tools?.length ? tools : undefined,
-          tool_choice: tools?.length ? "auto" as const : undefined,
-        },
-        { signal }
-      );
+      max_tokens: getMaxOutputTokens(cfg.model, cfg.maxTokens),
+      tools: tools?.length ? tools : undefined,
+      tool_choice: tools?.length ? "auto" as const : undefined,
+      ...(enableThinking ? { enable_thinking: true } : {}),
+    },
+    { signal }
+  );
 
-      const choice = completion.choices[0];
-      const msg = choice?.message;
+  const choice = completion.choices[0];
+  const msg = choice?.message;
 
       return {
         message: {
           role: msg?.role || "assistant",
           content: normalizeContent(msg?.content),
-          reasoning_content: (msg as any).reasoning_content || undefined,
+          reasoning_content:
+            (msg as any).reasoning_content ||
+            (choice as any).reasoning_content ||
+            undefined,
           tool_calls: msg?.tool_calls?.map((tc) => {
             const func = tc as ChatCompletionMessageFunctionToolCall;
             return {
@@ -405,18 +505,19 @@ export async function chat(
       const status = err?.status || err?.status_code || err?.response?.status;
       lastError = err;
 
-      if (!shouldRetry(status)) {
-        throw new Error(errorMessage(status, attempt));
+      if (!shouldRetry(status, attempt)) {
+        throw new Error(errorMessage(status, attempt, err, maxRetries));
       }
 
-      const message = errorMessage(status, attempt);
+      const message = errorMessage(status, attempt, err, maxRetries);
       if (attempt === maxRetries) {
         throw new Error(message);
       }
 
-      // Exponential backoff: 1s, 2s, 4s
-      const delay = Math.pow(2, attempt - 1) * 1000;
-      await new Promise((res) => setTimeout(res, delay));
+      // Exponential backoff with jitter: 1-2s, 2-4s, 4-8s
+      const base = Math.pow(2, attempt - 1) * 1000;
+      const jitter = Math.random() * base;
+      await new Promise((res) => setTimeout(res, base + jitter));
     }
   }
 
@@ -432,13 +533,17 @@ export async function* streamChat(
   cfg: Config,
   messages: ChatMessage[],
   tools?: any[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: ChatRequestOptions
 ): AsyncGenerator<StreamChunk, { usage?: { input_tokens: number; output_tokens: number } }, void> {
   const maxRetries = cfg.retryCount ?? 3;
   let lastError: Error | undefined;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
+      const isQwen = cfg.model.toLowerCase().includes("qwen");
+      const enableThinking =
+        options?.enableThinking ?? (isQwen ? true : false);
       const stream = await client.chat.completions.create(
         {
           model: cfg.model,
@@ -460,10 +565,11 @@ export async function* streamChat(
             return { role: m.role, content: m.content };
           }) as any,
           temperature: cfg.temperature ?? 0.2,
-          max_tokens: cfg.maxTokens ?? 65536,
+          max_tokens: getMaxOutputTokens(cfg.model, cfg.maxTokens),
           tools: tools?.length ? tools : undefined,
           tool_choice: tools?.length ? "auto" as const : undefined,
           stream: true,
+          ...(enableThinking ? { enable_thinking: true } : {}),
         },
         { signal }
       );
@@ -471,6 +577,8 @@ export async function* streamChat(
       const toolCallBuffers = new Map<number, { id: string; name: string; args: string }>();
       let finishReason: string | undefined;
       let usage: { input_tokens: number; output_tokens: number } | undefined;
+
+      let yieldedMeaningfulContent = false;
 
       for await (const chunk of stream) {
         if (signal?.aborted) break;
@@ -490,14 +598,20 @@ export async function* streamChat(
 
         // Debug: log first few chunks to diagnose empty responses
         if (process.env.QWEN_DEBUG_LLM) {
-          console.error("[llm chunk] delta:", JSON.stringify(delta));
+          console.error("[QWEN_DEBUG] llm chunk:", JSON.stringify(delta));
         }
 
         if (!delta) continue;
 
-        // Accumulate tool calls
-        if (delta.tool_calls) {
-          for (const tc of delta.tool_calls) {
+        // Accumulate tool calls (providers vary: tool_calls can appear on delta OR message)
+        const toolCallsAny =
+          (delta as any).tool_calls ||
+          (choice as any).tool_calls ||
+          (choice as any).message?.tool_calls ||
+          [];
+
+        if (Array.isArray(toolCallsAny) && toolCallsAny.length > 0) {
+          for (const tc of toolCallsAny) {
             const idx = tc.index ?? 0;
             let buf = toolCallBuffers.get(idx);
             if (!buf) {
@@ -513,7 +627,11 @@ export async function* streamChat(
         }
 
         // Some local servers use different field names for content
-        const { content, reasoningContent } = extractDeltaText(delta);
+        const { content, reasoningContent: drc } = extractDeltaText(delta);
+        // Also check choice-level reasoning_content (some providers put it here instead of delta)
+        const reasoningContent = drc ||
+          normalizeContent((choice as any).reasoning_content) ||
+          normalizeContent((choice as any).reasoning);
 
         // Build complete tool calls from buffers
         const completeToolCalls: Array<{ id: string; name: string; arguments: string }> = [];
@@ -529,6 +647,31 @@ export async function* streamChat(
           toolCalls: completeToolCalls.length > 0 ? completeToolCalls : undefined,
           finishReason,
         };
+
+        // Track if we yielded any meaningful content (not just empty strings)
+        if (content || reasoningContent || completeToolCalls.length > 0) {
+          yieldedMeaningfulContent = true;
+        }
+      }
+
+      // Some servers only provide tool calls at the end and never stream any delta content.
+      // If we buffered tool calls but never yielded meaningful content, emit one final chunk
+      // so the agent doesn't interpret the response as empty and abort the tool loop.
+      if (!yieldedMeaningfulContent) {
+        const completeToolCalls: Array<{ id: string; name: string; arguments: string }> = [];
+        for (const buf of toolCallBuffers.values()) {
+          if (buf.id && buf.name) {
+            completeToolCalls.push({ id: buf.id, name: buf.name, arguments: buf.args });
+          }
+        }
+        if (completeToolCalls.length > 0) {
+          yield {
+            content: "",
+            reasoningContent: "",
+            toolCalls: completeToolCalls,
+            finishReason: finishReason || "tool_calls",
+          };
+        }
       }
 
       return { usage };
@@ -539,17 +682,19 @@ export async function* streamChat(
       const status = err?.status || err?.status_code || err?.response?.status;
       lastError = err;
 
-      if (!shouldRetry(status)) {
-        throw new Error(errorMessage(status, attempt));
+      if (!shouldRetry(status, attempt)) {
+        throw new Error(errorMessage(status, attempt, err, maxRetries));
       }
 
-      const message = errorMessage(status, attempt);
+      const message = errorMessage(status, attempt, err, maxRetries);
       if (attempt === maxRetries) {
         throw new Error(message);
       }
 
-      const delay = Math.pow(2, attempt - 1) * 1000;
-      await new Promise((res) => setTimeout(res, delay));
+      // Exponential backoff with jitter: 1-2s, 2-4s, 4-8s
+      const base = Math.pow(2, attempt - 1) * 1000;
+      const jitter = Math.random() * base;
+      await new Promise((res) => setTimeout(res, base + jitter));
     }
   }
 

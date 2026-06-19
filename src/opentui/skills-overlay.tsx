@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
 
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import type { ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type { Theme } from "./theme";
 import { loadSkills, saveSkill, deleteSkill, toggleSkill, getSkillCommands, saveSkillConfig, getSkillConfig } from "../skills";
@@ -10,6 +11,8 @@ interface SkillsOverlayProps {
   theme: Theme;
   onClose: () => void;
   onSkillSelect?: (skillName: string) => void;
+  skills?: Map<string, Skill>;
+  onSkillsChange?: () => void;
 }
 
 type ItemType =
@@ -27,6 +30,8 @@ export const BUILTIN_COMMANDS: { name: string; description: string }[] = [
   { name: "/resume", description: "Resume latest or specific session. Usage: /resume [id]" },
   { name: "/settings", description: "Open settings" },
   { name: "/skills", description: "Manage skills (F8)" },
+  { name: "/unload", description: "Unload a skill. Usage: /unload [name]" },
+  { name: "/skill-load", description: "Load a skill by name. Usage: /skill-load [name]" },
   { name: "/help", description: "Show help (F1)" },
   { name: "/clear", description: "Clear chat (F2)" },
   { name: "/compact", description: "Compact conversation" },
@@ -46,8 +51,9 @@ function findFirstActionIndex(items: ItemType[]): number {
   return items.findIndex(item => item.type === "action");
 }
 
-export function SkillsOverlay({ theme, onClose, onSkillSelect }: SkillsOverlayProps) {
+export function SkillsOverlay({ theme, onClose, onSkillSelect, skills: propSkills, onSkillsChange }: SkillsOverlayProps) {
   const [selected, setSelected] = useState(0);
+  const scrollRef = useRef<ScrollBoxRenderable>(null);
   const [mode, setMode] = useState<"list" | "create" | "detail" | "commands" | "install">("list");
   const [newSkillName, setNewSkillName] = useState("");
   const [newSkillDesc, setNewSkillDesc] = useState("");
@@ -73,7 +79,8 @@ export function SkillsOverlay({ theme, onClose, onSkillSelect }: SkillsOverlayPr
     setSkillConfig(filteredConfig);
   }, []);
 
-  const skills = useMemo(() => loadSkills(), []);
+  // Use passed skills or load fresh skills (refresh on each render to catch changes)
+  const skills = propSkills || useMemo(() => loadSkills(), []);
   const skillCommands = useMemo(() => getSkillCommands(skills), [skills]);
 
   const items: ItemType[] = useMemo(() => {
@@ -99,13 +106,20 @@ export function SkillsOverlay({ theme, onClose, onSkillSelect }: SkillsOverlayPr
     }
     if (mode === "detail" && selectedSkill) {
       const config = skillConfig[selectedSkill.name] !== undefined;
+      const triggers = selectedSkill.triggers?.length
+        ? selectedSkill.triggers.slice(0, 5).join(", ") + (selectedSkill.triggers.length > 5 ? "..." : "")
+        : "None";
+      const sourceIcon = selectedSkill.source === "skilli.md" ? "📄" : "📋";
+      const desc = selectedSkill.description || "No description";
       return [
         { type: "header", text: selectedSkill.name },
-        { type: "text", text: selectedSkill.description || "No description" },
+        { type: "text", text: desc },
+        { type: "text", text: `${sourceIcon} ${selectedSkill.source || "unknown"} ${selectedSkill.sourcePath ? `(${selectedSkill.sourcePath})` : ""}` },
         { type: "text", text: `Version: ${selectedSkill.version || "1.0.0"}` },
-        { type: "text", text: `Author: ${selectedSkill.author || "user"}` },
-        { type: "text", text: `Enabled: ${selectedSkill.enabled ? "Yes" : "No"}` },
+        { type: "text", text: `Author: ${selectedSkill.author || "N/A"}` },
+        { type: "text", text: `State: ${selectedSkill.enabled ? "✅ Enabled" : "⏸ Disabled"}` },
         { type: "text", text: `Tools: ${selectedSkill.tools?.join(", ") || "None"}` },
+        { type: "text", text: `Triggers: ${triggers}` },
         { type: "divider" },
         { type: "action", text: "Activate Skill", action: "activate" },
         { type: "action", text: config ? "Save Config to File" : "Load Config from File", action: "saveConfig" },
@@ -119,7 +133,7 @@ export function SkillsOverlay({ theme, onClose, onSkillSelect }: SkillsOverlayPr
     const itemsList: ItemType[] = [];
 
     itemsList.push({ type: "header", text: `Available Skills (${skills.size})` });
-    itemsList.push({ type: "text", text: "Skills extend the agent's capabilities for specific tasks." });
+    itemsList.push({ type: "text", text: "Skills auto-load when user input matches triggers." });
 
     if (skills.size === 0) {
       itemsList.push({ type: "text", text: "No skills found. Create your first skill below!" });
@@ -130,9 +144,11 @@ export function SkillsOverlay({ theme, onClose, onSkillSelect }: SkillsOverlayPr
       const sortedSkills = Array.from(skills.values()).sort((a, b) => a.name.localeCompare(b.name));
       sortedSkills.forEach(skill => {
         const cmd = skillCommands.find(c => c.skillName === skill.name);
+        const sourceIcon = skill.source === "skilli.md" ? "📄" : "📋";
+        const triggerHint = skill.triggers?.length ? ` [${skill.triggers.slice(0, 2).join(", ")}${skill.triggers.length > 2 ? "..." : ""}]` : "";
         itemsList.push({
           type: "skill",
-          text: `${skill.enabled ? "✓" : "✗"} ${skill.name}`,
+          text: `${skill.enabled ? "✓" : "✗"} ${sourceIcon} ${skill.name}${triggerHint}`,
           skill,
           command: cmd
         });
@@ -408,15 +424,23 @@ export function SkillsOverlay({ theme, onClose, onSkillSelect }: SkillsOverlayPr
 
   const displayItems = mode === "commands" ? commandItems : items;
 
+  useEffect(() => {
+    if (scrollRef.current && (mode === "list" || mode === "commands" || mode === "detail")) {
+      scrollRef.current.scrollChildIntoView(`skill-item-${selected}`);
+    }
+  }, [selected, displayItems.length, mode]);
+
   return (
     <box
       flexDirection="column"
       flexGrow={1}
+      minHeight={0}
+      overflow="hidden"
       borderStyle="double"
       borderColor={theme.borderColor}
       backgroundColor={theme.bgPanel}
     >
-      <box flexDirection="row" justifyContent="space-between" paddingX={2} paddingY={1}>
+      <box flexDirection="row" justifyContent="space-between" paddingX={2} paddingY={1} flexShrink={0}>
         <text fg={theme.headerFg}>
           {mode === "create" ? "Create Skill" : mode === "install" ? "Install Skill" : mode === "detail" ? "Skill Details" : mode === "commands" ? "All Commands" : `Skills (${skills.size})`}
         </text>
@@ -436,7 +460,7 @@ export function SkillsOverlay({ theme, onClose, onSkillSelect }: SkillsOverlayPr
       )}
 
       {mode === "create" ? (
-        <box flexDirection="column" paddingX={2} paddingY={1} flexGrow={1}>
+        <box flexDirection="column" paddingX={2} paddingY={1} flexGrow={1} minHeight={0} overflow="hidden">
           <text fg={theme.mutedFg} marginBottom={1}>
             Skills extend your agent's capabilities for specific domains or tasks.
             The model will automatically use this skill when relevant.
@@ -486,7 +510,7 @@ export function SkillsOverlay({ theme, onClose, onSkillSelect }: SkillsOverlayPr
           </text>
         </box>
       ) : mode === "install" ? (
-        <box flexDirection="column" paddingX={2} paddingY={1} flexGrow={1}>
+        <box flexDirection="column" paddingX={2} paddingY={1} flexGrow={1} minHeight={0} overflow="hidden">
           <text fg={theme.mutedFg} marginBottom={1}>
             Install a skill from a remote JSON URL. The skill file must contain
             at least "name" and "prompt" fields.
@@ -510,11 +534,11 @@ export function SkillsOverlay({ theme, onClose, onSkillSelect }: SkillsOverlayPr
           </text>
         </box>
       ) : (
-        <scrollbox flexGrow={1} flexDirection="column" paddingX={2} paddingY={1}>
+        <scrollbox ref={scrollRef} flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column" paddingX={2} paddingY={1}>
           {displayItems.map((item, i) => {
             if (item.type === "header") {
               return (
-                <text key={`h-${i}`} fg={theme.headerFg} marginTop={i > 0 ? 1 : 0}>
+                <text key={`h-${i}`} id={`skill-item-${i}`} fg={theme.headerFg} marginTop={i > 0 ? 1 : 0}>
                   {item.text}
                 </text>
               );
@@ -523,6 +547,7 @@ export function SkillsOverlay({ theme, onClose, onSkillSelect }: SkillsOverlayPr
               return (
                 <box
                   key={`d-${i}`}
+                  id={`skill-item-${i}`}
                   height={1}
                   border={true}
                   borderColor={theme.borderColor}
@@ -532,7 +557,7 @@ export function SkillsOverlay({ theme, onClose, onSkillSelect }: SkillsOverlayPr
             }
             if (item.type === "text") {
               return (
-                <text key={`t-${i}`} fg={theme.inputFg}>
+                <text key={`t-${i}`} id={`skill-item-${i}`} fg={theme.inputFg}>
                   {item.text}
                 </text>
               );
@@ -541,6 +566,7 @@ export function SkillsOverlay({ theme, onClose, onSkillSelect }: SkillsOverlayPr
               return (
                 <text
                   key={`s-${i}`}
+                  id={`skill-item-${i}`}
                   fg={i === selected ? theme.headerFg : theme.agentFg}
                   bg={i === selected ? theme.bgSelected : undefined}
                 >
@@ -552,6 +578,7 @@ export function SkillsOverlay({ theme, onClose, onSkillSelect }: SkillsOverlayPr
               return (
                 <text
                   key={`a-${i}`}
+                  id={`skill-item-${i}`}
                   fg={i === selected ? theme.headerFg : theme.agentFg}
                   bg={i === selected ? theme.bgSelected : undefined}
                   marginTop={1}

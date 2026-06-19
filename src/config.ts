@@ -6,6 +6,31 @@ import type { Config, SkillConfig } from "./types";
 import { isSmallModel } from "./llm";
 
 /**
+ * Sanitize a URL to remove any embedded API keys.
+ */
+function sanitizeBaseURL(url: string): string {
+  if (!url) return url;
+  try {
+    // Remove basic auth (user:password@host) - preserve protocol
+    // Match protocol://user:password@ and replace with protocol://
+    let sanitized = url.replace(/(https?:\/\/)[^\/]+:[^@]+@/, '$1');
+    
+    // Remove API key from query string
+    // Match ?key=value or &key=value and replace with just the separator
+    sanitized = sanitized.replace(/([?&])(api_key|key)=[^&]+/gi, '$1');
+    
+    // Clean up: replace ?& with ?, && with &, trailing ? or &
+    sanitized = sanitized.replace(/\?&/g, '?');
+    sanitized = sanitized.replace(/&&+/g, '&');
+    sanitized = sanitized.replace(/[?&]$/, '');
+    
+    return sanitized;
+  } catch {
+    return url;
+  }
+}
+
+/**
  * Preset model configurations.
  */
 export const MODELS: Record<string, { baseURL: string; model: string }> = {
@@ -23,6 +48,18 @@ export const MODELS: Record<string, { baseURL: string; model: string }> = {
   },
 };
 
+/** Default sub-agent model: OpenRouter free router (tool-capable free models, load-balanced). */
+export const DEFAULT_SUB_AGENT_MODEL = "openrouter/free";
+
+/** Default sub-agent API endpoint (OpenRouter). */
+export const DEFAULT_SUB_AGENT_BASE_URL = "https://openrouter.ai/api/v1";
+
+/** Default sub-agent tool-loop depth (stronger models can go deeper). */
+export const DEFAULT_SUB_AGENT_MAX_ITERATIONS = 12;
+
+/** Default sub-agent output budget per LLM call. */
+export const DEFAULT_SUB_AGENT_MAX_TOKENS = 4096;
+
 function getDefault(): Config {
   return {
     baseURL: "http://127.0.0.1:1234/",
@@ -30,11 +67,47 @@ function getDefault(): Config {
     apiKey: "",
     maxIterations: 50,
     workspace: process.cwd(),
-    // Small model defaults
+    // Small model defaults — undefined means auto-detect from model id
     temperature: 0.3,
     maxTokens: 4096,
-    smallModelMode: false,
+    rateLimitMs: 250,
   };
+}
+
+/** Apply OpenRouter sub-agent defaults unless explicitly disabled. */
+export function applySubAgentDefaults(cfg: Config): Config {
+  if (cfg.subAgentEnabled === false) return cfg;
+
+  if (!cfg.subAgentModel) {
+    cfg.subAgentModel = DEFAULT_SUB_AGENT_MODEL;
+  }
+  if (cfg.subAgentMaxIterations === undefined) {
+    cfg.subAgentMaxIterations = DEFAULT_SUB_AGENT_MAX_ITERATIONS;
+  }
+  if (cfg.subAgentMaxTokens === undefined) {
+    cfg.subAgentMaxTokens = DEFAULT_SUB_AGENT_MAX_TOKENS;
+  }
+  if (cfg.subAgentMaxParallel === undefined) {
+    cfg.subAgentMaxParallel = 3;
+  }
+  if (!cfg.subAgentBaseURL) {
+    const model = cfg.subAgentModel;
+    if (model === DEFAULT_SUB_AGENT_MODEL || model.startsWith("openrouter/") || model.includes("/")) {
+      cfg.subAgentBaseURL = DEFAULT_SUB_AGENT_BASE_URL;
+    }
+  }
+  const subBase = cfg.subAgentBaseURL ?? cfg.baseURL;
+  if (!cfg.subAgentApiKey && subBase.includes("openrouter.ai")) {
+    cfg.subAgentApiKey =
+      process.env.OPENROUTER_API_KEY ||
+      getApiKey("OPENROUTER_API_KEY") ||
+      (cfg.baseURL.includes("openrouter.ai") ? cfg.apiKey : "") ||
+      "";
+  }
+  if (cfg.subAgentEnabled === undefined) {
+    cfg.subAgentEnabled = true;
+  }
+  return cfg;
 }
 
 /**
@@ -56,17 +129,23 @@ function loadEnv(workspace: string) {
 
 /**
  * Load configuration from files, `.env`, and environment variables.
- * @param path - Optional explicit config file path.
+ * @param pathOrConfig - Optional explicit config file path or partial config object.
  * @returns Resolved configuration object.
  */
-export function loadConfig(path?: string): Config {
+export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
   const cfg: Config = { ...getDefault() };
+
+  // If a partial config object is passed, merge it with defaults
+  if (pathOrConfig && typeof pathOrConfig === 'object') {
+    Object.assign(cfg, pathOrConfig);
+  }
 
   // Load .env early so process.env is populated before we read it
   loadEnv(cfg.workspace);
 
+  const configPath = typeof pathOrConfig === 'string' ? pathOrConfig : undefined;
   const candidates = [
-    path,
+    configPath,
     join(process.cwd(), "qwen-agent.json"),
     join(homedir(), ".qwen-agent.json"),
   ].filter(Boolean) as string[];
@@ -82,15 +161,47 @@ export function loadConfig(path?: string): Config {
     }
   }
 
-  // Provider env overrides — ONLY apply if the user hasn't explicitly set a baseURL.
-  // This prevents a stale DASHSCOPE_API_KEY from forcing DashScope when you want LM Studio.
+  // Sanitize baseURL to remove any embedded API keys
+  cfg.baseURL = sanitizeBaseURL(cfg.baseURL);
+  
+  // Provider env overrides — ONLY auto-apply OPENAI_API_KEY for OpenAI endpoints
   const explicitBaseURL = process.env.QWEN_BASE_URL || cfg.baseURL;
   const isDefaultLocal = /localhost|127\.0\.0\.1/.test(explicitBaseURL);
-  if (!isDefaultLocal && process.env.OPENAI_API_KEY) {
+  const isOpenAIEndpoint = /openai\.com|api\.openai\.com/i.test(explicitBaseURL);
+  if (!process.env.QWEN_BASE_URL && !isDefaultLocal && process.env.OPENAI_API_KEY && isOpenAIEndpoint) {
     cfg.apiKey = process.env.OPENAI_API_KEY;
-    cfg.baseURL = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+    cfg.baseURL = sanitizeBaseURL(process.env.OPENAI_BASE_URL || "https://api.openai.com/v1");
   }
-  if (process.env.QWEN_BASE_URL) cfg.baseURL = process.env.QWEN_BASE_URL;
+  if (process.env.QWEN_BASE_URL) cfg.baseURL = sanitizeBaseURL(process.env.QWEN_BASE_URL);
+
+  // Resolve provider-specific API key when targeting a non-OpenAI provider
+  // Only set from env var if no explicit apiKey is already configured
+  if (cfg.baseURL && !cfg.apiKey) {
+    const providerKeyPatterns: [string, string][] = [
+      ["mistral.ai", "MISTRAL_API_KEY"],
+      ["anthropic.com", "ANTHROPIC_API_KEY"],
+      ["googleapis.com", "GOOGLE_API_KEY"],
+      ["nebius.com", "NEBIUS_API_KEY"],
+      ["api.z.ai", "ZAI_API_KEY"],
+      ["bigmodel.cn", "ZHIPU_API_KEY"],
+      ["helicone.ai", "HELICONE_API_KEY"],
+      ["cohere.ai", "COHERE_API_KEY"],
+      ["openrouter.ai", "OPENROUTER_API_KEY"],
+    ];
+    for (const [pattern, envVar] of providerKeyPatterns) {
+      if (cfg.baseURL.includes(pattern) && process.env[envVar]) {
+        cfg.apiKey = process.env[envVar];
+        break;
+      }
+    }
+  }
+  // Fallback: use OPENAI_API_KEY ONLY for OpenAI endpoints
+  if (!cfg.apiKey && process.env.OPENAI_API_KEY) {
+    const isOpenAIEndpoint = /openai\.com|api\.openai\.com/i.test(cfg.baseURL);
+    if (isOpenAIEndpoint) {
+      cfg.apiKey = process.env.OPENAI_API_KEY;
+    }
+  }
   if (process.env.QWEN_MODEL) {
     const preset = MODELS[process.env.QWEN_MODEL];
     if (preset) {
@@ -115,19 +226,43 @@ export function loadConfig(path?: string): Config {
     if (!Number.isNaN(n)) cfg.timeout = n;
   }
   if (process.env.QWEN_THEME) cfg.theme = process.env.QWEN_THEME;
+  if (process.env.QWEN_RATE_LIMIT_MS) {
+    const n = parseInt(process.env.QWEN_RATE_LIMIT_MS, 10);
+    if (!Number.isNaN(n) && n >= 0 && n <= 10000) cfg.rateLimitMs = n;
+  }
+  if (process.env.QWEN_SUB_AGENT_MODEL) {
+    cfg.subAgentModel = process.env.QWEN_SUB_AGENT_MODEL;
+  }
+  if (process.env.QWEN_SUB_AGENT_BASE_URL) {
+    cfg.subAgentBaseURL = sanitizeBaseURL(process.env.QWEN_SUB_AGENT_BASE_URL);
+  }
+  if (process.env.QWEN_SUB_AGENT_ENABLED === "0" || process.env.QWEN_SUB_AGENT_ENABLED === "false") {
+    cfg.subAgentEnabled = false;
+  }
 
-  // Auto-detect small model mode after loading configuration
-  const smallModel = isSmallModel(cfg.model, cfg.maxTokens);
-  
+  applySubAgentDefaults(cfg);
+
+  // Auto-detect small model mode (≤8B) — does not shrink context; that comes from the model id.
+  // When smallModelMode is undefined (default), isSmallModel checks the model ID.
+  // When explicitly set to true/false by the user, it overrides auto-detection.
+  const smallModel = isSmallModel(cfg.model, undefined, cfg.smallModelMode);
   if (smallModel) {
     cfg.smallModelMode = true;
-    // Small models work better with higher temperature for creativity
     if (cfg.temperature === undefined) {
-      cfg.temperature = 0.5;
+      cfg.temperature = 0.4;
     }
-    // Smaller context window for faster responses
+    // Slightly lower default output cap for faster turns; user can override in config.
     if (cfg.maxTokens === undefined) {
-      cfg.maxTokens = 2048;
+      cfg.maxTokens = 4096;
+    }
+  } else if (cfg.smallModelMode === false) {
+    // Warn if user explicitly disabled small model mode for a small model
+    const detected = isSmallModel(cfg.model);
+    if (detected) {
+      console.warn(
+        `Config warning: smallModelMode is set to false, but "${cfg.model}" appears to be a small model (≤8B). ` +
+        `Remove "smallModelMode": false from your config to enable auto-detection.`
+      );
     }
   }
 
@@ -158,6 +293,18 @@ export function validateConfig(cfg: Config): {
   const isLocal = /localhost|127\.0\.0\.1|lm-studio|ollama/i.test(cfg.baseURL);
   if (!isLocal && (!cfg.apiKey || cfg.apiKey.trim() === "")) {
     warnings.push("apiKey is empty — set OPENAI_API_KEY or DASHSCOPE_API_KEY");
+  }
+
+  const subBase = cfg.subAgentBaseURL || DEFAULT_SUB_AGENT_BASE_URL;
+  const subIsLocal = /localhost|127\.0\.0\.1|lm-studio|ollama/i.test(subBase);
+  if (
+    cfg.subAgentEnabled !== false &&
+    !subIsLocal &&
+    (!cfg.subAgentApiKey || cfg.subAgentApiKey.trim() === "")
+  ) {
+    warnings.push(
+      "subAgentApiKey is empty — set OPENROUTER_API_KEY for sub-agents (OpenRouter)"
+    );
   }
 
   if (!isLocal && cfg.apiKey && cfg.apiKey.trim().length < 8) {

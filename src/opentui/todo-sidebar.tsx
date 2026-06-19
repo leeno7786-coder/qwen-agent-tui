@@ -24,6 +24,9 @@ export function TodoSidebar({
     <box
       flexDirection="column"
       width={30}
+      flexShrink={0}
+      minHeight={0}
+      overflow="hidden"
       borderStyle="single"
       borderColor={theme.borderColor}
       paddingX={1}
@@ -47,7 +50,7 @@ export function TodoSidebar({
           <text fg={theme.mutedFg}>{i + 1}.</text>
           <text fg={theme.userFg}>[ ] </text>
           <text fg={theme.headerFg}>
-            {t.text.length > 22 ? t.text.slice(0, 21) + "…" : t.text}
+            {(t.text ?? "").length > 22 ? (t.text ?? "").slice(0, 21) + "…" : (t.text ?? "")}
           </text>
         </box>
       ))}

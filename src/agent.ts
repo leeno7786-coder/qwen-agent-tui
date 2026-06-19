@@ -1,9 +1,17 @@
-import { createClient, chat, streamChat, isSmallModel } from "./llm";
+import { createClient, chat, streamChat } from "./llm";
 import type { ChatMessage } from "./llm";
-import { tools, toOpenAI } from "./tools";
+import { tools, toOpenAI, type ToolExecutionHooks } from "./tools";
+import type { SubAgentDispatchProgress } from "./subagent";
 import { detectContext } from "./context";
-import { loadSkills } from "./skills";
-import type { Config, Message, ToolResult, AgentState, Todo } from "./types";
+import { loadSkills, matchSkillTriggers } from "./skills";
+import { buildSystemPrompt } from "./prompt";
+import {
+  enrichConfigWithRuntime,
+  isSmallModelFromConfig,
+} from "./model-runtime";
+import { loadConfig, applySubAgentDefaults } from "./config";
+import type { Config, Message, ToolResult, AgentState, Todo, Skill } from "./types";
+import { subAgentAvailable } from "./tools";
 
 /**
  * Core agent orchestrator: manages conversation state, tool execution,
@@ -15,7 +23,11 @@ export class AgentCore {
   public messages: Message[] = [];
   public state: AgentState = "idle";
   public todos: Todo[] = [];
-  public currentTool?: { name: string; args: string };
+  public currentTool?: {
+    name: string;
+    args: string;
+    subAgentProgress?: SubAgentDispatchProgress;
+  };
   /** Usage from the most recent assistant response. */
   public lastUsage?: { input_tokens: number; output_tokens: number };
   /** Total accumulated usage across the session. */
@@ -34,6 +46,10 @@ export class AgentCore {
   public maxRounds: number = 30;
   /** Whether the current model is a small/quantized model (stored from init). */
   private _smallModel: boolean = false;
+  /** Skills currently loaded into the agent context. */
+  public activeSkills: Map<string, Skill> = new Map();
+  /** Set of skill names previously auto-loaded to avoid re-triggering. */
+  private _autoLoadedSkills: Set<string> = new Set();
 
 
   /**
@@ -45,13 +61,53 @@ export class AgentCore {
   }
 
   /**
-   * Reconfigure the agent with a new configuration.
-   * This recreates the client with the new config.
-   * @param newCfg - New configuration.
+   * Reconfigure the agent (refreshes LM Studio model metadata when model/URL changes).
    */
-  reconfigure(newCfg: Partial<Config>) {
+  async reconfigure(newCfg: Partial<Config>) {
+    const modelChanged =
+      newCfg.model !== undefined || newCfg.baseURL !== undefined;
     this.cfg = { ...this.cfg, ...newCfg };
+    applySubAgentDefaults(this.cfg);
+    if (modelChanged) {
+      await this.applyRuntimeProfile();
+    } else {
+      this.client = createClient(this.cfg);
+    }
+  }
+
+  /**
+   * Query LM Studio (or other local runtime) for loaded context and parameter count.
+   */
+  async applyRuntimeProfile() {
+    this.cfg = await enrichConfigWithRuntime(this.cfg);
+    this._smallModel = isSmallModelFromConfig(this.cfg);
     this.client = createClient(this.cfg);
+  }
+
+  /**
+   * Reload config from disk and refresh LM Studio model metadata.
+   * Keeps the current in-session workspace (e.g. after /cd).
+   */
+  async reloadFromDisk() {
+    const fresh = loadConfig();
+    const workspace = this.cfg.workspace;
+    this.cfg = {
+      ...this.cfg,
+      baseURL: fresh.baseURL,
+      model: fresh.model,
+      apiKey: fresh.apiKey,
+      maxIterations: fresh.maxIterations,
+      maxTokens: fresh.maxTokens,
+      temperature: fresh.temperature,
+      smallModelMode: fresh.smallModelMode,
+      subAgentModel: fresh.subAgentModel,
+      subAgentBaseURL: fresh.subAgentBaseURL,
+      subAgentApiKey: fresh.subAgentApiKey,
+      subAgentEnabled: fresh.subAgentEnabled,
+      workspace,
+    };
+    applySubAgentDefaults(this.cfg);
+    await this.applyRuntimeProfile();
   }
 
   /**
@@ -59,117 +115,50 @@ export class AgentCore {
    * and push the system message.
    */
   async init() {
+    await this.applyRuntimeProfile();
+
     const ctx = detectContext(this.cfg.workspace);
-    const skills = loadSkills();
-    
-    // Small model optimization: simpler system prompt
-    const smallModel = isSmallModel(this.cfg.model, this.cfg.maxTokens);
-    
-    // Inject active skill prompt if any skill is currently active
-    let activeSkillPrompt = "";
-    for (const [name, skill] of skills) {
-      if (!skill.enabled && !skill.command) continue;
-      // Check if this skill should be active based on context or user preference
-      const isActive = skill.enabled === true || 
-                     (this.cfg.systemPrompt?.includes(`skill:${name}`));
-      if (isActive && skill.prompt) {
-        // Update skill prompts to reference correct tool names
-        let updatedPrompt = skill.prompt;
-        // Map legacy "bash" tool references to "execute_command"
-        updatedPrompt = updatedPrompt.replace(/bash/g, "execute_command");
-        activeSkillPrompt += `\n${updatedPrompt}\n`;
+    const allSkills = loadSkills();
+
+    // Populate activeSkills with enabled skills (always-active from config)
+    for (const [name, skill] of allSkills) {
+      if (skill.enabled === true || this.cfg.systemPrompt?.includes(`skill:${name}`)) {
+        this.activeSkills.set(name, skill);
       }
     }
-    
-    let system = this.cfg.systemPrompt ||
-      (smallModel 
-        ? `You are Qwen Agent. Work in: ${this.cfg.workspace}
 
-# Tools
-- read_file(path, offset?, limit?): Read a file with optional line range
-- write_file(path, content): Write or create a file
-- edit_file(path, old_text, new_text): Replace exact text safely
-- edit_file_lines(path, start_line, end_line, new_text): Replace by line number (use when edit_file fails)
-- list_dir(path, limit?): List files and directories
-- stat_path(path): Get file or directory metadata
-- find_files(query, path?, regex?, max_depth?): Find files by name or regex
-- grep_search(query, file_glob?, regex?): Search text in files
-- search_and_view(pattern, path?, file_pattern?, context_lines?, regex?): Search with context lines around matches
-- edit_file_lines(path, start_line, end_line, new_text): Replace a range of lines by number (use when edit_file fails)
-- execute_command(cmd): Run any shell command (PowerShell on Windows)
-- git_status(): Show git repo status
-- git_diff(): View uncommitted changes
-- git_commit(message): Stage all and commit
-- change_workspace(path): Change active directory
-- manage_todos(action, text?, id?): Track subtasks
-
-Rules:
-- Read files before modifying them
-- Break complex tasks into steps
-- Be concise and direct
-- Use execute_command for all shell/git/test operations`
-        : `You are Qwen Agent, a senior software engineer. You help users by reading files, running commands, and modifying code. You work in: ${this.cfg.workspace}
-
-# Tools
-- read_file(path, offset?, limit?): Read a file with optional line range
-- write_file(path, content): Write or create a file (creates dirs automatically)
-- edit_file(path, old_text, new_text): Replace exact text safely
-- edit_file_lines(path, start_line, end_line, new_text): Replace by line number (use when edit_file fails)
-- list_dir(path, limit?): List files and directories
-- map_project_tree(path, max_depth?, include_hidden?): Get project structure as a tree
-- stat_path(path): Get file or directory metadata
-- find_files(query, path?, regex?, max_depth?): Find files by name or regex
-- grep_search(query, file_glob?, regex?): Search text in files
-- search_and_view(pattern, path?, file_pattern?, context_lines?, regex?): Search with context lines around matches
-- batch_read_files(paths): Read multiple files at once
-- git_status(): Show git repo status
-- git_diff(): View uncommitted changes
-- git_commit(message): Stage all and commit
-- execute_command(cmd): Run any shell command (auto-translates Unix to PowerShell on Windows)
-- run_tests(): Run project test suite
-- install_dependencies(): Install project dependencies
-- run_command(build|lint|format): Run lifecycle scripts
-- typecheck(): Run tsc --noEmit
-- change_workspace(path): Change active directory
-- manage_todos(action, text?, id?): Track subtasks (add/complete/remove/list)
-
-# Ask When Uncertain
-ASK before proceeding when:
-- Confusing or contradictory file contents
-- Unclear project structure or requirements  
-- Mixed-language files that don't make sense for the project type
-- Any situation where you're uncertain about the next step
-
-# Best Practices
-- Identify project language/framework by examining key files (package.json, requirements.txt, Cargo.toml)
-- Use execute_command for all shell operations
-- Use map_project_tree for hierarchical project structure
-- Ignore files irrelevant to the current project type
-- Prioritize source code over test/example files during analysis`);
-    
-    if (this.cfg.allowedPaths?.length)
-      system += `\nApproved extra paths: ${this.cfg.allowedPaths.join(", ")}`;
-    if (ctx.isGit)
-      system += `\nGit branch: ${ctx.branch}`;
-    // Removed project type injection - model should detect this itself
-    if (skills.size > 0)
-      system += `\nAvailable skills: ${Array.from(skills.keys()).join(", ")}`;
-    if (process.platform === "win32") {
-      system +=
-        "\n\nActive Platform: Windows PowerShell. " +
-        "Use PowerShell commands only.";
+    let system = buildSystemPrompt(this.cfg, {
+      workspace: this.cfg.workspace,
+      branch: ctx.isGit ? ctx.branch : undefined,
+      skillNames: allSkills.size > 0 ? Array.from(allSkills.keys()) : undefined,
+      allowedPaths: this.cfg.allowedPaths,
+    });
+    if (this.cfg.modelContextLength) {
+      const ctxK = Math.round(this.cfg.modelContextLength / 1000);
+      const param =
+        this.cfg.modelParamBillions !== undefined
+          ? ` · ~${this.cfg.modelParamBillions}B params`
+          : "";
+      system += `\n\n## Runtime\nLM Studio: ${ctxK}k context loaded${param}.`;
     }
-    system += smallModel
-      ? "\n\nTODO RULES:\n- Break multi-step requests into subtasks with manage_todos\n- Mark each done with manage_todos\n- Always use the tool, never describe what you would do"
-      : "\n\n🔧 TODO RULES (MUST FOLLOW):\n- You MUST break every multi-step request into subtasks using `manage_todos(action: 'add', text: '...')`.\n- You MUST mark each done with `manage_todos(action: 'complete', id: '...')`.\n- You MUST NOT describe todos — you MUST call the tool.\n- If you skip this, the task will stall.";
+    if (subAgentAvailable(this.cfg)) {
+      system += `\nSub-agents: OpenRouter \`${this.cfg.subAgentModel}\` — dispatch_subagents (you set prompts, sequential) or explore_subagent (one task).`;
+    }
     this.messages = [
       { id: "system-base", role: "system", content: system, timestamp: now() },
     ];
     this.syncTodoMessage();
+    this._syncSkillMessages();
 
-    // Scale round/iteration limits for small models
-    if (smallModel) {
-      this._smallModel = true;
+    // Debug: log model detection info
+    if (process.env.QWEN_DEBUG_LLM) {
+      console.error("[QWEN_DEBUG] agent init:", {
+        model: this.cfg.model,
+        smallModelMode: this.cfg.smallModelMode,
+        modelParamBillions: this.cfg.modelParamBillions,
+        _smallModel: this._smallModel,
+        promptPreview: system.substring(0, 100) + "...",
+      });
     }
   }
 
@@ -188,6 +177,15 @@ ASK before proceeding when:
         : `⚠️ Agent has reached the maximum number of rounds (${this.maxRounds}). Stopping to prevent infinite loops.`);
       this.setState("idle");
       return;
+    }
+
+    // Auto-load skills matching user input triggers
+    if (!userText.trim().startsWith("/")) {
+      const autoLoaded = this.autoLoadMatchingSkills(userText);
+      if (autoLoaded.length > 0) {
+        const names = autoLoaded.map(s => s.name).join(", ");
+        this.addAssistantMessage(`Auto-loaded skills: ${names} — these are now active in context.`);
+      }
     }
 
     // Guided skill creation
@@ -217,6 +215,11 @@ ASK before proceeding when:
         this.addAssistantMessage("Request cancelled.");
         this.setState("idle");
         return;
+      }
+
+      // Rate limiting: delay between LLM calls to avoid hitting provider rate limits
+      if (i > 0 && (this.cfg.rateLimitMs ?? 0) > 0) {
+        await new Promise((r) => setTimeout(r, this.cfg.rateLimitMs));
       }
 
       let assistantMsg: Message;
@@ -253,7 +256,7 @@ ASK before proceeding when:
 
             // DEBUG: trace every chunk
             if (process.env.QWEN_DEBUG_LLM) {
-              console.error("[agent chunk] content:", JSON.stringify(chunk.content), "reasoning:", JSON.stringify(chunk.reasoningContent), "toolCalls:", chunk.toolCalls?.length);
+              console.error("[QWEN_DEBUG] agent chunk:", JSON.stringify(chunk.content), "reasoning:", JSON.stringify(chunk.reasoningContent), "toolCalls:", chunk.toolCalls?.length);
             }
 
             assistantMsg.content += chunk.content || "";
@@ -292,6 +295,24 @@ ASK before proceeding when:
 
           if (hasToolCalls && toolCallBuffers.length > 0) {
             assistantMsg.toolCalls = toolCallBuffers;
+          }
+
+          // Some models (notably Nemotron) may emit tool calls with empty content in streaming mode.
+          // Add a minimal preface so the UI shows streaming text above the tool call list.
+          if (
+            assistantMsg.toolCalls?.length &&
+            assistantMsg.content.trim() === "" &&
+            !assistantMsg.reasoningContent
+          ) {
+            const first = assistantMsg.toolCalls[0];
+            const toolNames = assistantMsg.toolCalls
+              .map((t) => t.name)
+              .slice(0, 3)
+              .join(", ");
+            assistantMsg.content =
+              toolNames.length > 0
+                ? `I will use ${toolNames} to gather the needed context.`
+                : `I will use a tool (${first?.name || "tool"}) to gather the needed context.`;
           }
 
           if (!assistantMsg.toolCalls && assistantMsg.content.trim() === "" && !assistantMsg.reasoningContent) {
@@ -423,9 +444,32 @@ ASK before proceeding when:
               args = tc.arguments;
             }
             
-            output = tool
-              ? tool.execute(args, this.cfg.workspace, this.cfg)
-              : JSON.stringify({ ok: false, error: "Unknown tool" });
+            if (tool?.executeAsync) {
+              const subHooks: ToolExecutionHooks | undefined =
+                tc.name === "dispatch_subagents" || tc.name === "explore_subagent"
+                  ? {
+                      onSubAgentProgress: (progress) => {
+                        this.currentTool = {
+                          name: tc.name,
+                          args: tc.arguments,
+                          subAgentProgress: progress,
+                        };
+                        this.onUpdate?.();
+                      },
+                    }
+                  : undefined;
+              output = await tool.executeAsync(
+                args,
+                this.cfg.workspace,
+                this.cfg,
+                signal,
+                subHooks
+              );
+            } else {
+              output = tool
+                ? tool.execute(args, this.cfg.workspace, this.cfg)
+                : JSON.stringify({ ok: false, error: "Unknown tool" });
+            }
           } catch (e: any) {
             output = JSON.stringify({ ok: false, error: e.message });
           }
@@ -434,7 +478,7 @@ ASK before proceeding when:
         this.messages.push({
           id: rnd(),
           role: "tool",
-          content: `Result of ${tc.name}:\n${output}`,
+          content: output,
           timestamp: now(),
           toolCallId: tc.id,
         });
@@ -444,7 +488,7 @@ ASK before proceeding when:
           try {
             const result = JSON.parse(output);
             if (result.ok && result.workspace) {
-              this.reconfigure({ workspace: result.workspace });
+              void this.reconfigure({ workspace: result.workspace });
               this.todos = [];
               this.syncTodoMessage();
               this.onUpdate?.();
@@ -599,10 +643,14 @@ ASK before proceeding when:
     this.syncTodoMessage();
 
     // Filter out internal/empty messages that can poison the next chat template turn.
+    // Keep only the main system prompt and todo system message.
+    // Other system messages (like "Connected to LM Studio") are filtered out
+    // because Qwen's Jinja template requires system messages at the beginning.
     const messagesToSend = this.messages.filter(
       (m) =>
         !(m.role === "system" && m.id === "system-todos") &&
-        !(m.role === "assistant" && !m.toolCalls && m.content.trim() === "")
+        !(m.role === "system" && m.id !== "system-base") &&
+        !(m.role === "assistant" && !m.toolCalls && !m.reasoningContent && m.content.trim() === "")
     );
 
     return messagesToSend.map((m) => {
@@ -673,6 +721,71 @@ ASK before proceeding when:
     this.todos = this.todos.filter((x) => x.id !== id);
     this.syncTodoMessage();
     this.onUpdate?.();
+  }
+
+  /** Load a skill into the active context. Returns true if loaded. */
+  loadSkill(skill: Skill): boolean {
+    if (this.activeSkills.has(skill.name)) return false;
+    this.activeSkills.set(skill.name, skill);
+
+    this._autoLoadedSkills.add(skill.name);
+    this._syncSkillMessages();
+    this.onUpdate?.();
+    return true;
+  }
+
+  /** Unload a skill from the active context. Returns true if unloaded. */
+  unloadSkill(name: string): boolean {
+    if (!this.activeSkills.has(name)) return false;
+    this.activeSkills.delete(name);
+
+    this._autoLoadedSkills.delete(name);
+    this._syncSkillMessages();
+    this.onUpdate?.();
+    return true;
+  }
+
+  /** Rebuild the system-base message to include active skill prompts. */
+  private _syncSkillMessages(): void {
+    const base = this.messages.find((m) => m.id === "system-base");
+    if (!base) return;
+
+    const cleanBase = base.content.replace(/\n\n## Active skill[\s\S]*?(?=\n\n##|$)/g, "").trimEnd();
+
+    const skillCharCap = this._smallModel ? 6000 : 3500;
+    let skillSection = "";
+    for (const [name, skill] of this.activeSkills) {
+      let prompt = (skill.prompt || "").replace(/\bbash\b/g, "execute_command");
+      if (prompt.length > skillCharCap) {
+        prompt =
+          prompt.slice(0, skillCharCap) +
+          `\n\n[Skill truncated to ${skillCharCap} chars for context efficiency.]`;
+      }
+      skillSection += `\n\n## Active skill: ${name}\n${prompt}`;
+    }
+
+    base.content = cleanBase + skillSection;
+  }
+
+  /** Get list of actively loaded skill names. */
+  getActiveSkillNames(): string[] {
+    return Array.from(this.activeSkills.keys());
+  }
+
+  /** Auto-load skills matching user input triggers. Called before processing input. */
+  autoLoadMatchingSkills(userText: string): Skill[] {
+    const allSkills = loadSkills();
+    const matched = matchSkillTriggers(userText, allSkills);
+
+    const newlyLoaded: Skill[] = [];
+    for (const skill of matched) {
+      if (this._autoLoadedSkills.has(skill.name)) continue;
+      if (this.activeSkills.has(skill.name)) continue;
+      this.loadSkill(skill);
+      newlyLoaded.push(skill);
+    }
+
+    return newlyLoaded;
   }
 }
 

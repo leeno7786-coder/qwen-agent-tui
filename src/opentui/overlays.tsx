@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
+import type { ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type { Session } from "../types";
 import type { Theme } from "./theme";
@@ -27,6 +28,7 @@ export function HelpOverlay({ theme, onClose }: HelpOverlayProps) {
       paddingX={2}
       paddingY={1}
       flexGrow={1}
+      minHeight={0}
       backgroundColor={theme.bgPanel}
     >
       <text fg={theme.headerFg}>Agent — Help</text>
@@ -49,9 +51,11 @@ export function HelpOverlay({ theme, onClose }: HelpOverlayProps) {
       <text fg={theme.agentFg}>  /copy [id]     Copy message content to clipboard</text>
       <text fg={theme.agentFg}>  /save [name]   Save conversation</text>
       <text fg={theme.agentFg}>  /load          Load a saved conversation</text>
-      <text fg={theme.agentFg}>  /reload        Reload configuration</text>
+      <text fg={theme.agentFg}>  /reload        Reload config, skills, and LM Studio metadata</text>
       <text fg={theme.agentFg}>  /theme [name]  Switch theme</text>
       <text fg={theme.agentFg}>  /connect       Connect a provider - browse runtimes, enter API keys, select models</text>
+      <text fg={theme.agentFg}>  /doctor        Config + LM Studio health (same as CLI doctor)</text>
+      <text fg={theme.agentFg}>  /models        List models, context, load state (same as CLI models)</text>
       <text fg={theme.agentFg}>  /cd [path]     Change the workspace for tools</text>
       <text fg={theme.agentFg}>  /allow [path]  Approve extra tool access outside the workspace</text>
       <text fg={theme.agentFg}>  /export        Export chat to markdown</text>
@@ -74,6 +78,13 @@ export function HelpOverlay({ theme, onClose }: HelpOverlayProps) {
       <text fg={theme.mutedFg}>  ↑ / ↓         Scroll line by line</text>
       <text fg={theme.mutedFg}>  Shift+↑/↓     Scroll page by page</text>
       <text fg={theme.mutedFg}>  Mouse wheel   Scroll (terminal dependent)</text>
+      <text> </text>
+      <text fg={theme.userFg}>Input:</text>
+      <text> </text>
+      <text fg={theme.userFg}>Headless CLI (same app, other terminal):</text>
+      <text fg={theme.mutedFg}>  bun run start              This TUI (default)</text>
+      <text fg={theme.mutedFg}>  bun run src/main.ts run -p "task" -w .</text>
+      <text fg={theme.mutedFg}>  bun run src/main.ts doctor --json</text>
       <text> </text>
       <text fg={theme.userFg}>Input:</text>
       <text fg={theme.mutedFg}>  Shift+Enter   Multi-line input</text>
@@ -106,6 +117,11 @@ export function HistoryOverlay({
   onClose,
 }: HistoryOverlayProps) {
   const [selected, setSelected] = useState(0);
+  const scrollRef = useRef<ScrollBoxRenderable>(null);
+
+  useEffect(() => {
+    scrollRef.current?.scrollChildIntoView(`session-${selected}`);
+  }, [selected]);
 
   useKeyboard((keyEvent) => {
     if (keyEvent.name === "escape" || keyEvent.name === "Escape") {
@@ -136,12 +152,14 @@ export function HistoryOverlay({
 
   return (
     <scrollbox
+      ref={scrollRef}
       flexDirection="column"
       borderStyle="double"
       borderColor={theme.borderColor}
       paddingX={2}
       paddingY={1}
       flexGrow={1}
+      minHeight={0}
       backgroundColor={theme.bgPanel}
     >
       <text fg={theme.headerFg}>Conversation History</text>
@@ -160,6 +178,7 @@ export function HistoryOverlay({
           return (
             <text
               key={sess.id}
+              id={`session-${i}`}
               fg={isSel ? theme.headerFg : theme.mutedFg}
               bg={isSel ? theme.bgSelected : undefined}
             >

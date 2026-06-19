@@ -88,7 +88,22 @@ describe("tools", () => {
       writeFile.execute({ path: "new.txt", content: "data" }, ws)
     );
     expect(out.ok).toBe(true);
+    expect(out.action).toBe("write");
+    expect(out.added).toBeGreaterThan(0);
+    expect(out.diff).toContain("+data");
     expect(readFileSync(join(ws, "new.txt"), "utf-8")).toBe("data");
+  });
+
+  it("write_file update returns diff stats", () => {
+    writeFileSync(join(ws, "edit.txt"), "before\n", "utf-8");
+    const writeFile = tools.find((t) => t.name === "write_file")!;
+    const out = JSON.parse(
+      writeFile.execute({ path: "edit.txt", content: "before\nafter\n" }, ws)
+    );
+    expect(out.ok).toBe(true);
+    expect(out.action).toBe("update");
+    expect(out.added).toBe(1);
+    expect(out.diff).toContain("+after");
   });
 
   it("write_file creates nested directories", () => {
@@ -198,12 +213,63 @@ describe("tools", () => {
 
   it("toOpenAI converts tools to OpenAI format", () => {
     const openai = toOpenAI(tools);
-    expect(openai.length).toBe(tools.length);
+    expect(openai.length).toBeGreaterThan(0);
+    expect(openai.find((t) => t.function.name === "explore_subagent")).toBeUndefined();
     for (const def of openai) {
       expect(def.type).toBe("function");
       expect(def.function.name).toBeDefined();
       expect(def.function.description).toBeDefined();
       expect(def.function.parameters).toBeDefined();
     }
+  });
+
+  it("toOpenAI includes explore_subagent when sub-agent is configured", () => {
+    const cfg = {
+      baseURL: "http://127.0.0.1:1234/v1",
+      model: "main-8b",
+      subAgentModel: "qwen3.5:0.8b",
+      apiKey: "",
+      maxIterations: 10,
+      workspace: ws,
+    };
+    const openai = toOpenAI(tools, cfg);
+    expect(openai.some((t) => t.function.name === "explore_subagent")).toBe(true);
+    expect(openai.some((t) => t.function.name === "dispatch_subagents")).toBe(true);
+  });
+
+  it("toOpenAI filters and shortens tools for small models", () => {
+    const cfg = {
+      baseURL: "http://127.0.0.1:1234/v1",
+      model: "qwen3-8b",
+      apiKey: "",
+      maxIterations: 10,
+      workspace: ws,
+      smallModelMode: true,
+      maxTokens: 4096,
+    };
+    const openai = toOpenAI(tools, cfg);
+    const names = openai.map((t) => t.function.name);
+    expect(names).not.toContain("grep_search");
+    expect(names).not.toContain("map_project_tree");
+    const read = openai.find((t) => t.function.name === "read_file");
+    expect(read?.function.description).toContain("numbered");
+  });
+
+  it("read_file returns numbered lines for small models", () => {
+    writeFileSync(join(ws, "num.txt"), "alpha\nbeta", "utf-8");
+    const readFile = tools.find((t) => t.name === "read_file")!;
+    const cfg = {
+      baseURL: "http://127.0.0.1:1234/v1",
+      model: "qwen3-8b",
+      apiKey: "",
+      maxIterations: 10,
+      workspace: ws,
+      smallModelMode: true,
+    };
+    const out = JSON.parse(readFile.execute({ path: "num.txt" }, ws, cfg));
+    expect(out.ok).toBe(true);
+    expect(out.numbered).toBe(true);
+    expect(out.content).toContain("    1| alpha");
+    expect(out.content).toContain("    2| beta");
   });
 });

@@ -32,6 +32,12 @@ import { TodoSidebar } from "./todo-sidebar";
 import { THEMES, DEFAULT_THEME, type Theme } from "./theme";
 import { loadSkills, getSkillCommands, getSkill } from "../skills";
 import { getProviderBaseURL } from "../providers";
+import {
+  formatDoctorReport,
+  formatModelsList,
+  getDoctorReport,
+  getModelsList,
+} from "../cli/reports";
 
 /**
  * Simple token estimation function.
@@ -108,7 +114,13 @@ function estimateMessageOverhead(m: Message): number {
  */
 function checkAndAutoCompact(agent: AgentCore, setMessages: React.Dispatch<React.SetStateAction<Message[]>>) {
   try {
-    const settings = getModelCompactionSettings(agent.cfg.model, agent.cfg.maxTokens);
+    const settings = getModelCompactionSettings(agent.cfg.model, agent.cfg.maxTokens, {
+      baseURL: agent.cfg.baseURL,
+      smallModelMode: agent.cfg.smallModelMode,
+      modelParamBillions: agent.cfg.modelParamBillions,
+      modelContextLength: agent.cfg.modelContextLength,
+      modelMaxContextLength: agent.cfg.modelMaxContextLength,
+    });
     const { contextSize, compactThreshold, keepCount } = settings;
     
     // Calculate current conversation token count with message format awareness
@@ -205,7 +217,11 @@ export function App({ renderer }: { renderer: CliRenderer }) {
   const [toolResults, setToolResults] = useState<ToolResult[]>([]);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [currentTool, setCurrentTool] = useState<
-    { name: string; args: string } | undefined
+    {
+      name: string;
+      args: string;
+      subAgentProgress?: import("../subagent").SubAgentDispatchProgress;
+    } | undefined
   >();
   const [lastUsage, setLastUsage] = useState<
     { input_tokens: number; output_tokens: number } | undefined
@@ -634,6 +650,28 @@ export function App({ renderer }: { renderer: CliRenderer }) {
           case "connect":
             setOverlay("connect");
             return;
+          case "doctor": {
+            const report = await getDoctorReport(agent.cfg);
+            agent.messages.push({
+              id: Math.random().toString(36).slice(2, 10),
+              role: "system",
+              content: formatDoctorReport(report),
+              timestamp: Date.now(),
+            });
+            setMessages([...agent.messages]);
+            return;
+          }
+          case "models": {
+            const models = await getModelsList(undefined, agent.cfg);
+            agent.messages.push({
+              id: Math.random().toString(36).slice(2, 10),
+              role: "system",
+              content: formatModelsList(models),
+              timestamp: Date.now(),
+            });
+            setMessages([...agent.messages]);
+            return;
+          }
           case "auto": {
             const task = args.trim();
             if (task) {
@@ -732,7 +770,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             try {
               const result = JSON.parse(toolResult);
               if (result.ok && result.workspace) {
-                agent.reconfigure({ workspace: result.workspace });
+                void agent.reconfigure({ workspace: result.workspace });
                 agent.todos = [];
                 setTodos([]);
                 agent.messages.push({
@@ -814,14 +852,20 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             setOverlay("skills");
             return;
           case "reload": {
-            // Reload skills
+            await agent.reloadFromDisk();
             const loadedSkills = loadSkills();
             setSkills(loadedSkills);
             setSkillCommands(getSkillCommands(loadedSkills));
+            const ctxNote = agent.cfg.modelContextLength
+              ? ` · ${Math.round(agent.cfg.modelContextLength / 1000)}k ctx`
+              : "";
             agent.messages.push({
               id: Math.random().toString(36).slice(2, 10),
               role: "system",
-              content: `Skills reloaded. ${loadedSkills.size} skills loaded.`,
+              content:
+                `Reloaded config, skills, and LM Studio metadata.\n` +
+                `model: ${agent.cfg.model}${ctxNote} · small_model_mode: ${agent.cfg.smallModelMode ?? false}\n` +
+                `${loadedSkills.size} skills loaded. Use /doctor for full health report.`,
               timestamp: Date.now(),
             });
             setMessages([...agent.messages]);
@@ -1013,6 +1057,84 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             setMessages([...agent.messages]);
             return;
           }
+          case "unload": {
+            // Unload a skill: /unload [name]
+            const unloadName = args.trim();
+            if (!unloadName) {
+              const active = agent.getActiveSkillNames();
+              if (active.length > 0) {
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: "system",
+                  content: `Active skills: ${active.join(", ")}\nUsage: /unload [skill-name]`,
+                  timestamp: Date.now(),
+                });
+              } else {
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: "system",
+                  content: "No active skills to unload.",
+                  timestamp: Date.now(),
+                });
+              }
+              setMessages([...agent.messages]);
+              return;
+            }
+            const unloaded = agent.unloadSkill(unloadName) || agent.unloadSkill(`skill:${unloadName}`);
+            agent.messages.push({
+              id: Math.random().toString(36).slice(2, 10),
+              role: "system",
+              content: unloaded
+                ? `Skill "${unloadName}" unloaded.`
+                : `Skill "${unloadName}" not found in active skills.`,
+              timestamp: Date.now(),
+            });
+            setMessages([...agent.messages]);
+            return;
+          }
+          case "skill-load": {
+            // Load a skill: /skill-load [name]
+            const loadName = args.trim();
+            if (!loadName) {
+              agent.messages.push({
+                id: Math.random().toString(36).slice(2, 10),
+                role: "system",
+                content: "Usage: /skill-load [skill-name]. Use /skills to see available skills.",
+                timestamp: Date.now(),
+              });
+              setMessages([...agent.messages]);
+              return;
+            }
+            const skill = getSkill(loadName) || skills.get(loadName);
+            if (skill) {
+              const loaded = agent.loadSkill(skill);
+              if (loaded) {
+                const skillDesc = skill.description || "";
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: "assistant",
+                  content: `**Skill Loaded: ${skill.name}**\n\n${skillDesc}\n\nWhat would you like to do with this skill?`,
+                  timestamp: Date.now(),
+                });
+              } else {
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: "system",
+                  content: `Skill "${loadName}" is already loaded.`,
+                  timestamp: Date.now(),
+                });
+              }
+            } else {
+              agent.messages.push({
+                id: Math.random().toString(36).slice(2, 10),
+                role: "system",
+                content: `Skill "${loadName}" not found. Use /skills to see available skills.`,
+                timestamp: Date.now(),
+              });
+            }
+            setMessages([...agent.messages]);
+            return;
+          }
           case "exit":
             // Auto-save before exiting
             if (agent) {
@@ -1026,44 +1148,14 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               const skillName = command.replace(/^skill:/, "");
               const skill = getSkill(skillName) || skills.get(skillName);
               if (skill) {
-                // Inject skill prompt into agent context
-                agent.messages.push({
-                  id: Math.random().toString(36).slice(2, 10),
-                  role: "system",
-                  content: `Skill activated: ${skill.name}\n${skill.prompt}`,
-                  timestamp: Date.now(),
-                });
-                
-                // Build welcome message with options
-                let welcomeText = `**Skill Loaded: ${skill.name}**\n\n`;
-                
-                if (skill.welcomeMessage) {
-                  welcomeText += `${skill.welcomeMessage}\n\n`;
-                } else {
-                  welcomeText += `${skill.description}\n\n`;
-                }
-                
-                if (skill.options && skill.options.length > 0) {
-                  welcomeText += "**Available Options:**\n";
-                  skill.options.forEach((opt, idx) => {
-                    welcomeText += `${idx + 1}. **${opt.label}**`;
-                    if (opt.description) {
-                      welcomeText += ` - ${opt.description}`;
-                    }
-                    welcomeText += `\n`;
-                  });
-                  welcomeText += `\nType the number or describe what you'd like to do:`;
-                } else {
-                  welcomeText += `What would you like to do with this skill?`;
-                }
-                
+                agent.loadSkill(skill);
+                const skillDesc = skill.welcomeMessage || skill.description || "";
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
                   role: "assistant",
-                  content: welcomeText,
+                  content: `**Skill Loaded: ${skill.name}**\n\n${skillDesc}\n\nWhat would you like to do with this skill?`,
                   timestamp: Date.now(),
                 });
-                
                 setMessages([...agent.messages]);
                 return;
               } else {
@@ -1083,93 +1175,17 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               const skillName = args.trim().replace(/^skill:/, "");
               const skill = getSkill(skillName) || skills.get(skillName);
               if (skill) {
-                // Inject skill prompt into agent context
-                agent.messages.push({
-                  id: Math.random().toString(36).slice(2, 10),
-                  role: "system",
-                  content: `Skill activated: ${skill.name}\n${skill.prompt}`,
-                  timestamp: Date.now(),
-                });
-                
-                // Build welcome message with options
-                let welcomeText = `**Skill Loaded: ${skill.name}**\n\n`;
-                
-                if (skill.welcomeMessage) {
-                  welcomeText += `${skill.welcomeMessage}\n\n`;
-                } else {
-                  welcomeText += `${skill.description}\n\n`;
-                }
-                
-                if (skill.options && skill.options.length > 0) {
-                  welcomeText += "**Available Options:**\n";
-                  skill.options.forEach((opt, idx) => {
-                    welcomeText += `${idx + 1}. **${opt.label}**`;
-                    if (opt.description) {
-                      welcomeText += ` - ${opt.description}`;
-                    }
-                    welcomeText += `\n`;
-                  });
-                  welcomeText += `\nType the number or describe what you'd like to do:`;
-                } else {
-                  welcomeText += `What would you like to do with this skill?`;
-                }
-                
+                agent.loadSkill(skill);
+                const skillDesc = skill.welcomeMessage || skill.description || "";
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
                   role: "assistant",
-                  content: welcomeText,
+                  content: `**Skill Loaded: ${skill.name}**\n\n${skillDesc}\n\nWhat would you like to do with this skill?`,
                   timestamp: Date.now(),
                 });
-                
                 setMessages([...agent.messages]);
                 return;
               }
-            }
-
-            // Check if it's a skill command
-            const skillName = args.trim().replace(/^skill:/, "");
-            const skill = getSkill(skillName) || skills.get(skillName);
-            if (skill) {
-              // Inject skill prompt into agent context
-              agent.messages.push({
-                id: Math.random().toString(36).slice(2, 10),
-                role: "system",
-                content: `Skill activated: ${skill.name}\n${skill.prompt}`,
-                timestamp: Date.now(),
-              });
-              
-              // Build welcome message with options
-              let welcomeText = `**Skill Loaded: ${skill.name}**\n\n`;
-              
-              if (skill.welcomeMessage) {
-                welcomeText += `${skill.welcomeMessage}\n\n`;
-              } else {
-                welcomeText += `${skill.description}\n\n`;
-              }
-              
-              if (skill.options && skill.options.length > 0) {
-                welcomeText += "**Available Options:**\n";
-                skill.options.forEach((opt, idx) => {
-                  welcomeText += `${idx + 1}. **${opt.label}**`;
-                  if (opt.description) {
-                    welcomeText += ` - ${opt.description}`;
-                  }
-                  welcomeText += `\n`;
-                });
-                welcomeText += `\nType the number or describe what you'd like to do:`;
-              } else {
-                welcomeText += `What would you like to do with this skill?`;
-              }
-              
-              agent.messages.push({
-                id: Math.random().toString(36).slice(2, 10),
-                role: "assistant",
-                content: welcomeText,
-                timestamp: Date.now(),
-              });
-              
-              setMessages([...agent.messages]);
-              return;
             }
 
             // Unknown command
@@ -1206,20 +1222,24 @@ export function App({ renderer }: { renderer: CliRenderer }) {
   if (overlay === "help") {
     return (
       <ErrorBoundary theme={theme}>
-        <HelpOverlay theme={theme} onClose={() => setOverlay(null)} />
+        <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+          <HelpOverlay theme={theme} onClose={() => setOverlay(null)} />
+        </box>
       </ErrorBoundary>
     );
   }
   if (overlay === "history") {
     return (
       <ErrorBoundary theme={theme}>
-        <HistoryOverlay
-          theme={theme}
-          sessions={sessions}
-          onLoad={handleLoad}
-          onDelete={handleDeleteSession}
-          onClose={() => setOverlay(null)}
-        />
+        <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+          <HistoryOverlay
+            theme={theme}
+            sessions={sessions}
+            onLoad={handleLoad}
+            onDelete={handleDeleteSession}
+            onClose={() => setOverlay(null)}
+          />
+        </box>
       </ErrorBoundary>
     );
   }
@@ -1227,24 +1247,40 @@ export function App({ renderer }: { renderer: CliRenderer }) {
   if (overlay === "skills") {
     return (
       <ErrorBoundary theme={theme}>
-        <SkillsOverlay
-          theme={theme}
-          onClose={() => {
+        <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+          <SkillsOverlay
+            theme={theme}
+            skills={skills}
+            onSkillsChange={() => {
+              setSkills(loadSkills());
+              setSkillCommands(getSkillCommands(loadSkills()));
+            }}
+            onClose={() => {
+              setOverlay(null);
+              // Refresh skills after closing
+              setSkills(loadSkills());
+              setSkillCommands(getSkillCommands(loadSkills()));
+            }}
+            onSkillSelect={(skillName) => {
             setOverlay(null);
-            // Refresh skills after closing
-            setSkills(loadSkills());
-            setSkillCommands(getSkillCommands(loadSkills()));
-            // Also call the global refresh handler to ensure consistency
-            if (typeof (globalThis as any).__refreshSkills === 'function') {
-              (globalThis as any).__refreshSkills();
-            }
-          }}
-          onSkillSelect={(skillName) => {
-            setOverlay(null);
-            // Handle skill selection - inject skill prompt into chat
+            // Handle skill selection - load skill into agent context
             const skill = getSkill(skillName);
             if (skill && agentRef.current) {
               const agent = agentRef.current;
+              
+              // Load the skill into the agent's active skills
+              const loaded = agent.loadSkill(skill);
+              if (!loaded) {
+                // Skill already loaded, just show a message
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: "system",
+                  content: `Skill "${skill.name}" is already active.`,
+                  timestamp: Date.now(),
+                });
+                setMessages([...agent.messages]);
+                return;
+              }
               
               // Inject skill prompt into agent context
               agent.messages.push({
@@ -1288,6 +1324,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             }
           }}
         />
+        </box>
       </ErrorBoundary>
     );
   }
@@ -1295,44 +1332,55 @@ export function App({ renderer }: { renderer: CliRenderer }) {
   if (overlay === "connect") {
     return (
       <ErrorBoundary theme={theme}>
-        <ConnectOverlay
+        <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+          <ConnectOverlay
           theme={theme}
           onClose={() => setOverlay(null)}
-          onSelect={(provider, model, apiKey) => {
+          onSelect={async (provider, model, apiKey) => {
             const agent = agentRef.current;
             if (agent) {
               const newConfig: Partial<Config> = {
                 baseURL: getProviderBaseURL(provider) || agent.cfg.baseURL,
                 model: model.id,
+                modelContextLength: model.contextLength,
+                modelMaxContextLength: model.maxContextLength,
+                modelParamBillions: model.paramBillions,
               };
               if (apiKey) {
                 newConfig.apiKey = apiKey;
               } else if (provider.isLocal) {
-                // Local providers don't need real keys; send a dummy so the
-                // SDK doesn't forward a stale remote key.
                 newConfig.apiKey = "lm-studio";
               }
-              agent.reconfigure(newConfig);
+              await agent.reconfigure(newConfig);
+              const ctxNote = agent.cfg.modelContextLength
+                ? ` · ${Math.round(agent.cfg.modelContextLength / 1000)}k ctx`
+                : "";
+              const paramNote =
+                agent.cfg.modelParamBillions !== undefined
+                  ? ` · ~${agent.cfg.modelParamBillions}B`
+                  : "";
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
                 role: "system",
-                content: `Connected to ${provider.name} using model: ${model.name} (${model.id})${provider.isLocal ? " [Local]" : ""}`,
+                content: `Connected to ${provider.name}: ${model.name} (${model.id})${provider.isLocal ? " [Local]" : ""}${ctxNote}${paramNote}`,
                 timestamp: Date.now(),
               });
               setMessages([...agent.messages]);
             }
           }}
         />
+        </box>
       </ErrorBoundary>
     );
   }
 
   return (
     <ErrorBoundary theme={theme}>
-      <box flexDirection="column" flexGrow={1}>
+      <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
         <StatusBar
           state={state}
           model={agentRef.current?.cfg.model || ""}
+          modelRuntime={agentRef.current?.cfg}
           todoCount={todos.length}
           currentTool={currentTool}
           lastUsage={lastUsage}
@@ -1344,7 +1392,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
           mouseEnabled={mouseEnabled}
         />
 
-        <box flexDirection="row" flexGrow={1}>
+        <box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">
           {showTodos && (
             <TodoSidebar
               theme={theme}
@@ -1361,24 +1409,34 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             />
           )}
 
-          <ChatScreen
-            theme={theme}
-            messages={messages}
-            toolResults={toolResults}
-            state={state}
-            model={agentRef.current?.cfg.model || ""}
-            todoCount={todos.length}
-            elapsedMs={elapsedMs}
-            currentTool={currentTool}
-            lastUsage={lastUsage}
-            totalUsage={totalUsage}
-            onSubmit={handleSubmit}
-            paginated={paginated}
-            page={page}
-            totalPages={paginated ? Math.ceil(messages.length / MESSAGES_PER_PAGE) : 1}
-            onPageChange={setPage}
-            selectedMessageIndex={selectedMessageIndex}
-          />
+          <box
+            flexDirection="column"
+            flexGrow={1}
+            flexShrink={1}
+            flexBasis={0}
+            minHeight={0}
+            height="100%"
+            overflow="hidden"
+          >
+            <ChatScreen
+              theme={theme}
+              messages={messages}
+              toolResults={toolResults}
+              state={state}
+              model={agentRef.current?.cfg.model || ""}
+              todoCount={todos.length}
+              elapsedMs={elapsedMs}
+              currentTool={currentTool}
+              lastUsage={lastUsage}
+              totalUsage={totalUsage}
+              onSubmit={handleSubmit}
+              paginated={paginated}
+              page={page}
+              totalPages={paginated ? Math.ceil(messages.length / MESSAGES_PER_PAGE) : 1}
+              onPageChange={setPage}
+              selectedMessageIndex={selectedMessageIndex}
+            />
+          </box>
         </box>
       </box>
     </ErrorBoundary>

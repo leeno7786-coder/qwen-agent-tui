@@ -1,4 +1,9 @@
 import type { RuntimeProvider, ModelInfo } from "./types";
+import {
+  fetchLMStudioModels,
+  isLMStudioURL,
+} from "./model-runtime";
+import { isLocalProvider } from "./llm";
 
 /**
  * Default list of runtime providers (connectors) with their available models.
@@ -657,30 +662,35 @@ export const RUNTIME_PROVIDERS: RuntimeProvider[] = [
     docsUrl: "https://mistral.ai",
     models: [
       {
-        id: "mistral-large",
-        name: "Mistral Large",
-        description: "Top-tier model",
+        id: "mistral-large-latest",
+        name: "Mistral Large (Latest)",
+        description: "Latest Mistral Large flagship model, 128k context",
         default: true,
       },
       {
-        id: "mistral-large-2402",
-        name: "Mistral Large 2402",
-        description: "Latest version of Mistral Large",
+        id: "mistral-small-latest",
+        name: "Mistral Small (Latest)",
+        description: "Fast, cost-effective model, 32k context",
       },
       {
-        id: "mistral-small",
-        name: "Mistral Small",
-        description: "Fast, cost-effective model",
+        id: "codestral-latest",
+        name: "Codestral (Latest)",
+        description: "Coding-specialized model, 256k context",
       },
       {
-        id: "mixtral-8x7b",
-        name: "Mixtral 8x7B",
-        description: "Mixture of experts model",
+        id: "open-mistral-nemo",
+        name: "Open Mistral Nemo",
+        description: "Open-weight model with 128k context",
       },
       {
-        id: "mixtral-8x22b",
-        name: "Mixtral 8x22B",
-        description: "Larger mixture of experts model",
+        id: "ministral-8b-latest",
+        name: "Ministral 8B (Latest)",
+        description: "Efficient 8B parameter edge model",
+      },
+      {
+        id: "mistral-embed",
+        name: "Mistral Embed",
+        description: "Embedding model for text representations",
       },
     ],
   },
@@ -717,14 +727,53 @@ export const RUNTIME_PROVIDERS: RuntimeProvider[] = [
       },
     ],
   },
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    baseURL: "https://openrouter.ai/api/v1",
+    requiresAuth: true,
+    apiKeyEnvVar: "OPENROUTER_API_KEY",
+    icon: "🌐",
+    description: "OpenRouter API - Access 300+ models through a unified API",
+    docsUrl: "https://openrouter.ai",
+    dynamicModels: true,
+    models: [], // Will be fetched dynamically from OpenRouter API
+  },
 ];
+
+/**
+ * Sanitize a URL to remove any embedded API keys.
+ * This prevents accidental exposure of API keys in URLs.
+ */
+export function sanitizeBaseURL(url: string): string {
+  if (!url) return url;
+  
+  try {
+    // Remove basic auth (user:password@host) - preserve protocol
+    // Match protocol://user:password@ and replace with protocol://
+    let sanitized = url.replace(/(https?:\/\/)[^\/]+:[^@]+@/, '$1');
+    
+    // Remove API key from query string
+    // Match ?key=value or &key=value and replace with just the separator
+    sanitized = sanitized.replace(/([?&])(api_key|key)=[^&]+/gi, '$1');
+    
+    // Clean up: replace ?& with ?, && with &, trailing ? or &
+    sanitized = sanitized.replace(/\?&/g, '?');
+    sanitized = sanitized.replace(/&&+/g, '&');
+    sanitized = sanitized.replace(/[?&]$/, '');
+    
+    return sanitized;
+  } catch {
+    return url;
+  }
+}
 
 /**
  * Build the full API base URL for a provider, merging baseURL + endpoint.
  */
 export function getProviderBaseURL(provider: RuntimeProvider | undefined): string {
   if (!provider) return "";
-  let url = provider.baseURL || "";
+  let url = sanitizeBaseURL(provider.baseURL || "");
   if (provider.endpoint) {
     url = url.replace(/\/+$/, "") + provider.endpoint;
   }
@@ -814,39 +863,24 @@ export function getApiKeyEnvVar(providerId: string): string | undefined {
 /**
  * Fetch models from a local OpenAI-compatible runtime.
  * This makes a request to the runtime's /models endpoint.
+ * Only works for local providers (LM Studio, local Ollama, etc.) - not for cloud APIs.
  */
 export async function fetchLocalModels(baseURL: string): Promise<ModelInfo[]> {
+  // Only fetch from local providers - cloud APIs don't support /models endpoint
+  if (!isLocalProvider(baseURL)) {
+    console.log("Skipping model fetch for non-local provider:", baseURL);
+    return [];
+  }
+  
   try {
     let apiBase = baseURL.replace(/\/+$/, "");
     if (!apiBase.endsWith("/v1")) {
       apiBase += "/v1";
     }
     
-    // For LM Studio, try the developer API first for all downloaded models
-    const isLMStudio = apiBase.includes("localhost:1234") || apiBase.includes("127.0.0.1:1234");
-    if (isLMStudio) {
-      try {
-        const lsBase = apiBase.replace(/\/v1\/?$/, "");
-        const lsRes = await fetch(`${lsBase}/api/v0/models`, {
-          method: "GET",
-          headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(3000),
-        });
-        if (lsRes.ok) {
-          const lsData: any = await lsRes.json();
-          // LM Studio v0 API: { data: [{ id, path, ... }] } or [{ id, path, ... }]
-          const models = lsData?.data || lsData || [];
-          if (Array.isArray(models) && models.length > 0) {
-            return models.map((m: any) => ({
-              id: m.id || m.path || m.name,
-              name: m.id || m.path || m.name,
-              description: m.description || "",
-            }));
-          }
-        }
-      } catch {
-        // Fall through to v1/models
-      }
+    if (isLMStudioURL(apiBase)) {
+      const lsModels = await fetchLMStudioModels(apiBase);
+      if (lsModels.length > 0) return lsModels;
     }
     
     const response = await fetch(`${apiBase}/models`, {
@@ -889,8 +923,14 @@ export async function fetchLocalModels(baseURL: string): Promise<ModelInfo[]> {
 
 /**
  * Check if a local runtime is accessible.
+ * Only works for local providers (LM Studio, local Ollama, etc.) - not for cloud APIs.
  */
 export async function checkRuntimeHealth(baseURL: string): Promise<boolean> {
+  // Only check health for local providers - cloud APIs don't have a health endpoint
+  if (!isLocalProvider(baseURL)) {
+    return false;
+  }
+  
   try {
     // Try to fetch the models endpoint
     let healthUrl = baseURL.replace(/\/+$/, "");
@@ -910,5 +950,60 @@ export async function checkRuntimeHealth(baseURL: string): Promise<boolean> {
     return response.ok;
   } catch (error) {
     return false;
+  }
+}
+
+/**
+ * Fetch models from OpenRouter API.
+ * OpenRouter provides a unified API for 300+ models from various providers.
+ */
+export async function fetchOpenRouterModels(apiKey?: string): Promise<ModelInfo[]> {
+  try {
+    const url = "https://openrouter.ai/api/v1/models?sort=pricing-low-to-high";
+    
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    
+    // Add authorization header if API key is provided
+    if (apiKey) {
+      headers["Authorization"] = `Bearer ${apiKey}`;
+    }
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: headers,
+      signal: AbortSignal.timeout(10000), // 10 second timeout
+    });
+
+    if (!response.ok) {
+      console.error("Failed to fetch OpenRouter models:", response.status, response.statusText);
+      return [];
+    }
+
+    const data: any = await response.json();
+    
+    // OpenRouter API returns { data: [...] }
+    if (data?.data && Array.isArray(data.data)) {
+      return data.data.map((model: any) => ({
+        id: model.id,
+        name: model.name || model.id,
+        description: model.description || "",
+        contextLength: model.context_length,
+        maxContextLength: model.context_length,
+        // Include pricing info if available
+        ...(model.pricing && {
+          pricing: {
+            prompt: model.pricing.prompt,
+            completion: model.pricing.completion,
+          },
+        }),
+      }));
+    }
+    
+    return [];
+  } catch (error) {
+    console.error("Error fetching OpenRouter models:", error);
+    return [];
   }
 }

@@ -32,6 +32,8 @@ const BUILTIN_COMMANDS: Command[] = [
   { name: "/reload", description: "Reload configuration" },
   { name: "/theme", description: "Switch theme" },
   { name: "/connect", description: "Connect a runtime provider" },
+  { name: "/doctor", description: "Health check (config + LM Studio)" },
+  { name: "/models", description: "List local models and context" },
   { name: "/exit", description: "Quit (F10)" },
 ];
 

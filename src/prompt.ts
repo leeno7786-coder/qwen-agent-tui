@@ -1,0 +1,138 @@
+import type { Config } from "./types";
+import { isSmallModelFromConfig } from "./model-runtime";
+import { subAgentAvailable } from "./tools";
+
+export interface PromptContext {
+  workspace: string;
+  branch?: string;
+  skillNames?: string[];
+  allowedPaths?: string[];
+  platformNote?: string;
+}
+
+/**
+ * System prompt for local 8B-and-smaller models.
+ * Tool schemas are sent separately — this focuses on workflow, not parameter docs.
+ */
+export function buildSmallModelPrompt(ctx: PromptContext): string {
+  return [
+    `You are a coding agent. Workspace: ${ctx.workspace}`,
+    "",
+    "## CRITICAL: You MUST use tools",
+    "You have tools available. ALWAYS use them to explore and edit files.",
+    "NEVER describe what you would do — actually DO it using tools.",
+    "",
+    "## Workflow",
+    "1. **First** — list_dir to see what files exist",
+    "2. **Read** — read_file to examine files before editing",
+    "3. **Edit** — edit_file (exact old_text) or edit_file_lines (1-based line numbers)",
+    "4. **Run** — execute_command for shell commands (PowerShell on Windows)",
+    "5. **Track** — manage_todos for tasks with 2+ steps",
+    "",
+    "## Rules",
+    "- ALWAYS call a tool — never just talk about what you would do",
+    "- Write 1 short line describing your action, THEN call the tool",
+    "- Use list_dir first when asked to review or explore code",
+    "- Read before editing; never invent file contents",
+    "- One focused change per edit; verify with execute_command when unsure",
+    "- Short replies; put detail in tool use, not prose",
+    "- git_status / git_diff / git_commit only when the user asks about git",
+  ].join("\n");
+}
+
+/**
+ * System prompt for larger / cloud models.
+ */
+export function buildLargeModelPrompt(
+  ctx: PromptContext,
+  cfg?: Config
+): string {
+  const lines = [
+    `You are Qwen Agent, a senior software engineer. Workspace: ${ctx.workspace}`,
+    "",
+    "## Workflow",
+    "1. git_diff / git_status first for review or audit tasks",
+    "2. **dispatch_subagents** — you write each sub-agent's name + prompt; they run sequentially and return evidence",
+    "3. read_file only for files you must verify or edit",
+    "4. edit_file or edit_file_lines; run_tests / typecheck / run_command to verify",
+    "",
+    "## Rules",
+    "- If you call tools, first write a brief preface (1–2 lines) describing the plan, then call the tool(s)",
+    "- Never ask the user to paste files or say you can't see the directory — use tools instead",
+    "- Avoid map_project_tree and batch_read_files unless the user explicitly wants a full tree",
+    "- Detect stack from package.json, pyproject.toml, Cargo.toml, etc.",
+    "- Ask when requirements are ambiguous or files contradict each other",
+    "- execute_command for shell work; prefer project scripts over ad-hoc commands",
+    "- manage_todos for multi-step work",
+    "",
+    "## Review / audit output",
+    "- Synthesize sub-agent findings into a short report: Critical → High → Medium → Low",
+    "- Each finding: file path, issue, suggested fix",
+    "- Skip noise; dedupe overlapping lens reports",
+  ];
+
+  if (cfg && subAgentAvailable(cfg)) {
+    lines.push(
+      "",
+      "## Sub-agents",
+      "- On OpenRouter, sub-agents use `openrouter/free` by default (random free tool-capable model). Current: `" +
+        `${cfg.subAgentModel}\`. Override via \`subAgentModel\` in config.`,
+      "- **dispatch_subagents** — pass `agents: [{ name, prompt, focus_path? }]`. You craft each prompt; they run one at a time.",
+      "- On OpenRouter free tier, dispatch **at most 2 agents** per call; use **explore_subagent** for additional lenses.",
+      "- **explore_subagent** — single investigation when one angle is enough.",
+      "- Sub-agents gather evidence with path:line citations; you verify and apply fixes.",
+    );
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Shared suffix: platform, paths, git, skills, todos.
+ */
+export function appendPromptExtras(
+  base: string,
+  ctx: PromptContext,
+  small: boolean
+): string {
+  let system = base;
+
+  if (ctx.allowedPaths?.length) {
+    system += `\n\nExtra approved paths: ${ctx.allowedPaths.join(", ")}`;
+  }
+  if (ctx.branch) {
+    system += `\nGit branch: ${ctx.branch}`;
+  }
+  if (ctx.skillNames?.length) {
+    system += `\nSkills (slash commands): ${ctx.skillNames.join(", ")}`;
+  }
+  if (ctx.platformNote) {
+    system += `\n\n${ctx.platformNote}`;
+  }
+
+  system += small
+    ? "\n\n## Reminder: USE TOOLS\nYou have tools like list_dir, read_file, etc. Call them now — do not just describe what you would do."
+    : "\n\n## Todos\nBreak multi-step requests into manage_todos items. Mark complete via the tool — do not skip it.";
+
+  return system;
+}
+
+/**
+ * Build the full system prompt for the agent.
+ */
+export function buildSystemPrompt(cfg: Config, ctx: PromptContext): string {
+  if (cfg.systemPrompt) {
+    return appendPromptExtras(cfg.systemPrompt, ctx, isSmallModelFromConfig(cfg));
+  }
+
+  const small = isSmallModelFromConfig(cfg);
+  const base = small
+    ? buildSmallModelPrompt(ctx)
+    : buildLargeModelPrompt(ctx, cfg);
+  const platformNote =
+    process.platform === "win32"
+      ? "Platform: Windows — shell commands run in PowerShell."
+      : undefined;
+
+  return appendPromptExtras(base, { ...ctx, platformNote }, small);
+}

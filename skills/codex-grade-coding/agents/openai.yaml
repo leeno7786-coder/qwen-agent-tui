@@ -1,0 +1,6 @@
+interface:
+  display_name: "Codex-Grade Coding"
+  short_description: "Strict coding discipline for weaker models"
+  default_prompt: "Use $codex-grade-coding to implement or review this coding task with explicit verification and residual-risk reporting."
+policy:
+  allow_implicit_invocation: true

@@ -1,6 +1,8 @@
 /** @jsxImportSource @opentui/react */
 
 import type { AgentState } from "../types";
+import { isSmallModelFromConfig } from "../model-runtime";
+import type { Config } from "../types";
 import type { Theme } from "./theme";
 
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -8,6 +10,10 @@ const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", 
 interface StatusBarProps {
   state: AgentState;
   model: string;
+  modelRuntime?: Pick<
+    Config,
+    "modelContextLength" | "modelParamBillions" | "smallModelMode"
+  >;
   todoCount: number;
   currentTool?: { name: string; args: string };
   lastUsage?: { input_tokens: number; output_tokens: number };
@@ -32,6 +38,7 @@ function fmt(n: number): string {
 export function StatusBar({
   state,
   model,
+  modelRuntime,
   todoCount,
   currentTool,
   lastUsage,
@@ -62,12 +69,18 @@ export function StatusBar({
     ? `${fmt(totalUsage.input_tokens + totalUsage.output_tokens)} total`
     : "";
     
-  // Small model indicator
-  const isSmallModel = model.toLowerCase().includes('4b') || 
-                      model.toLowerCase().includes('nemotron') ||
-                      model.toLowerCase().includes('phi') ||
-                      model.toLowerCase().includes('gemma');
-  const smallModelIndicator = isSmallModel ? " [4B]" : "";
+  const runtimeCfg = {
+    model,
+    smallModelMode: modelRuntime?.smallModelMode,
+    modelParamBillions: modelRuntime?.modelParamBillions,
+    maxTokens: undefined,
+  };
+  const smallModelIndicator = isSmallModelFromConfig(runtimeCfg)
+    ? " [≤8B]"
+    : "";
+  const ctxIndicator = modelRuntime?.modelContextLength
+    ? ` · ${Math.round(modelRuntime.modelContextLength / 1000)}k`
+    : "";
   const elapsed =
     elapsedMs && elapsedMs > 0 ? `${(elapsedMs / 1000).toFixed(1)}s` : "";
   const spin =
@@ -81,11 +94,11 @@ export function StatusBar({
     : "";
 
   return (
-    <box flexDirection="column" height={2} backgroundColor={theme.bgPanel}>
+    <box flexDirection="column" height={2} flexShrink={0} backgroundColor={theme.bgPanel}>
       <box flexDirection="row" paddingX={1} height={1}>
         <text fg={theme.headerFg}>Agent</text>
         <box flexGrow={1} />
-        <text fg={theme.mutedFg}>{displayModel}{smallModelIndicator}</text>
+        <text fg={theme.mutedFg}>{displayModel}{smallModelIndicator}{ctxIndicator}</text>
         {lastTokens && <text fg={theme.mutedFg}> · {lastTokens}</text>}
         {totalTokens && <text fg={theme.mutedFg}> · {totalTokens}</text>}
         {elapsed && <text fg={theme.mutedFg}> · {elapsed}</text>}

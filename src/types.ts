@@ -30,6 +30,33 @@ export interface Config {
   temperature?: number;
   /** Maximum tokens for completions (small models work better with lower values). */
   maxTokens?: number;
+  /** Active context length from runtime (e.g. LM Studio loaded instance). */
+  modelContextLength?: number;
+  /** Maximum context the model supports (from runtime catalog). */
+  modelMaxContextLength?: number;
+  /** Parameter count in billions when reported by runtime. */
+  modelParamBillions?: number;
+  /** How modelContextLength / modelParamBillions were obtained. */
+  modelRuntimeSource?: "lmstudio" | "heuristic";
+  /** Second model for read-only sub-agents (default: Qwen3 Next 80B on OpenRouter). */
+  subAgentModel?: string;
+  /** OpenAI-compatible API base URL for sub-agents (default: OpenRouter). */
+  subAgentBaseURL?: string;
+  /** API key for sub-agent provider (default: OPENROUTER_API_KEY). */
+  subAgentApiKey?: string;
+  /** Use explore_subagent / dispatch_subagents (default true when sub-agent is configured). */
+  subAgentEnabled?: boolean;
+  /** Max tool loops for one explore_subagent call (default 12). */
+  subAgentMaxIterations?: number;
+  /** Max output tokens per sub-agent LLM call (default 4096). */
+  subAgentMaxTokens?: number;
+  subAgentTemperature?: number;
+  /** Max concurrent sub-agent runs (legacy; dispatch runs sequentially). */
+  subAgentMaxParallel?: number;
+  /** Max agents per dispatch_subagents call on OpenRouter (default 2). */
+  subAgentMaxPerDispatch?: number;
+  /** Minimum delay (ms) between LLM API calls to avoid rate limiting. 0 = disabled. */
+  rateLimitMs?: number;
 }
 
 /** Possible states of the agent lifecycle. */
@@ -93,7 +120,7 @@ export interface Todo {
   createdAt: number;
 }
 
-/** A skill bundle loaded from JSON. */
+/** A skill loaded from SKILL.md, JSON, or the agent skills ecosystem. */
 export interface Skill {
   /** Skill name (used as identifier). */
   name: string;
@@ -103,6 +130,8 @@ export interface Skill {
   tools: string[];
   /** Prompt text injected when the skill is active. */
   prompt: string;
+  /** Keyword triggers for auto-loading (from SKILL.md triggers or WHEN). */
+  triggers?: string[];
   /** Command trigger (e.g., "skill:airunway-aks-setup") */
   command?: string;
   /** Longer description for display in settings */
@@ -119,6 +148,10 @@ export interface Skill {
   welcomeMessage?: string;
   /** Predefined options for user to choose from */
   options?: Array<{ label: string; value: string; description?: string }>;
+  /** Source type of this skill */
+  source?: "skilli.md" | "json" | "inline";
+  /** File path this skill was loaded from */
+  sourcePath?: string;
 }
 
 /** Skill command for slash command system */
@@ -141,6 +174,12 @@ export interface ModelInfo {
   description?: string;
   /** Whether this is the default model for the provider. */
   default?: boolean;
+  /** Active context length when known (LM Studio loaded config). */
+  contextLength?: number;
+  /** Max context from model catalog. */
+  maxContextLength?: number;
+  /** Parameter count in billions. */
+  paramBillions?: number;
 }
 
 /**
@@ -207,4 +246,20 @@ export interface SkillConfig {
   enabled?: boolean;
   /** Map of skill name -> enabled state (overrides default). */
   skills?: Record<string, boolean>;
+  /** Individual skill configuration options. */
+  individualSkills?: Record<
+    string,
+    {
+      /** Skill name to configure. */
+      name: string;
+      /** Short description of what the skill does. */
+      description: string;
+      /** Tools this skill uses (for permission management). */
+      tools?: string[];
+      /** System prompt injected when skill is active. */
+      prompt?: string;
+      /** Version of the skill configuration. */
+      version?: string;
+    }
+  >;
 }

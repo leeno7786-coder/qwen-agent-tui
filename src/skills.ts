@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from "fs";
 import { homedir } from "os";
-import { join, basename, dirname } from "path";
+import { join, basename, dirname, extname } from "path";
 import { fileURLToPath } from "url";
 import type { Skill, SkillCommand } from "./types";
 
@@ -8,6 +8,7 @@ const SKILL_DIRS = [
   join(process.cwd(), "skills"),
   join(homedir(), ".qwen-agent-tui", "skills"),
   join(homedir(), ".agents", "skills"),
+  join(homedir(), ".claude", "skills"),
 ];
 
 const TEMPLATE_DIR = join(
@@ -18,24 +19,8 @@ const TEMPLATE_DIR = join(
   "templates"
 );
 
-// Skill config file path
 const SKILL_CONFIG_FILE = join(homedir(), ".qwen-agent-tui", "skill-config.json");
 
-// Ensure skill directories exist
-function ensureSkillDirs(): void {
-  for (const dir of SKILL_DIRS) {
-    if (!existsSync(dir)) {
-      try {
-        mkdirSync(dir, { recursive: true });
-      } catch {
-        // Ignore errors
-      }
-    }
-  }
-}
-
-// Built-in skills ship with the package; resolve relative to this file
-// so they are found regardless of where the process is launched from.
 const BUILTIN_SKILL_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -43,77 +28,292 @@ const BUILTIN_SKILL_DIR = join(
   "skills"
 );
 
-export function loadSkills(): Map<string, Skill> {
-  ensureSkillDirs();
-  
-  // Load user preferences from config file (if exists)
-  const userPrefs = loadSkillConfig();
-  
-  const map = new Map<string, Skill>();
-  // Built-ins first so local/user skills can override them
-  const allDirs = [BUILTIN_SKILL_DIR, ...SKILL_DIRS];
-  for (const dir of allDirs) {
-    if (!existsSync(dir)) continue;
-    for (const file of readdirSync(dir)) {
-      if (!file.endsWith(".json")) continue;
-      try {
-        const skill: Skill = JSON.parse(readFileSync(join(dir, file), "utf-8"));
-        // Use filename as name if name is missing
-        if (!skill.name) {
-          skill.name = basename(file, ".json");
-        }
-        // Apply user preference from config (override default enabled value)
-        if (userPrefs[skill.name] !== undefined) {
-          skill.enabled = userPrefs[skill.name];
-        } else if (skill.enabled === undefined) {
-          // Default to true if not in config and no explicit setting
-          skill.enabled = true;
-        }
-        map.set(skill.name, skill);
-      } catch {}
+function ensureSkillDirs(): void {
+  for (const dir of SKILL_DIRS) {
+    if (!existsSync(dir)) {
+      try { mkdirSync(dir, { recursive: true }); } catch {}
     }
   }
+}
+
+function parseYamlFrontmatter(text: string): { name?: string; description?: string; triggers?: string[]; [key: string]: any } {
+  const result: { name?: string; description?: string; triggers?: string[]; [key: string]: any } = {};
+
+  // Normalize line endings (handle both CRLF and LF)
+  const normalizedText = text.replace(/\r\n/g, "\n");
+
+  // Match YAML frontmatter between --- delimiters
+  const match = normalizedText.match(/^---\s*\n([\s\S]*?)\n---\s*\n/);
+  if (!match) return result;
+
+  const yaml = match[1];
+  const lines = yaml.split("\n");
+
+  let currentKey: string | null = null;
+  let isBlockValue = false;
+  let blockValue: string[] = [];
+
+  for (const raw of lines) {
+    const line = raw;
+
+    // Handle block scalar indicator (|)
+    if (isBlockValue && currentKey) {
+      if (line.startsWith("  ") || line.startsWith("- ") || line.trim() === "") {
+        blockValue.push(line);
+        continue;
+      } else {
+        // End of block value
+        if (currentKey === "description") {
+          result.description = blockValue.map(l => l.replace(/^  /, "")).join("\n").trim();
+        } else if (currentKey === "triggers") {
+          result.triggers = blockValue
+            .filter(l => l.trim().startsWith("- "))
+            .map(l => l.trim().slice(2).trim().replace(/^"|"$/g, ""));
+        }
+        currentKey = null;
+        isBlockValue = false;
+        blockValue = [];
+      }
+    }
+
+    const keyMatch = line.match(/^(\w[\w_-]*?):\s*(.*)$/);
+    if (!keyMatch) continue;
+
+    const key = keyMatch[1];
+    const value = keyMatch[2].trim();
+
+    if (value === "|") {
+      currentKey = key;
+      isBlockValue = true;
+      blockValue = [];
+      continue;
+    }
+
+    if (key === "name") {
+      result.name = value;
+    } else if (key === "description") {
+      result.description = value;
+    } else if (key === "triggers") {
+      // Parse inline array: triggers: ["a", "b"]
+      if (value.startsWith("[")) {
+        try {
+          result.triggers = JSON.parse(value.replace(/'/g, '"'));
+        } catch {}
+      } else if (value === "") {
+        // Triggers as block list: triggers:\n  - item
+        currentKey = "triggers";
+        isBlockValue = true;
+        blockValue = [];
+        continue;
+      }
+    }
+  }
+
+  // Handle trailing block value
+  if (isBlockValue && currentKey) {
+    if (currentKey === "description") {
+      result.description = blockValue.map(l => l.replace(/^  /, "")).join("\n").trim();
+    } else if (currentKey === "triggers") {
+      result.triggers = blockValue
+        .filter(l => l.trim().startsWith("- "))
+        .map(l => l.trim().slice(2).trim().replace(/^"|"$/g, ""));
+    }
+  }
+
+  return result;
+}
+
+function extractTriggersFromDescription(description: string): string[] {
+  // Extract WHEN: sections from description
+  const whenMatch = description.match(/(?:WHEN|when|Use when):\s*(.*?)(?:\.\s|$)/);
+  if (!whenMatch) return [];
+
+  return whenMatch[1]
+    .split(/[,;]/)
+    .map(s => s.trim().toLowerCase())
+    .filter(s => s.length > 0);
+}
+
+function loadSkillFile(filePath: string): Skill | null {
+  try {
+    const ext = extname(filePath).toLowerCase();
+
+    if (ext === ".md") {
+      // Parse SKILL.md with YAML frontmatter
+      const content = readFileSync(filePath, "utf-8");
+      const frontmatter = parseYamlFrontmatter(content);
+      if (!frontmatter.name) return null;
+
+      // Extract prompt body (everything after frontmatter) - handle both CRLF and LF
+      const normalizedContent = content.replace(/\r\n/g, "\n");
+      const prompt = normalizedContent.replace(/^---\s*\n[\s\S]*?\n---\s*\n/, "").trim();
+
+      // Extract triggers from frontmatter or description
+      const triggers = frontmatter.triggers?.length
+        ? frontmatter.triggers
+        : extractTriggersFromDescription(frontmatter.description || "");
+
+      return {
+        name: frontmatter.name,
+        description: frontmatter.description || "",
+        prompt,
+        tools: [],
+        triggers,
+        enabled: false,
+        source: "skilli.md",
+        sourcePath: filePath,
+        command: `skill:${frontmatter.name}`,
+      };
+    }
+
+    if (ext === ".json") {
+      // Legacy JSON skill support
+      const skill: Skill = JSON.parse(readFileSync(filePath, "utf-8"));
+      if (!skill.name) {
+        skill.name = basename(filePath, ".json");
+      }
+      skill.source = "json";
+      skill.sourcePath = filePath;
+      if (skill.enabled === undefined) skill.enabled = true;
+
+      // Extract triggers from tags or longDescription
+      if (!skill.triggers) {
+        skill.triggers = skill.tags?.length
+          ? skill.tags
+          : extractTriggersFromDescription(skill.longDescription || skill.description || "");
+      }
+
+      if (!skill.command) {
+        skill.command = `skill:${skill.name}`;
+      }
+
+      return skill;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function scanDirForSkills(dir: string): Map<string, Skill> {
+  const map = new Map<string, Skill>();
+
+  if (!existsSync(dir)) return map;
+
+  // Scan for SKILL.md files (in subdirectories)
+  try {
+    const entries = readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const skillMdPath = join(dir, entry.name, "SKILL.md");
+        if (existsSync(skillMdPath)) {
+          const skill = loadSkillFile(skillMdPath);
+          if (skill) map.set(skill.name, skill);
+        }
+      }
+    }
+
+    // Also scan for direct .json files (legacy support)
+    for (const entry of entries) {
+      if (entry.isFile()) {
+        const filePath = join(dir, entry.name);
+        const ext = extname(entry.name).toLowerCase();
+        if (ext !== ".json") continue;
+        // Skip if a corresponding SKILL.md subdirectory exists (SKILL.md takes priority)
+        const jsonName = basename(entry.name, ".json");
+        if (existsSync(join(dir, jsonName, "SKILL.md"))) continue;
+        const skill = loadSkillFile(filePath);
+        if (skill) map.set(skill.name, skill);
+      }
+    }
+  } catch {}
+
   return map;
+}
+
+export function loadSkills(): Map<string, Skill> {
+  ensureSkillDirs();
+
+  const userPrefs = loadSkillConfig();
+  const map = new Map<string, Skill>();
+
+  // Built-ins first so local/user skills can override
+  // Use process.cwd() + "skills" as the primary skills directory
+  const projectSkillsDir = join(process.cwd(), "skills");
+  let allDirs = [projectSkillsDir, ...SKILL_DIRS];
+
+  // Fallback: If project skills directory doesn't exist, use BUILTIN_SKILL_DIR
+  if (!existsSync(projectSkillsDir)) {
+    allDirs = [BUILTIN_SKILL_DIR, ...SKILL_DIRS];
+  }
+
+  for (const dir of allDirs) {
+    if (!existsSync(dir)) continue;
+    const dirSkills = scanDirForSkills(dir);
+    for (const [name, skill] of dirSkills) {
+      // Apply user preference from config
+      if (userPrefs[name] !== undefined) {
+        skill.enabled = userPrefs[name];
+      }
+      map.set(name, skill);
+    }
+  }
+
+  return map;
+}
+
+export function matchSkillTriggers(text: string, skills: Map<string, Skill>): Skill[] {
+  const lower = text.toLowerCase();
+  const matched: Skill[] = [];
+  const seen = new Set<string>();
+
+  for (const [name, skill] of skills) {
+    if (seen.has(name)) continue;
+    if (skill.enabled) continue; // Don't auto-load already-enabled skills
+
+    // Check triggers
+    if (skill.triggers?.length) {
+      for (const trigger of skill.triggers) {
+        if (lower.includes(trigger.toLowerCase())) {
+          matched.push(skill);
+          seen.add(name);
+          break;
+        }
+      }
+    }
+  }
+
+  return matched;
 }
 
 export function loadTemplates(): Map<string, Skill> {
   const map = new Map<string, Skill>();
   if (!existsSync(TEMPLATE_DIR)) return map;
-  
+
   for (const file of readdirSync(TEMPLATE_DIR)) {
-    if (!file.endsWith(".json")) continue;
-    try {
-      const skill: Skill = JSON.parse(readFileSync(join(TEMPLATE_DIR, file), "utf-8"));
-      // Use filename as name if name is missing
-      if (!skill.name) {
-        skill.name = basename(file, ".json");
-      }
-      // Templates are always disabled by default
+    const filePath = join(TEMPLATE_DIR, file);
+    const skill = loadSkillFile(filePath);
+    if (skill) {
       skill.enabled = false;
       map.set(skill.name, skill);
-    } catch {}
+    }
   }
+
   return map;
 }
 
-/**
- * Get all skill commands for the slash command system
- */
 export function getSkillCommands(skills: Map<string, Skill>): SkillCommand[] {
   const commands: SkillCommand[] = [];
-  
+
   for (const [name, skill] of skills) {
     if (!skill.enabled) continue;
-    
-    // Use custom command or generate from name
     const commandName = skill.command || `skill:${name}`;
-    
-    // Truncate description for display
-    const shortDesc = skill.description || skill.longDescription || "";
-    const displayDesc = shortDesc.length > 80 
-      ? shortDesc.slice(0, 77) + "..." 
+    const shortDesc = skill.description || "";
+    const displayDesc = shortDesc.length > 80
+      ? shortDesc.slice(0, 77) + "..."
       : shortDesc;
-    
+
     commands.push({
       name: `/${commandName}`,
       description: displayDesc,
@@ -121,140 +321,101 @@ export function getSkillCommands(skills: Map<string, Skill>): SkillCommand[] {
       skillName: name,
     });
   }
-  
-  // Sort alphabetically by command name
+
   commands.sort((a, b) => a.name.localeCompare(b.name));
-  
   return commands;
 }
 
-/**
- * Get a specific skill by name
- */
 export function getSkill(name: string): Skill | undefined {
   const skills = loadSkills();
   return skills.get(name) || skills.get(name.replace(/^skill:/, ""));
 }
 
-/**
- * Save a new skill to the skills directory
- */
 export function saveSkill(skill: Skill): string {
   ensureSkillDirs();
   const filename = `${skill.name.replace(/[^a-zA-Z0-9_-]/g, "_")}.json`;
   const path = join(SKILL_DIRS[0], filename);
-  
-  // Ensure the skill has required fields
+
   const fullSkill: Skill = {
     name: skill.name,
     description: skill.description || "",
     prompt: skill.prompt || "",
     tools: skill.tools || [],
+    triggers: skill.triggers || [],
     enabled: skill.enabled !== false,
     command: skill.command,
     longDescription: skill.longDescription,
     version: skill.version || "1.0.0",
     author: skill.author || "user",
     tags: skill.tags || [],
+    source: "json",
   };
-  
+
   writeFileSync(path, JSON.stringify(fullSkill, null, 2), "utf-8");
   return path;
 }
 
-/**
- * Delete a skill by name
- */
 export function deleteSkill(name: string): boolean {
   const skills = loadSkills();
   const skill = skills.get(name) || skills.get(name.replace(/^skill:/, ""));
   if (!skill) return false;
-  
-  for (const dir of SKILL_DIRS) {
+
+  for (const dir of [BUILTIN_SKILL_DIR, ...SKILL_DIRS]) {
     if (!existsSync(dir)) continue;
+    if (skill.sourcePath) {
+      try {
+        writeFileSync(skill.sourcePath, ""); // clear it
+        return true;
+      } catch {}
+    }
     const filename = `${skill.name.replace(/[^a-zA-Z0-9_-]/g, "_")}.json`;
     const path = join(dir, filename);
     try {
-      const fs = require("fs");
-      fs.unlinkSync(path);
+      writeFileSync(path, "");
       return true;
-    } catch {
-      // Try next directory
-    }
+    } catch {}
   }
   return false;
 }
 
-/**
- * Toggle a skill's enabled state
- */
 export function toggleSkill(name: string): boolean {
   const skills = loadSkills();
   const skill = skills.get(name) || skills.get(name.replace(/^skill:/, ""));
   if (!skill) return false;
-  
+
   skill.enabled = !skill.enabled;
-  
-  for (const dir of SKILL_DIRS) {
-    if (!existsSync(dir)) continue;
-    const filename = `${skill.name.replace(/[^a-zA-Z0-9_-]/g, "_")}.json`;
-    const path = join(dir, filename);
-    try {
-      writeFileSync(path, JSON.stringify(skill, null, 2), "utf-8");
-      return true;
-    } catch {
-      // Try next directory
-    }
-  }
-  return false;
+  const config = loadSkillConfig();
+  config[name] = skill.enabled;
+  saveSkillConfig(config);
+
+  return true;
 }
 
-/**
- * Get all available skill names as an array
- */
 export function getSkillNames(): string[] {
   const skills = loadSkills();
   return Array.from(skills.keys());
 }
 
-/**
- * Load skill configuration from JSON file (if exists)
- */
 function loadSkillConfig(): Record<string, boolean> {
   if (!existsSync(SKILL_CONFIG_FILE)) return {};
-  
   try {
     const content = readFileSync(SKILL_CONFIG_FILE, "utf-8");
-    // Try to parse as array first (legacy format), then object
     const parsed = JSON.parse(content);
-    
     if (Array.isArray(parsed)) {
-      // Legacy format: ["skill1", "skill2"]
       return parsed.reduce((acc, skill) => ({ ...acc, [skill]: true }), {});
-    } else {
-      // Object format: {"skill1": true, "skill2": false}
-      return parsed as Record<string, boolean>;
     }
-  } catch (e) {
-    console.error("Failed to load skill config:", e);
+    return parsed as Record<string, boolean>;
+  } catch {
     return {};
   }
 }
 
-/**
- * Save skill configuration to JSON file
- */
 export function saveSkillConfig(config: Record<string, boolean>): void {
   try {
     writeFileSync(SKILL_CONFIG_FILE, JSON.stringify(config, null, 2), "utf-8");
-  } catch (e) {
-    console.error("Failed to save skill config:", e);
-  }
+  } catch {}
 }
 
-/**
- * Get current skill configuration from file
- */
 export function getSkillConfig(): Record<string, boolean> {
   return loadSkillConfig();
 }

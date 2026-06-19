@@ -1,11 +1,18 @@
 /** @jsxImportSource @opentui/react */
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import type { ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
-import type { Message, ToolResult, AgentState } from "../types";
+import type { Message, ToolResult, AgentState, ToolCall } from "../types";
 import { CommandDropdown } from "./command-dropdown";
 import { getSyntaxStyle } from "./syntax-style";
 import type { Theme } from "./theme";
+import {
+  buildToolDisplayBlock,
+  subAgentLinesFromProgress,
+  type ToolDisplayBlock,
+} from "./tool-display";
+import type { SubAgentDispatchProgress } from "../subagent";
 
 interface ChatScreenProps {
   theme: Theme;
@@ -15,7 +22,11 @@ interface ChatScreenProps {
   model: string;
   todoCount: number;
   elapsedMs: number;
-  currentTool?: { name: string; args: string };
+  currentTool?: {
+    name: string;
+    args: string;
+    subAgentProgress?: SubAgentDispatchProgress;
+  };
   lastUsage?: { input_tokens: number; output_tokens: number };
   totalUsage: { input_tokens: number; output_tokens: number };
   onSubmit: (text: string) => void;
@@ -48,111 +59,15 @@ function parseCodeBlocks(content: string): Array<{ type: "text"; text: string } 
 
 const syntaxStyle = getSyntaxStyle();
 const ARG_BEARING = new Set(["/auto", "/cd", "/allow", "/export", "/theme"]);
-const RESULT_PREVIEW_LIMIT = 5;
-
-function parseJSON(value: string): any | undefined {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return undefined;
-  }
-}
-
-function compactPath(path?: string): string {
-  if (!path) return ".";
-  return path.replace(/\\/g, "/").split("/").slice(-3).join("/");
-}
-
-const TOOL_LABELS: Record<string, string> = {
-  shell: "shell",
-  run_command: "shell",
-  read_file: "read",
-  write_file: "write",
-  list_dir: "list",
-  search_files: "search",
-  grep_search: "search",
-  batch_read_files: "read",
-  git_commit: "commit",
-  manage_todos: "todo",
-  linear_graphql: "graphql",
+const MESSAGES_PER_PAGE = 50;
+const DIFF_PROPS = {
+  view: "unified" as const,
+  syntaxStyle,
+  addedBg: "#2d4a3e",
+  removedBg: "#4a2d2d",
+  addedSignColor: "#9ece6a",
+  removedSignColor: "#f7768e",
 };
-
-function formatToolArgs(name: string, raw: string): string {
-  const args = parseJSON(raw);
-  if (!args) return raw.length > 80 ? raw.slice(0, 79) + "…" : raw;
-  if (name === "list_dir") return compactPath(args.path);
-  if (name === "read_file" || name === "write_file") return compactPath(args.path);
-  if (name === "batch_read_files") return Array.isArray(args.paths) ? args.paths.map(compactPath).join(", ") : String(raw);
-  if (name === "git_commit") return String(args.message || "").slice(0, 80);
-  if (name === "run_command" || name === "shell") {
-    const cmd = String(args.command || "");
-    return cmd.length > 80 ? cmd.slice(0, 79) + "…" : cmd;
-  }
-  if (name === "grep_search" || name === "search_files") return `${compactPath(args.path)}: "${String(args.pattern || args.query || "")}"`;
-  if (name === "manage_todos") return [args.action, args.text || args.id].filter(Boolean).join(": ");
-  if (name === "linear_graphql") return String(args.query || "").slice(0, 80).replace(/\s+/g, " ").trim();
-  const entries = Object.entries(args).slice(0, 2);
-  return entries.map(([key, value]) => `${key}=${String(value).slice(0, 40)}`).join(" ");
-}
-
-function summarizeToolResult(content: string): { ok: boolean; title: string; lines: string[] } {
-  const data = parseJSON(content);
-  if (!data) {
-    const lines = content.split("\n").filter(Boolean).slice(0, RESULT_PREVIEW_LIMIT);
-    return { ok: true, title: "result", lines: lines.length ? lines : ["(empty)"] };
-  }
-
-  const ok = data.ok !== false && data.success !== false;
-
-  if (data.results && typeof data.results === "object" && !Array.isArray(data.results)) {
-    const keys = Object.keys(data.results);
-    const lines = keys.slice(0, RESULT_PREVIEW_LIMIT).map(k => {
-      const res = data.results[k];
-      return `${compactPath(k)}: ${res.ok ? "✓" : "✗"} ${(res.content?.length || 0)} chars`;
-    });
-    const more = keys.length - lines.length;
-    if (more > 0) lines.push(`+${more} more`);
-    return { ok, title: `${keys.length} file${keys.length === 1 ? "" : "s"}`, lines };
-  }
-
-  if (Array.isArray(data.results)) {
-    const shown = data.results.slice(0, RESULT_PREVIEW_LIMIT);
-    const lines = shown.map((r: any) => `${compactPath(r.path)}:${r.line} ${r.text.slice(0, 100)}`);
-    const more = data.results.length - shown.length;
-    if (more > 0) lines.push(`+${more} more`);
-    return { ok, title: `${data.results.length} match${data.results.length === 1 ? "" : "es"}`, lines };
-  }
-
-  if (Array.isArray(data.entries)) {
-    const shown = data.entries.slice(0, RESULT_PREVIEW_LIMIT);
-    const more = data.entries.length - shown.length;
-    return {
-      ok,
-      title: `${data.entries.length} item${data.entries.length === 1 ? "" : "s"}`,
-      lines: [shown.join("  ") + (more > 0 ? `  +${more}` : "")],
-    };
-  }
-
-  if (typeof data.stdout === "string" || typeof data.stderr === "string") {
-    const out = typeof data.stdout === "string" ? data.stdout.trim() : "";
-    const err = typeof data.stderr === "string" ? data.stderr.trim() : "";
-    const rc = data.returncode ?? data.code;
-    const title = rc != null && rc !== 0 ? `exit ${rc}` : (err && !out ? "stderr" : "stdout");
-    const combined = [...out.split("\n").filter(Boolean), ...err.split("\n").filter(Boolean)].slice(0, RESULT_PREVIEW_LIMIT);
-    return { ok, title, lines: combined.length ? combined : ["(no output)"] };
-  }
-
-  if (typeof data.content === "string") {
-    const len = data.content.length;
-    const lines = data.content.split("\n").slice(0, RESULT_PREVIEW_LIMIT);
-    return { ok, title: `${len} chars`, lines };
-  }
-
-  if (data.path) return { ok, title: "wrote", lines: [compactPath(data.path)] };
-  if (data.error) return { ok: false, title: "error", lines: [String(data.error).slice(0, 120)] };
-  if (data.matches != null) return { ok, title: `${data.matches} match${data.matches === 1 ? "" : "es"}`, lines: typeof data.results === "string" ? data.results.split("\n").slice(0, RESULT_PREVIEW_LIMIT) : [] };
-  return { ok, title: "ok", lines: [] };
-}
 
 function formatTokens(n: number): string {
   if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
@@ -160,8 +75,23 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-export function ChatScreen({ theme, messages, toolResults = [], state, elapsedMs, currentTool, lastUsage, onSubmit }: ChatScreenProps) {
+export function ChatScreen({
+  theme,
+  messages,
+  toolResults = [],
+  state,
+  elapsedMs,
+  currentTool,
+  lastUsage,
+  onSubmit,
+  selectedMessageIndex = null,
+  page = 1,
+  totalPages = 1,
+  paginated = false,
+  onPageChange,
+}: ChatScreenProps) {
   const [inputValue, setInputValue] = useState("");
+  const scrollRef = useRef<ScrollBoxRenderable>(null);
   const busy = state !== "idle" && state !== "error" && state !== "waiting_for_user";
 
   const toolMap = useMemo(() => {
@@ -170,10 +100,51 @@ export function ChatScreen({ theme, messages, toolResults = [], state, elapsedMs
     return map;
   }, [toolResults]);
 
+  const toolResultByCallId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const msg of messages) {
+      if (msg.role === "tool" && msg.toolCallId) {
+        map.set(msg.toolCallId, msg.content);
+      }
+    }
+    return map;
+  }, [messages]);
+
   useKeyboard((keyEvent) => {
     if (keyEvent.name === "f3" || keyEvent.name === "F3") {
       setInputValue("/auto ");
       keyEvent.preventDefault?.();
+      return;
+    }
+
+    const scrollbox = scrollRef.current;
+    if (!scrollbox) return;
+
+    if (keyEvent.shift) {
+      if (keyEvent.name === "up" || keyEvent.name === "ArrowUp") {
+        scrollbox.scrollBy(-1, "content");
+        keyEvent.preventDefault?.();
+      } else if (keyEvent.name === "down" || keyEvent.name === "ArrowDown") {
+        scrollbox.scrollBy(1, "content");
+        keyEvent.preventDefault?.();
+      } else if (keyEvent.name === "pageup" || keyEvent.name === "PageUp") {
+        scrollbox.scrollBy(-0.5, "viewport");
+        keyEvent.preventDefault?.();
+      } else if (keyEvent.name === "pagedown" || keyEvent.name === "PageDown") {
+        scrollbox.scrollBy(0.5, "viewport");
+        keyEvent.preventDefault?.();
+      }
+      return;
+    }
+
+    if (paginated && onPageChange && totalPages > 1) {
+      if (keyEvent.name === "pageup" || keyEvent.name === "PageUp") {
+        onPageChange(Math.max(1, page - 1));
+        keyEvent.preventDefault?.();
+      } else if (keyEvent.name === "pagedown" || keyEvent.name === "PageDown") {
+        onPageChange(Math.min(totalPages, page + 1));
+        keyEvent.preventDefault?.();
+      }
     }
   }, { release: false });
 
@@ -187,29 +158,84 @@ export function ChatScreen({ theme, messages, toolResults = [], state, elapsedMs
   // Check if dropdown is open to prevent double-handling of Enter key
   const dropdownOpen = inputValue.startsWith("/");
 
-  const visibleMessages = messages.filter(
-    (msg) =>
-      msg.role !== "system" &&
-      !(msg.role === "assistant" && !msg.toolCalls?.length && msg.content.trim() === "")
+  const filteredMessages = useMemo(
+    () =>
+      messages.filter(
+        (msg) =>
+          msg.role !== "system" &&
+          msg.role !== "tool" &&
+          !(msg.role === "assistant" && !msg.toolCalls?.length && msg.content.trim() === "")
+      ),
+    [messages]
   );
+
+  const visibleMessages = useMemo(() => {
+    if (!paginated) return filteredMessages;
+    const start = (page - 1) * MESSAGES_PER_PAGE;
+    return filteredMessages.slice(start, start + MESSAGES_PER_PAGE);
+  }, [filteredMessages, paginated, page]);
+
   const showBusy = busy && !(state === "executing_tool" && currentTool);
 
+  useEffect(() => {
+    if (selectedMessageIndex !== null && scrollRef.current) {
+      scrollRef.current.scrollChildIntoView(`msg-${selectedMessageIndex}`);
+    }
+  }, [selectedMessageIndex]);
+
   return (
-    <box flexDirection="column" flexGrow={1}>
-      <scrollbox flexGrow={1} flexDirection="column" paddingX={2} paddingY={1} stickyScroll={true} stickyStart="bottom">
-        {visibleMessages.map((msg, index) => (
-          <MessageItem
-            key={msg.id}
-            message={msg}
-            theme={theme}
-            toolMap={toolMap}
-            lastUsage={lastUsage}
-            state={index === visibleMessages.length - 1 ? state : undefined}
-            currentTool={currentTool}
-          />
-        ))}
+    <box
+      flexDirection="column"
+      flexGrow={1}
+      flexShrink={1}
+      flexBasis={0}
+      minHeight={0}
+      height="100%"
+      overflow="hidden"
+      backgroundColor={theme.bgPanel}
+    >
+      <scrollbox
+        ref={scrollRef}
+        flexGrow={1}
+        flexShrink={1}
+        flexBasis={0}
+        minHeight={0}
+        overflow="hidden"
+        paddingX={2}
+        paddingY={1}
+        stickyScroll={true}
+        stickyStart="bottom"
+        wrapperOptions={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, minHeight: 0 }}
+        viewportOptions={{ flexGrow: 1, flexShrink: 1, flexBasis: 0, minHeight: 0 }}
+      >
+        {visibleMessages.map((msg, index) => {
+          const globalIndex = paginated ? (page - 1) * MESSAGES_PER_PAGE + index : index;
+          const isSelected = selectedMessageIndex === globalIndex;
+          return (
+            <box key={msg.id} id={`msg-${globalIndex}`} flexDirection="column">
+              <MessageItem
+                message={msg}
+                theme={theme}
+                toolMap={toolMap}
+                toolResultByCallId={toolResultByCallId}
+                lastUsage={lastUsage}
+                state={index === visibleMessages.length - 1 ? state : undefined}
+                currentTool={currentTool}
+                highlighted={isSelected}
+              />
+            </box>
+          );
+        })}
         {showBusy && <text fg={theme.statusThinking}>  {spinnerFrame(elapsedMs)} thinking</text>}
       </scrollbox>
+
+      {paginated && totalPages > 1 && (
+        <box flexDirection="row" height={1} flexShrink={0} paddingX={2} backgroundColor={theme.bgPanel}>
+          <text fg={theme.mutedFg}>
+            Page {page}/{totalPages} · PgUp/PgDn to change page · Shift+↑/↓ to scroll
+          </text>
+        </box>
+      )}
 
       <CommandDropdown inputValue={inputValue} theme={theme} onSubmit={(v) => { setInputValue(""); handleSubmitLocal(v); }} onPick={(cmd) => {
         if (ARG_BEARING.has(cmd)) {
@@ -225,7 +251,7 @@ export function ChatScreen({ theme, messages, toolResults = [], state, elapsedMs
         }
       }} />
 
-      <box flexDirection="row" paddingX={2} paddingY={0} borderStyle="single" borderColor={theme.borderColor} height={3}>
+      <box flexDirection="row" paddingX={2} paddingY={0} borderStyle="single" borderColor={theme.borderColor} height={3} flexShrink={0} backgroundColor={theme.bgPanel}>
         <text fg={theme.inputFg}>▶ </text>
         <input flexGrow={1} placeholder={busy ? "Working…" : "Type a message or / for commands…"} value={inputValue} onInput={setInputValue} onSubmit={(v) => { if (!dropdownOpen && typeof v === "string") handleSubmitLocal(v); }} focused />
       </box>
@@ -233,55 +259,88 @@ export function ChatScreen({ theme, messages, toolResults = [], state, elapsedMs
   );
 }
 
-function MessageItem({ message, theme, toolMap, lastUsage, state, currentTool }: {
+function ToolActivityBlock({ block, theme }: { block: ToolDisplayBlock; theme: Theme }) {
+  const headerColor = block.ok ? theme.toolFg : theme.errorFg;
+  const duration = block.durationMs != null ? ` · ${Math.round(block.durationMs)}ms` : "";
+  const agentLines = block.subAgentLines ?? block.previewLines;
+
+  return (
+    <box flexDirection="column" marginY={0}>
+      <text fg={headerColor}>
+        ● {block.action}({block.target}){duration}
+      </text>
+      <text fg={theme.mutedFg}>  ⎿  {block.summary}</text>
+      {block.diff ? (
+        <box flexDirection="column" marginLeft={2} marginTop={0}>
+          <diff diff={block.diff} {...DIFF_PROPS} />
+        </box>
+      ) : null}
+      {!block.diff &&
+        agentLines?.map((line, i) => (
+          <text key={i} fg={theme.mutedFg}>
+            {"  "}{line.length > 140 ? line.slice(0, 139) + "…" : line || " "}
+          </text>
+        ))}
+    </box>
+  );
+}
+
+function renderToolCall(
+  tc: ToolCall,
+  toolMap: Map<string, ToolResult>,
+  toolResultByCallId: Map<string, string>,
+  theme: Theme
+) {
+  const tr = toolMap.get(tc.id);
+  const resultRaw = toolResultByCallId.get(tc.id) ?? tr?.output ?? "";
+  const block = buildToolDisplayBlock(tc.name, tc.arguments, resultRaw, tr?.duration);
+  return <ToolActivityBlock key={tc.id} block={block} theme={theme} />;
+}
+
+function MessageItem({ message, theme, toolMap, toolResultByCallId, lastUsage, state, currentTool, highlighted = false }: {
   message: Message;
   theme: Theme;
   toolMap: Map<string, ToolResult>;
+  toolResultByCallId: Map<string, string>;
   lastUsage?: { input_tokens: number; output_tokens: number };
   state?: AgentState;
-  currentTool?: { name: string; args: string };
+  currentTool?: {
+    name: string;
+    args: string;
+    subAgentProgress?: SubAgentDispatchProgress;
+  };
+  highlighted?: boolean;
 }) {
   if (message.role === "system") return null;
 
-  if (message.role === "tool") {
-    const tr = message.toolCallId ? toolMap.get(message.toolCallId) : undefined;
-    const result = summarizeToolResult(message.content);
-    const duration = tr !== undefined ? ` ${Math.round(tr.duration)}ms` : "";
+  if (message.role === "user") {
     return (
-      <box flexDirection="column" marginY={0}>
-        <text fg={result.ok ? theme.toolFg : theme.errorFg}>
-          {result.ok ? "└" : "└✗"} {result.title}{duration}
-        </text>
-        {result.lines.map((line, i) => (
-          <text key={i} fg={theme.mutedFg}>  {line.length > 120 ? line.slice(0, 119) + "…" : line || " "}</text>
+      <box flexDirection="column" marginY={1}>
+        <text fg={theme.userFg} bg={highlighted ? theme.bgSelected : undefined}>▸ You</text>
+        {message.content.split("\n").map((line, i) => (
+          <text key={i} fg={theme.headerFg}>{line || " "}</text>
         ))}
       </box>
     );
   }
 
-  const color = message.role === "user" ? theme.userFg : theme.agentFg;
-  const prefix = message.role === "user" ? "▸ You" : "◈ Agent";
   const displayContent = message.content || "";
   const segments = parseCodeBlocks(displayContent);
-  
-  // Check if this message has reasoning content
   const hasReasoning = message.reasoningContent && message.reasoningContent.trim() !== "";
-  
-  // Keep track of whether we've shown any reasoning content
-  let hasShownReasoning = false;
+  const toolCalls = message.toolCalls ?? [];
 
   return (
     <box flexDirection="column" marginY={1}>
-      <text fg={color}>{prefix}</text>
-      {segments.map((seg, si) => {
+      {displayContent.trim() !== "" && segments.map((seg, si) => {
         if (seg.type === "text") {
-          return seg.text.split("\n").map((line, li) => <text key={`${si}-${li}`} fg={theme.headerFg}>{line || " "}</text>);
+          return seg.text.split("\n").map((line, li) => (
+            <text key={`${si}-${li}`} fg={theme.headerFg}>{line || " "}</text>
+          ));
         }
         if (seg.lang === "diff") {
           return (
             <box key={si} flexDirection="column" marginY={1}>
-              <text fg={theme.mutedFg}>diff</text>
-              <diff diff={seg.code} view="unified" syntaxStyle={syntaxStyle} addedBg="#2d4a3e" removedBg="#4a2d2d" addedSignColor="#9ece6a" removedSignColor="#f7768e" />
+              <diff diff={seg.code} {...DIFF_PROPS} />
             </box>
           );
         }
@@ -292,10 +351,10 @@ function MessageItem({ message, theme, toolMap, lastUsage, state, currentTool }:
           </box>
         );
       })}
-      
+
       {hasReasoning && (
         <box flexDirection="column" marginY={1} borderStyle="rounded" borderColor={theme.mutedFg}>
-          <text fg={theme.mutedFg}>Reasoning Chain:</text>
+          <text fg={theme.mutedFg}>Reasoning:</text>
           <box flexDirection="column" marginLeft={2}>
             {(message.reasoningContent || "").split("\n").map((line, idx) => (
               <text key={idx} fg={theme.mutedFg}>{line || " "}</text>
@@ -303,16 +362,26 @@ function MessageItem({ message, theme, toolMap, lastUsage, state, currentTool }:
           </box>
         </box>
       )}
-      
-      {message.role === "assistant" && state === "executing_tool" && currentTool && (
-        <text fg={theme.statusTool}>  {spinnerFrame(Date.now())} {TOOL_LABELS[currentTool.name] || currentTool.name}…</text>
-      )}
-      {message.toolCalls?.map((tc, ti) => {
-        const label = TOOL_LABELS[tc.name] || tc.name;
+
+      {toolCalls.map((tc) => renderToolCall(tc, toolMap, toolResultByCallId, theme))}
+
+      {message.role === "assistant" && state === "executing_tool" && currentTool && (() => {
+        const pending = buildToolDisplayBlock(currentTool.name, currentTool.args, "", undefined);
+        const liveLines = subAgentLinesFromProgress(currentTool.subAgentProgress);
         return (
-          <text key={ti} fg={theme.toolFg}>  ├ {label}  {formatToolArgs(tc.name, tc.arguments)}</text>
+          <box flexDirection="column">
+            <text fg={theme.statusTool}>
+              {"  "}{spinnerFrame(Date.now())} {pending.action}({pending.target})…
+            </text>
+            {liveLines?.map((line, i) => (
+              <text key={i} fg={theme.mutedFg}>
+                {"    "}{line}
+              </text>
+            ))}
+          </box>
         );
-      })}
+      })()}
+
       {message.role === "assistant" && lastUsage && (
         <text fg={theme.mutedFg}>  {formatTokens(lastUsage.input_tokens)}↑ {formatTokens(lastUsage.output_tokens)}↓</text>
       )}

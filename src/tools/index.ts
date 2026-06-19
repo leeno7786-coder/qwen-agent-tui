@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { exec, execSync } from "child_process";
 import {
   existsSync,
   mkdirSync,
@@ -7,10 +7,21 @@ import {
   statSync,
   writeFileSync,
 } from "fs";
-import { dirname, relative, resolve } from "path";
+import { basename, dirname, relative, resolve } from "path";
 import { homedir, tmpdir } from "os";
 import type { Config } from "../types";
-import { isSmallModel } from "../llm";
+import { isSmallModelFromConfig, modelIdsMatch, requiresDistinctSubAgentModels } from "../model-runtime";
+import {
+  parseDispatchSubAgentArgs,
+  openRouterDispatchLimit,
+  runExploreSubAgent,
+  runSequentialSubAgents,
+  type SubAgentAgentStatus,
+  type SubAgentDispatchAgentRow,
+  type SubAgentDispatchProgress,
+} from "../subagent";
+import { normalizeLens } from "../subagent-lenses";
+import { fileChangeDiff } from "../lib/file-diff";
 
 /** A tool that the agent can invoke. */
 export interface Tool {
@@ -22,6 +33,18 @@ export interface Tool {
   parameters: object;
   /** Execute the tool and return a JSON string. */
   execute: (args: any, workspace: string, cfg?: Config) => string;
+  /** Optional async execution (e.g. sub-agent LLM loop). */
+  executeAsync?: (
+    args: any,
+    workspace: string,
+    cfg?: Config,
+    signal?: AbortSignal,
+    hooks?: ToolExecutionHooks
+  ) => Promise<string>;
+}
+
+export interface ToolExecutionHooks {
+  onSubAgentProgress?: (progress: SubAgentDispatchProgress) => void;
 }
 
 const DEFAULT_READ_LIMIT = 200;
@@ -43,8 +66,26 @@ const SKIP_DIRS = new Set([
 
 function checkSmallModel(cfg?: Config): boolean {
   if (!cfg?.model) return false;
-  return isSmallModel(cfg.model, cfg.maxTokens);
+  return isSmallModelFromConfig(cfg);
 }
+
+/** Shorter tool descriptions for ≤8B models (full params stay in JSON schema). */
+const SMALL_TOOL_DESCRIPTIONS: Record<string, string> = {
+  read_file: "Read file; use offset/limit. Lines are numbered for edit_file_lines.",
+  write_file: "Create or overwrite a file.",
+  edit_file: "Replace exact old_text once (read file first).",
+  edit_file_lines: "Replace lines start_line–end_line (1-based, from read_file).",
+  list_dir: "List directory entries.",
+  stat_path: "File exists? size, modified time.",
+  find_files: "Find paths by name substring or regex.",
+  search_and_view: "Search code; returns matching lines with context.",
+  execute_command: "Run shell command in workspace (PowerShell on Windows).",
+  git_status: "Short git status.",
+  git_diff: "Uncommitted diff.",
+  git_commit: "git add -A and commit with message.",
+  change_workspace: "Change working directory.",
+  manage_todos: "add | complete | remove | list subtasks.",
+};
 
 function safe(p: string, ws: string, cfg?: Config): string {
   return resolve(ws, p || ".");
@@ -74,87 +115,124 @@ function walk(root: string, ws: string, cfg: Config | undefined, visit: (file: s
   }
 }
 
+function tryExecBash(): boolean {
+  try {
+    execSync("bash --version", {
+      encoding: "utf-8",
+      timeout: 5000,
+      maxBuffer: 1024 * 1024,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveShell(): { usePowerShell: boolean; shell: string | undefined } {
+  const isWin = process.platform === "win32";
+  if (!isWin) return { usePowerShell: false, shell: undefined };
+
+  const shellEnv = process.env.SHELL || '';
+  const comspecEnv = process.env.COMSPEC || '';
+  const isGitBash = comspecEnv.toLowerCase().includes('git') || shellEnv.toLowerCase().includes('git') || shellEnv.toLowerCase().includes('bash');
+  const isWSL = process.env.WSL_DISTRO_NAME !== undefined;
+
+  if (isGitBash || isWSL) {
+    const isBashAvailable = tryExecBash();
+    return { usePowerShell: false, shell: isBashAvailable ? "bash" : undefined };
+  }
+
+  return { usePowerShell: true, shell: "powershell.exe" };
+}
+
+function translateToPowerShell(cmd: string): string {
+  return cmd
+    .replace(/\bags\b/g, 'Select-String')
+    .replace(/\bls\s+(-[a-zA-Z]+)?\s*(.*)/g, 'Get-ChildItem -Name $2')
+    .replace(/\bll\s+(.*)/g, 'Get-ChildItem -Force $1')
+    .replace(/\bls\b/g, 'Get-ChildItem')
+    .replace(/\bpwd\b/g, '(Get-Location).Path')
+    .replace(/\bps\b/g, 'Get-Process')
+    .replace(/\bcat\s+(.*)/g, 'Get-Content $1')
+    .replace(/\bhead\s+(-\d+)\s+(.*)/g, (_, num, file) => `Get-Content ${file} | Select-Object -First ${Math.abs(parseInt(num))}`)
+    .replace(/^echo\s+(.*)/gm, 'Write-Output $1');
+}
+
+function formatExecResult(ok: boolean, out: string, err?: string, code?: number | null): string {
+  const cleanOut = (out || "").replace(/\u0000/g, "").replace(/[\uFFFD]/g, "");
+  const cleanErr = (err || "").replace(/\u0000/g, "").replace(/[\uFFFD]/g, "");
+  const truncatedOut = cleanOut.length > 30000
+    ? cleanOut.slice(0, 30000) + `\n... [truncated, total output: ${cleanOut.length} characters]`
+    : cleanOut;
+  const truncatedStderr = cleanErr.length > 15000
+    ? cleanErr.slice(0, 15000) + "\n... [truncated]"
+    : cleanErr;
+  return JSON.stringify({ ok, stdout: truncatedOut, stderr: truncatedStderr, code: code ?? null });
+}
+
 function execCmd(cmd: string, ws: string, timeoutSeconds = 60): string {
   try {
-    const isWin = process.platform === "win32";
-    
-    // Detect if we're in a bash-like environment (Git Bash, WSL, etc.)
-    // This is determined by checking various environment variables
-    const shellEnv = process.env.SHELL || '';
-    const comspecEnv = process.env.COMSPEC || '';
-    const isGitBash = comspecEnv.toLowerCase().includes('git') || shellEnv.toLowerCase().includes('git') || shellEnv.toLowerCase().includes('bash');
-    const isWSL = process.env.WSL_DISTRO_NAME !== undefined;
-    
-    let out;
-    if (isWin && !isGitBash && !isWSL) {
-      // Pure Windows PowerShell environment - translate common Unix commands
-      let translatedCmd = cmd;
-      
-      // Convert common Unix commands to PowerShell equivalents
-      // Enhanced with more comprehensive translations
-      translatedCmd = translatedCmd
-        .replace(/\bags\b/g, 'Select-String')  // alias for grep
-        .replace(/\bls\s+(-[a-zA-Z]+)?\s*(.*)/g, 'Get-ChildItem -Name $2')  // ls to Get-ChildItem
-        .replace(/\bll\s+(.*)/g, 'Get-ChildItem -Force $1')  // ll commonly used
-        .replace(/\bls\b/g, 'Get-ChildItem')  // simple ls
-        .replace(/\bpwd\b/g, '(Get-Location).Path')  // pwd to get location
-        .replace(/\bps\b/g, 'Get-Process')  // ps to Get-Process
-        .replace(/\bcat\s+(.*)/g, 'Get-Content $1')  // cat to Get-Content
-        .replace(/\bhead\s+(-\d+)\s+(.*)/g, 'Get-Content $2 | Select-Object -First ${1#-}')  // head command
-        .replace(/\btail\s+(-\d+)\s+(.*)/g, 'Get-Content $2 | Select-Object -Last ${1#-}')  // tail command
-        .replace(/\bcp\s+(.*)\s+(.*)/g, 'Copy-Item $1 $2')  // cp to Copy-Item
-        .replace(/\bmv\s+(.*)\s+(.*)/g, 'Move-Item $1 $2')  // mv to Move-Item
-        .replace(/\brm\s+(-[a-zA-Z]+\s+)*(.*)/g, 'Remove-Item $2 -Recurse -Force')  // rm to Remove-Item
-        .replace(/\bmkdir\s+(.*)/g, 'New-Item -ItemType Directory -Path $1 -Force')  // mkdir to New-Item
-        .replace(/\btouch\s+(.*)/g, '$null | Out-File -FilePath $1 -Encoding ASCII -Append')  // touch equivalent
-        .replace(/\becho\s+(.*)/g, 'Write-Output $1')  // echo to Write-Output
-        .replace(/\bgrep\s+(.*)\s+(.*)/g, 'Select-String -Pattern $1 $2')  // grep to Select-String
-        .replace(/\bfind\s+(.*)\s+-name\s+(.*)/g, 'Get-ChildItem -Path $1 -Name $2 -Recurse');  // find to Get-ChildItem
-        
-      out = execSync(translatedCmd, {
-        cwd: ws,
-        encoding: "utf-8",
-        timeout: timeoutSeconds * 1000,
-        maxBuffer: 10 * 1024 * 1024,
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: "powershell.exe",
-      });
-    } else {
-      // Unix-like environment (Linux/Mac) or Git Bash/WSL on Windows
-      // Use the command as-is
-      out = execSync(cmd, {
-        cwd: ws,
-        encoding: "utf-8",
-        timeout: timeoutSeconds * 1000,
-        maxBuffer: 10 * 1024 * 1024,
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: isWin ? "bash" : undefined,  // Use bash on Windows if available
-      });
-    }
-    
-    const cleanOut = (out || "").replace(/\u0000/g, "").replace(/[\uFFFD]/g, "");
-    const truncatedOut = cleanOut.length > 30000
-      ? cleanOut.slice(0, 30000) + "\n... [truncated, total output: " + cleanOut.length + " characters]"
-      : cleanOut;
-    return JSON.stringify({ ok: true, stdout: truncatedOut });
-  } catch (e: any) {
-    const rawStdout = e.stdout?.toString?.() || "";
-    const rawStderr = e.stderr?.toString?.() || e.message || "";
-    const cleanStdout = rawStdout.replace(/\u0000/g, "").replace(/[\uFFFD]/g, "");
-    const cleanStderr = rawStderr.replace(/\u0000/g, "").replace(/[\uFFFD]/g, "");
-    const truncatedStdout = cleanStdout.length > 15000
-      ? cleanStdout.slice(0, 15000) + "\n... [truncated]"
-      : cleanStdout;
-    const truncatedStderr = cleanStderr.length > 15000
-      ? cleanStderr.slice(0, 15000) + "\n... [truncated]"
-      : cleanStderr;
-    return JSON.stringify({
-      ok: false,
-      stdout: truncatedStdout,
-      stderr: truncatedStderr,
-      code: e.status ?? null,
+    const { usePowerShell, shell } = resolveShell();
+    const finalCmd = usePowerShell ? translateToPowerShell(cmd) : cmd;
+    const out = execSync(finalCmd, {
+      cwd: ws,
+      encoding: "utf-8",
+      timeout: timeoutSeconds * 1000,
+      maxBuffer: 10 * 1024 * 1024,
+      stdio: ["pipe", "pipe", "pipe"],
+      shell,
     });
+    return formatExecResult(true, out);
+  } catch (e: any) {
+    return formatExecResult(false, e.stdout?.toString?.() || "", e.stderr?.toString?.() || e.message, e.status ?? null);
   }
+}
+
+function execCmdAsync(cmd: string, ws: string, timeoutSeconds = 60, signal?: AbortSignal): Promise<string> {
+  return new Promise((resolvePromise) => {
+    const { usePowerShell, shell } = resolveShell();
+    const finalCmd = usePowerShell ? translateToPowerShell(cmd) : cmd;
+
+    const child = exec(
+      finalCmd,
+      {
+        cwd: ws,
+        encoding: "utf-8",
+        timeout: timeoutSeconds * 1000,
+        maxBuffer: 10 * 1024 * 1024,
+        shell,
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          resolvePromise(formatExecResult(false, stdout || "", stderr || error.message, (error as any).code ?? null));
+        } else {
+          resolvePromise(formatExecResult(true, stdout || ""));
+        }
+      }
+    );
+
+    if (signal) {
+      if (signal.aborted) {
+        child.kill();
+        resolvePromise(formatExecResult(false, "", "Command cancelled", null));
+        return;
+      }
+      signal.addEventListener(
+        "abort",
+        () => {
+          child.kill();
+          resolvePromise(formatExecResult(false, "", "Command cancelled", null));
+        },
+        { once: true }
+      );
+    }
+  });
+}
+
+function isDangerous(cmd: string): boolean {
+  return [/rm\s+-rf/i, /rm\s+--no-preserve-root/i, /dd\s+if=/i, /mkfs/i, /:\(\)\{\s*:\s*\|\s*:\s*&\s*\};\s*:/i, /wget.*-O\s+\/dev\/null/i, /curl.*-o\s+\/dev\/null/i]
+    .some(p => p.test(cmd));
 }
 
 /** Built-in tools available to the agent. */
@@ -257,7 +335,7 @@ export const tools: Tool[] = [
 {
   name: "read_file",
     description: "Read a file from the workspace",
-  parameters: { type: "object", properties: { path: { type: "string", description: "File path to read" }, offset: { type: "number", description: "Line offset to start reading from (0-indexed, optional)" }, limit: { type: "number", description: "Maximum lines to read (optional)" } }, required: ["path"] },
+  parameters: { type: "object", properties: { path: { type: "string", description: "File path to read" }, offset: { type: "number", description: "Line offset to start reading from (0-indexed, optional)" }, limit: { type: "number", description: "Maximum lines to read (optional)" }, numbered: { type: "boolean", description: "Return lines with line numbers (default: auto for small models)" } }, required: ["path"] },
   execute: (args, ws, cfg) => {
     try {
       const p = safe(args.path, ws, cfg);
@@ -269,10 +347,46 @@ export const tools: Tool[] = [
       const isSmall = checkSmallModel(cfg);
       const limit = Math.max(1, Math.min(Number(args.limit || (isSmall ? SMALL_MODEL_READ_LIMIT : DEFAULT_READ_LIMIT)), 2000));
       const sliced = lines.slice(offset, offset + limit);
-      const content = sliced.join("\n");
+      const numbered = isSmall && args.numbered !== false;
+      const content = numbered
+        ? sliced
+            .map((line, i) => {
+              const n = offset + i + 1;
+              return `${String(n).padStart(5)}| ${line}`;
+            })
+            .join("\n")
+        : sliced.join("\n");
       const safeContent = content.length > MAX_READ_CHARS ? content.slice(0, MAX_READ_CHARS) : content;
-      return JSON.stringify({ ok: true, path: rel(p, ws), content: safeContent, truncated: offset + limit < lines.length || safeContent.length < content.length, offset, originalLength: lines.length });
-    } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
+      return JSON.stringify({
+        ok: true,
+        path: rel(p, ws),
+        content: safeContent,
+        numbered,
+        truncated: offset + limit < lines.length || safeContent.length < content.length,
+        offset,
+        line_count: lines.length,
+      });
+    } catch (e: any) {
+      if (e.code === 'ENOENT') {
+        try {
+          const dir = dirname(safe(args.path, ws, cfg));
+          const dirFiles = readdirSync(dir).filter(f => {
+            const st = statSync(resolve(dir, f));
+            return st.isFile() && !f.startsWith('.');
+          });
+          const fname = basename(safe(args.path, ws, cfg));
+          const stem = fname.replace(/\.[^/.]+$/, '');
+          const similar = dirFiles.filter(f => f.includes(stem) || stem.includes(f.replace(/\.[^/.]+$/, '')));
+          const hint = similar.length > 0
+            ? ` Did you mean one of these? ${similar.map(f => rel(resolve(dir, f), ws)).join(', ')}`
+            : ` Files in ${rel(dir, ws)}: ${dirFiles.join(', ')}`;
+          return JSON.stringify({ ok: false, error: `File not found: ${rel(safe(args.path, ws, cfg), ws)}.${hint}` });
+        } catch {
+          return JSON.stringify({ ok: false, error: `File not found: ${rel(safe(args.path, ws, cfg), ws)}. Parent directory does not exist.` });
+        }
+      }
+      return JSON.stringify({ ok: false, error: e.message });
+    }
   },
 },
 {
@@ -282,9 +396,30 @@ export const tools: Tool[] = [
   execute: (args, ws, cfg) => {
     try {
       const p = safe(args.path, ws, cfg);
+      const relPath = rel(p, ws);
+      let oldText = "";
+      let existed = false;
+      try {
+        if (existsSync(p) && statSync(p).isFile()) {
+          oldText = readFileSync(p, "utf-8");
+          existed = true;
+        }
+      } catch {
+        // new file
+      }
+      const newText = String(args.content ?? "");
       mkdirSync(dirname(p), { recursive: true });
-      writeFileSync(p, String(args.content ?? ""), "utf-8");
-      return JSON.stringify({ ok: true, path: rel(p, ws), bytes: Buffer.byteLength(String(args.content ?? "")) });
+      writeFileSync(p, newText, "utf-8");
+      const { added, removed, diff } = fileChangeDiff(relPath, oldText, newText);
+      return JSON.stringify({
+        ok: true,
+        path: relPath,
+        action: existed ? "update" : "write",
+        added,
+        removed,
+        diff,
+        bytes: Buffer.byteLength(newText),
+      });
     } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
   },
 },
@@ -301,7 +436,9 @@ export const tools: Tool[] = [
       if (!text.includes(oldText)) return JSON.stringify({ ok: false, error: "old_text not found" });
       const next = args.replace_all ? text.split(oldText).join(String(args.new_text ?? "")) : text.replace(oldText, String(args.new_text ?? ""));
       writeFileSync(p, next, "utf-8");
-      return JSON.stringify({ ok: true, path: rel(p, ws), replacements: args.replace_all ? text.split(oldText).length - 1 : 1 });
+      const relPath = rel(p, ws);
+      const { added, removed, diff } = fileChangeDiff(relPath, text, next);
+      return JSON.stringify({ ok: true, path: relPath, action: "update", added, removed, diff, replacements: args.replace_all ? text.split(oldText).length - 1 : 1 });
     } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
   },
 },
@@ -328,9 +465,22 @@ export const tools: Tool[] = [
       const newText = String(args.new_text ?? "");
       const before = lines.slice(0, startLine - 1);
       const after = lines.slice(Math.min(endLine, lines.length));
-      const result = [...before, newText, ...after].join("\n");
-      writeFileSync(p, result, "utf-8");
-      return JSON.stringify({ ok: true, path: rel(p, ws), start_line: startLine, end_line: Math.min(endLine, lines.length), lines_removed: Math.min(endLine, lines.length) - startLine + 1, lines_added: newText ? newText.split("\n").length : 0 });
+      const next = [...before, newText, ...after].join("\n");
+      writeFileSync(p, next, "utf-8");
+      const relPath = rel(p, ws);
+      const { added, removed, diff } = fileChangeDiff(relPath, text, next);
+      return JSON.stringify({
+        ok: true,
+        path: relPath,
+        action: "update",
+        added,
+        removed,
+        diff,
+        start_line: startLine,
+        end_line: Math.min(endLine, lines.length),
+        lines_removed: Math.min(endLine, lines.length) - startLine + 1,
+        lines_added: newText ? newText.split("\n").length : 0,
+      });
     } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
   },
 },
@@ -485,7 +635,10 @@ export const tools: Tool[] = [
       const isSmall = checkSmallModel(cfg);
       const maxResults = isSmall ? 8 : 40;
       const results: Array<{ path: string; line: number; context: string[] }> = [];
-      walk(root, ws, cfg, (file) => {
+
+      // If the user passed a file, search that file only (common small-model mistake).
+      const rootStat = statSync(root);
+      const searchFile = (file: string) => {
         if (fileFilter && !file.toLowerCase().includes(fileFilter)) return;
         const st = statSync(file);
         const maxSize = isSmall ? 500_000 : 2_000_000;
@@ -500,7 +653,6 @@ export const tools: Tool[] = [
             const start = Math.max(0, i - ctxLines);
             const end = Math.min(lines.length, i + ctxLines + 1);
             const snippet = lines.slice(start, end);
-            // Label the matching line with a ">" prefix
             const annotated = snippet.map((l, idx) => {
               const lineNum = start + idx + 1;
               const marker = start + idx === i ? ">" : " ";
@@ -510,7 +662,16 @@ export const tools: Tool[] = [
           }
           if (results.length >= maxResults) return false;
         }
-      });
+      };
+
+      if (rootStat.isFile()) {
+        searchFile(root);
+      } else {
+        walk(root, ws, cfg, (file) => {
+          searchFile(file);
+          return results.length < maxResults;
+        });
+      }
       return JSON.stringify({ ok: true, results, context_lines: ctxLines, truncated: results.length >= maxResults });
     } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
   },
@@ -549,10 +710,34 @@ export const tools: Tool[] = [
 {
   name: "grep_search",
     description: "Search text patterns in files",
-  parameters: { type: "object", properties: { query: { type: "string", description: "Text or regex pattern to search for" }, file_glob: { type: "string", description: "File pattern filter (e.g., '*.ts', 'src/**')" }, regex: { type: "boolean", description: "Treat query as regex (default: false)" } }, required: ["query"] },
+  parameters: { type: "object", properties: { query: { type: "string", description: "Text or regex pattern to search for" }, path: { type: "string", description: "Directory to search in (default: workspace root)" }, file_glob: { type: "string", description: "File pattern filter (e.g., '*.ts', 'src/**')" }, regex: { type: "boolean", description: "Treat query as regex (default: false)" } }, required: ["query"] },
   execute: (args, ws, cfg) => {
     try {
       const root = safe(args.path || ".", ws, cfg);
+      // If root is a file, search it directly instead of recursing into it
+      let rootStat: ReturnType<typeof statSync>;
+      try { rootStat = statSync(root); } catch {
+        return JSON.stringify({ ok: false, error: `Directory not found: ${rel(root, ws)}` });
+      }
+      if (rootStat.isFile()) {
+        const q = String(args.query || "");
+        if (!q) return JSON.stringify({ ok: false, error: "query is required for grep_search" });
+        const re = args.regex ? new RegExp(q, "i") : null;
+        const results: Array<{ path: string; line: number; text: string }> = [];
+        let text = "";
+        try { text = readFileSync(root, "utf-8"); } catch {
+          return JSON.stringify({ ok: false, error: `Cannot read file: ${rel(root, ws)}` });
+        }
+        const lines = text.split(/\r?\n/);
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          const hit = re ? re.test(line) : line.toLowerCase().includes(q.toLowerCase());
+          if (hit) {
+            results.push({ path: rel(root, ws), line: i + 1, text: line.trim().slice(0, 240) });
+          }
+        }
+        return JSON.stringify({ ok: true, results, truncated: false, single_file: true, small_model_optimized: checkSmallModel(cfg) });
+      }
       const q = String(args.query || "");
       const re = args.regex ? new RegExp(q, "i") : null;
       const fileFilter = String(args.file_glob || "").toLowerCase();
@@ -691,31 +876,19 @@ export const tools: Tool[] = [
 // Command Execution and Build Tools
 {
   name: "execute_command",
-    description: "Run a shell command in the workspace",
-  parameters: { type: "object", properties: { command: { type: "string", description: "Shell command to execute (e.g., 'ls -la', 'git status', 'bun test')" } }, required: ["command"] },
+  description: "Run a shell command in the workspace",
+  parameters: { type: "object", properties: { command: { type: "string", description: "Shell command to execute (e.g., 'dir', 'git status', 'bun test')" } }, required: ["command"] },
   execute: (args, ws) => {
     const cmd = String(args.command || "").trim();
     if (!cmd) return JSON.stringify({ ok: false, error: "Command cannot be empty" });
-    
-    // Security: Block dangerous commands
-    const dangerousPatterns = [
-      /rm\s+-rf/i,
-      /rm\s+--no-preserve-root/i,
-      /dd\s+if=/i,
-      /mkfs/i,
-      /:\(\)\{\s*:\s*\|\s*:\s*&\s*\};\s*:/i, // Fork bomb
-      /wget.*-O\s+\/dev\/null/i,
-      /curl.*-o\s+\/dev\/null/i
-    ];
-    
-    if (dangerousPatterns.some(pattern => pattern.test(cmd))) {
-      return JSON.stringify({ 
-        ok: false, 
-        error: "Command blocked for security reasons" 
-      });
-    }
-    
+    if (isDangerous(cmd)) return JSON.stringify({ ok: false, error: "Command blocked for security reasons" });
     return execCmd(cmd, ws);
+  },
+  executeAsync: async (args, ws, _cfg, signal) => {
+    const cmd = String(args.command || "").trim();
+    if (!cmd) return JSON.stringify({ ok: false, error: "Command cannot be empty" });
+    if (isDangerous(cmd)) return JSON.stringify({ ok: false, error: "Command blocked for security reasons" });
+    return execCmdAsync(cmd, ws, 60, signal);
   }
 },
 {
@@ -763,6 +936,231 @@ export const tools: Tool[] = [
   }
 },
 
+// Sub-agent exploration (main model only; uses second LM Studio model)
+{
+  name: "explore_subagent",
+  description:
+    "Delegate one read-only investigation to a sub-agent. You write the prompt — it explores with tools and returns an evidence summary. For multiple investigations, use dispatch_subagents.",
+  parameters: {
+    type: "object",
+    properties: {
+      prompt: {
+        type: "string",
+        description:
+          "Full investigation instructions (what to find, which patterns to check, expected output format)",
+      },
+      task: {
+        type: "string",
+        description: "Alias for prompt (legacy)",
+      },
+      name: {
+        type: "string",
+        description: "Optional label for this run (e.g. auth-handlers)",
+      },
+      focus_path: {
+        type: "string",
+        description: "Optional directory or file to prioritize (comma-separated ok)",
+      },
+      lens: {
+        type: "string",
+        enum: ["general", "security", "performance", "correctness", "readability", "structure"],
+        description: "Optional focus hint appended to your prompt",
+      },
+    },
+    required: [],
+  },
+  execute: () =>
+    JSON.stringify({ ok: false, error: "explore_subagent requires async execution" }),
+  executeAsync: async (args, ws, cfg, signal, hooks) => {
+    if (!cfg?.subAgentModel || cfg.subAgentEnabled === false) {
+      return JSON.stringify({
+        ok: false,
+        error:
+          "Sub-agent not configured. Set OPENROUTER_API_KEY or subAgentModel in ~/.qwen-agent.json",
+      });
+    }
+    const task = String(args.prompt ?? args.task ?? "").trim();
+    if (!task) {
+      return JSON.stringify({ ok: false, error: "prompt (or task) is required" });
+    }
+    const focus = String(args.focus_path ?? "").trim();
+    const name = String(args.name ?? "").trim();
+    const label = name || "explore";
+    const rows: SubAgentDispatchAgentRow[] = [
+      {
+        name: label,
+        status: "pending",
+        tools_used: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+      },
+    ];
+    const emit = (status: SubAgentAgentStatus, snap?: {
+      tools_used: number;
+      input_tokens: number;
+      output_tokens: number;
+      error?: string;
+    }) => {
+      rows[0]!.status = status;
+      if (snap) {
+        rows[0]!.tools_used = snap.tools_used;
+        rows[0]!.input_tokens = snap.input_tokens;
+        rows[0]!.output_tokens = snap.output_tokens;
+        if (snap.error) rows[0]!.error = snap.error;
+      }
+      hooks?.onSubAgentProgress?.({
+        total: 1,
+        index: 0,
+        phase: status === "done" || status === "failed" ? "done" : "running",
+        agents: rows.map((r) => ({ ...r })),
+      });
+    };
+    emit("running");
+    const result = await runExploreSubAgent(task, cfg, ws, signal, {
+      focusPath: focus && focus !== "." && focus !== "./" ? focus : undefined,
+      lens: args.lens ? normalizeLens(args.lens) : undefined,
+      name: name || undefined,
+      onProgress: (snap) => {
+        emit(
+          snap.status === "done" ? "done" : snap.status === "failed" ? "failed" : "running",
+          snap
+        );
+      },
+    });
+    emit(result.ok ? "done" : "failed", {
+      tools_used: result.tools_used.length,
+      input_tokens: result.usage?.input_tokens ?? 0,
+      output_tokens: result.usage?.output_tokens ?? 0,
+      error: result.error,
+    });
+    return JSON.stringify(result);
+  },
+},
+
+{
+  name: "dispatch_subagents",
+  description:
+    "Run read-only sub-agents sequentially. REQUIRED: pass agents array with your custom prompts. Example: {\"agents\":[{\"name\":\"security\",\"prompt\":\"Review git-changed auth code for missing checks. Return path:line bullets.\",\"focus_path\":\"src/\"}]}. On OpenRouter free tier, max 2 agents per call (extras are skipped). Legacy: mode=code_review also works. Runs one agent at a time.",
+  parameters: {
+    type: "object",
+    properties: {
+      agents: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description:
+                "Short label (e.g. security-auth, perf-db, api-contracts)",
+            },
+            prompt: {
+              type: "string",
+              description:
+                "Full investigation instructions — files, patterns, output format",
+            },
+            focus_path: {
+              type: "string",
+              description: "Optional file or directory scope (comma-separated)",
+            },
+            lens: {
+              type: "string",
+              enum: ["general", "security", "performance", "correctness", "readability", "structure"],
+              description: "Optional focus hint appended to your prompt",
+            },
+          },
+          required: ["prompt"],
+        },
+        description: "Sub-agents to run in order (max 8). Each must include prompt.",
+      },
+      mode: {
+        type: "string",
+        enum: ["code_review"],
+        description: "Legacy: auto-builds 4 lens agents on git changes when agents omitted",
+      },
+      question: {
+        type: "string",
+        description: "Review question when using mode=code_review",
+      },
+      scope: {
+        type: "string",
+        description: "code_review scope: git (default) or directory path",
+      },
+      tasks: {
+        type: "array",
+        description: "Legacy alias for agents (items use task or prompt field)",
+      },
+    },
+  },
+  execute: () =>
+    JSON.stringify({ ok: false, error: "dispatch_subagents requires async execution" }),
+  executeAsync: async (args, ws, cfg, signal, hooks) => {
+    if (!subAgentAvailable(cfg)) {
+      return JSON.stringify({
+        ok: false,
+        error:
+          "Sub-agents not configured. Set OPENROUTER_API_KEY or subAgentModel in ~/.qwen-agent.json",
+      });
+    }
+
+    const parsed = parseDispatchSubAgentArgs(args as Record<string, unknown>, ws);
+    const tasks = parsed.tasks;
+    if (!tasks.length) {
+      return JSON.stringify({
+        ok: false,
+        error:
+          "No sub-agent tasks — pass agents: [{ name, prompt, focus_path? }]. Example prompt: \"Review src/subagent.ts for error handling gaps; cite path:line.\"",
+        received_keys: Object.keys(args ?? {}).filter((k) => k !== "raw_input"),
+        example: {
+          agents: [
+            {
+              name: "security",
+              prompt:
+                "Review git-changed files for auth/injection/secrets issues. Bullet findings with path:line and severity.",
+              focus_path: "src/",
+            },
+          ],
+        },
+      });
+    }
+    if (tasks.length > 8) {
+      return JSON.stringify({ ok: false, error: "Too many agents (max 8)" });
+    }
+
+    const results = await runSequentialSubAgents(tasks, cfg!, ws, signal, {
+      onProgress: hooks?.onSubAgentProgress,
+    });
+    const okCount = results.filter((r) => r.ok).length;
+    const partialCount = results.filter(
+      (r) => !r.ok && (r.summary?.length ?? 0) > 40
+    ).length;
+    const skippedCount = results.filter((r) =>
+      (r.error ?? "").startsWith("Skipped —")
+    ).length;
+    const errors = results
+      .filter((r) => !r.ok)
+      .map((r) => {
+        const label = r.name || r.task || "agent";
+        return `${label}: ${r.error || r.summary || "unknown error"}`;
+      })
+      .slice(0, 6);
+    const allFailed = okCount === 0 && partialCount === 0;
+    return JSON.stringify({
+      ok: okCount > 0 || partialCount > 0,
+      sequential: true,
+      count: results.length,
+      ok_count: okCount,
+      partial_count: partialCount || undefined,
+      skipped_count: skippedCount || undefined,
+      dispatch_limit: openRouterDispatchLimit(cfg!) ?? undefined,
+      auto_fallback: parsed.autoFallback,
+      error: allFailed && errors.length ? errors.join("; ") : undefined,
+      errors: errors.length ? errors : undefined,
+      results,
+    });
+  },
+},
+
 // Todo Management
 {
   name: "manage_todos",
@@ -776,15 +1174,45 @@ export const tools: Tool[] = [
 },
 ];
 
-// Tools excluded for small models to reduce decision complexity
+// Tools excluded for ≤8B models — fewer choices, less wrong-tool drift
 const SMALL_MODEL_EXCLUDED = new Set([
-  "typecheck", "install_dependencies", "run_command", "run_tests",
-  "map_project_tree", "batch_read_files",
+  "typecheck",
+  "install_dependencies",
+  "run_command",
+  "run_tests",
+  "map_project_tree",
+  "batch_read_files",
+  "grep_search",
 ]);
 
-export function toOpenAI(tools: Tool[], cfg?: Config) {
-  const filtered = (cfg && checkSmallModel(cfg))
-    ? tools.filter(t => !SMALL_MODEL_EXCLUDED.has(t.name))
-    : tools;
-  return filtered.map((t) => ({ type: "function" as const, function: { name: t.name, description: t.description, parameters: t.parameters } }));
+export function subAgentAvailable(cfg?: Config): boolean {
+  if (!cfg?.subAgentModel || cfg.subAgentEnabled === false) return false;
+  if (!requiresDistinctSubAgentModels(cfg)) return true;
+  return !modelIdsMatch(cfg.model, cfg.subAgentModel);
+}
+
+export function toolsForConfig(all: Tool[], cfg?: Config): Tool[] {
+  let filtered = all;
+  if (cfg && checkSmallModel(cfg)) {
+    filtered = filtered.filter((t) => !SMALL_MODEL_EXCLUDED.has(t.name));
+  }
+  if (!subAgentAvailable(cfg)) {
+    filtered = filtered.filter(
+      (t) => t.name !== "explore_subagent" && t.name !== "dispatch_subagents"
+    );
+  }
+  return filtered;
+}
+
+export function toOpenAI(allTools: Tool[], cfg?: Config) {
+  const filtered = toolsForConfig(allTools, cfg);
+  const small = cfg && checkSmallModel(cfg);
+  return filtered.map((t) => ({
+    type: "function" as const,
+    function: {
+      name: t.name,
+      description: (small && SMALL_TOOL_DESCRIPTIONS[t.name]) || t.description,
+      parameters: t.parameters,
+    },
+  }));
 }

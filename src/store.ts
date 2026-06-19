@@ -1,16 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { homedir } from "os";
-import { basename, join } from "path";
+import { join } from "path";
 import type { Todo, Session, Message } from "./types";
 
 const DATA_DIR = join(homedir(), ".qwen-agent-tui");
-const TODO_DIR = join(DATA_DIR, "todos");
 const SESSION_DIR = join(DATA_DIR, "sessions");
 const HISTORY_FILE = join(DATA_DIR, "input-history.json");
 
 function ensureDir() {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-  if (!existsSync(TODO_DIR)) mkdirSync(TODO_DIR, { recursive: true });
   if (!existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
 }
 
@@ -20,52 +18,6 @@ function hashWorkspace(ws: string): string {
     h = ((h << 5) - h + ws.charCodeAt(i)) | 0;
   }
   return Math.abs(h).toString(16).padStart(8, "0");
-}
-
-function todoFileFor(ws: string): string {
-  const base = basename(ws).replace(/[^a-zA-Z0-9_-]/g, "_");
-  const hash = hashWorkspace(ws);
-  return join(TODO_DIR, `${base}-${hash}.json`);
-}
-
-const LEGACY_TODO_FILE = join(DATA_DIR, "todos.json");
-
-export function loadTodos(workspace: string): Todo[] {
-  ensureDir();
-  const file = todoFileFor(workspace);
-
-  // Workspace-scoped file takes priority
-  if (existsSync(file)) {
-    try {
-      return JSON.parse(readFileSync(file, "utf-8"));
-    } catch {
-      return [];
-    }
-  }
-
-  // Fallback: migrate legacy global todos if they exist
-  if (existsSync(LEGACY_TODO_FILE)) {
-    try {
-      const legacy = JSON.parse(readFileSync(LEGACY_TODO_FILE, "utf-8"));
-      // Move to workspace-scoped file so next load uses it
-      Bun.write(file, JSON.stringify(legacy, null, 2));
-      return legacy;
-    } catch {
-      return [];
-    }
-  }
-
-  return [];
-}
-
-export function saveTodos(todos: Todo[], workspace: string) {
-  ensureDir();
-  try {
-    writeFileSync(todoFileFor(workspace), JSON.stringify(todos, null, 2), "utf-8");
-    console.log(`Saved ${todos.length} todos for workspace '${workspace}'`);
-  } catch (error) {
-    console.error("Failed to save todos:", error);
-  }
 }
 
 export function loadSession(id: string): Session | null {
@@ -159,7 +111,7 @@ export function autoSaveSession(
   const session: Session = {
     id,
     messages,
-    todos,
+    todos: todos.filter(t => !t.done),
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };

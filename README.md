@@ -27,18 +27,46 @@ Optional config at `~/.qwen-agent.json`:
 
 ```json
 {
-  "model": "qwen-coder-plus-latest",
-  "workspace": "/path/to/project"
+  "model": "your-main-model-id",
+  "workspace": "/path/to/project",
+  "subAgentModel": "qwen3.5:0.8b",
+  "subAgentEnabled": true,
+  "subAgentMaxIterations": 6
 }
 ```
+
+With **two models loaded in LM Studio** (main agent + small Qwen), the app auto-detects the smaller loaded model as an exploration sub-agent. The main agent can call **`explore_subagent`** — read-only search/read on the 0.8B model, then a summary back to the main model for edits.
 
 ## Run
 
 ```bash
-bun run start
+bun run start          # interactive TUI (default)
+bun run start:tui      # same
 ```
 
-## Commands
+### Headless CLI (for scripts and coding agents)
+
+Non-interactive subcommands with `--help` and copy-pasteable examples on every command:
+
+```bash
+bun run src/main.ts --help
+bun run src/main.ts run --help
+bun run src/main.ts doctor
+bun run src/main.ts models --json
+bun run src/main.ts run --prompt "list files in src" --workspace . --quiet
+echo "fix the typo in README" | bun run src/main.ts run --stdin -w .
+```
+
+| Command | Description |
+|---------|-------------|
+| `run` | One-shot agent task; use `--json` for machine-readable output |
+| `models` | List LM Studio models with context / load state |
+| `doctor` | Config + runtime health check |
+| `tui` | Full-screen UI |
+
+Exit codes: `0` success, `1` failure. Errors include a suggested invocation.
+
+## TUI slash commands
 
 | Command | Description |
 |---------|-------------|

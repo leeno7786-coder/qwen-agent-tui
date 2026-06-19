@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import type { ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type { Theme } from "./theme";
 import {
@@ -10,6 +11,7 @@ import {
   providerRequiresAuth,
   getApiKeyEnvVar,
   fetchLocalModels,
+  fetchOpenRouterModels,
   checkRuntimeHealth,
 } from "../providers";
 import { saveApiKeyToEnv, getApiKey } from "../config";
@@ -18,14 +20,19 @@ import type { RuntimeProvider, ModelInfo } from "../types";
 interface ConnectOverlayProps {
   theme: Theme;
   onClose: () => void;
-  onSelect?: (provider: RuntimeProvider, model: ModelInfo, apiKey?: string) => void;
+  onSelect?: (
+    provider: RuntimeProvider,
+    model: ModelInfo,
+    apiKey?: string
+  ) => void | Promise<void>;
 }
 
 type ConnectState =
   | "selecting-provider"
   | "entering-api-key"
   | "selecting-model"
-  | "checking-runtime";
+  | "checking-runtime"
+  | "fetching-models";
 
 const VISIBLE_PROVIDERS = 12;
 const VISIBLE_MODELS = 10;
@@ -39,6 +46,8 @@ export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps
   const [isCheckingRuntime, setIsCheckingRuntime] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<string | null>(null);
+  const providerScrollRef = useRef<ScrollBoxRenderable>(null);
+  const modelScrollRef = useRef<ScrollBoxRenderable>(null);
 
   const sortedProviders = useMemo(
     () => [...RUNTIME_PROVIDERS].sort((a, b) => a.name.localeCompare(b.name)),
@@ -86,9 +95,15 @@ export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps
           setRuntimeStatus("Runtime is running");
           const models = await fetchLocalModels(baseURL);
           if (models.length > 0) {
-            setRuntimeModels(models);
+            const sorted = [...models].sort((a, b) => {
+              if (a.default && !b.default) return -1;
+              if (!a.default && b.default) return 1;
+              return a.name.localeCompare(b.name);
+            });
+            setRuntimeModels(sorted);
             setState("selecting-model");
-            setSelectedModelIndex(0);
+            const loadedIdx = sorted.findIndex((m) => m.default);
+            setSelectedModelIndex(loadedIdx >= 0 ? loadedIdx : 0);
           } else {
             setRuntimeError("No models found in runtime");
             setState("selecting-provider");
@@ -108,6 +123,38 @@ export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps
 
     if (requiresAuth) {
       if (hasApiKey) {
+        // Special handling for OpenRouter to fetch models dynamically
+        if (selectedProvider?.id === "openrouter") {
+          setState("fetching-models");
+          setIsCheckingRuntime(true);
+          try {
+            const envVar = getApiKeyEnvVar(selectedProvider?.id || "openrouter") || "OPENROUTER_API_KEY";
+            const apiKey = getApiKey(envVar);
+            const models = await fetchOpenRouterModels(apiKey);
+            if (models.length > 0) {
+              // Set the models for this provider and update the provider definition
+              const updatedProvider = getProvider("openrouter");
+              if (updatedProvider) {
+                // Store models in state
+                setRuntimeModels(models);
+                setState("selecting-model");
+                setSelectedModelIndex(0);
+              } else {
+                setRuntimeError("Could not find OpenRouter provider");
+                setState("selecting-provider");
+              }
+            } else {
+              setRuntimeError("No models found from OpenRouter");
+              setState("selecting-provider");
+            }
+          } catch (error) {
+            setRuntimeError(`Error fetching OpenRouter models: ${error}`);
+            setState("selecting-provider");
+          } finally {
+            setIsCheckingRuntime(false);
+          }
+          return;
+        }
         setState("selecting-model");
         setSelectedModelIndex(0);
       } else {
@@ -142,13 +189,13 @@ export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps
     }
   }, [selectedProvider, apiKeyInput]);
 
-  const handleModelSelect = useCallback(() => {
+  const handleModelSelect = useCallback(async () => {
     if (!selectedProvider || !selectedModel) return;
 
     const envVar = getApiKeyEnvVar(selectedProvider.id);
     const apiKey = envVar ? getApiKey(envVar) : undefined;
 
-    onSelect?.(selectedProvider, selectedModel, apiKey);
+    await onSelect?.(selectedProvider, selectedModel, apiKey);
     onClose();
   }, [selectedProvider, selectedModel, onSelect, onClose]);
 
@@ -276,17 +323,29 @@ export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps
   );
 
   const header = (
-    <box flexDirection="row" justifyContent="space-between" paddingX={2} paddingY={1}>
+    <box flexDirection="row" justifyContent="space-between" paddingX={2} paddingY={1} flexShrink={0}>
       <text fg={theme.headerFg}>Connect a Provider</text>
       <text fg={theme.mutedFg}>Esc to close</text>
     </box>
   );
+
+  useEffect(() => {
+    providerScrollRef.current?.scrollChildIntoView(`provider-${selectedProviderIndex}`);
+  }, [selectedProviderIndex]);
+
+  useEffect(() => {
+    if (state === "selecting-model") {
+      modelScrollRef.current?.scrollChildIntoView(`model-${selectedModelIndex}`);
+    }
+  }, [selectedModelIndex, state]);
 
   if (state === "entering-api-key" && selectedProvider) {
     return (
       <box
         flexDirection="column"
         flexGrow={1}
+        minHeight={0}
+        overflow="hidden"
         borderStyle="double"
         borderColor={theme.borderColor}
         backgroundColor={theme.bgPanel}
@@ -320,6 +379,8 @@ export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps
       <box
         flexDirection="column"
         flexGrow={1}
+        minHeight={0}
+        overflow="hidden"
         borderStyle="double"
         borderColor={theme.borderColor}
         backgroundColor={theme.bgPanel}
@@ -342,25 +403,57 @@ export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps
     );
   }
 
+  if (state === "fetching-models" && selectedProvider) {
+    return (
+      <box
+        flexDirection="column"
+        flexGrow={1}
+        minHeight={0}
+        overflow="hidden"
+        borderStyle="double"
+        borderColor={theme.borderColor}
+        backgroundColor={theme.bgPanel}
+      >
+        {header}
+        <box flexDirection="column" paddingX={2} paddingY={1}>
+          <text fg={theme.headerFg}>
+            {selectedProvider.icon} {selectedProvider.name}
+          </text>
+          <text fg={theme.mutedFg}>
+            {isCheckingRuntime ? "Fetching models from OpenRouter..." : "Fetching models..."}
+          </text>
+          {runtimeError && <text fg={theme.errorFg}>Error: {runtimeError}</text>}
+          <text fg={theme.mutedFg} marginTop={1}>
+            Connecting to OpenRouter API to get latest model list
+          </text>
+          <text fg={theme.mutedFg}>Esc to go back</text>
+        </box>
+      </box>
+    );
+  }
+
   return (
     <box
       flexDirection="column"
       flexGrow={1}
+      minHeight={0}
+      overflow="hidden"
       borderStyle="double"
       borderColor={theme.borderColor}
       backgroundColor={theme.bgPanel}
     >
       {header}
-      <box flexDirection="row" flexGrow={1}>
+      <box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">
         {/* Left: Providers */}
-        <box flexDirection="column" flexGrow={1} paddingX={1}>
+        <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden" paddingX={1}>
           <text fg={theme.headerFg}>Providers</text>
-          <scrollbox flexDirection="column" flexGrow={1}>
+          <scrollbox ref={providerScrollRef} flexDirection="column" flexGrow={1} flexShrink={1} minHeight={0}>
             {sortedProviders.map((provider, i) => {
               const isSel = i === selectedProviderIndex;
               return (
                 <text
                   key={provider.id}
+                  id={`provider-${i}`}
                   fg={isSel ? theme.headerFg : theme.mutedFg}
                   bg={isSel ? theme.bgSelected : undefined}
                 >
@@ -370,18 +463,18 @@ export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps
               );
             })}
           </scrollbox>
-          <text fg={theme.mutedFg}>↑↓ Navigate · Enter Select</text>
+          <text fg={theme.mutedFg} flexShrink={0}>↑↓ Navigate · Enter Select</text>
         </box>
 
         {/* Divider */}
-        <box width={1} border={true} borderColor={theme.borderColor} />
+        <box width={1} flexShrink={0} border={true} borderColor={theme.borderColor} />
 
         {/* Right: Details */}
-        <box flexDirection="column" flexGrow={1} paddingX={1}>
+        <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden" paddingX={1}>
           <text fg={theme.headerFg}>Available Models</text>
           {selectedProvider ? (
             <>
-              <box flexDirection="column" marginTop={1}>
+              <box flexDirection="column" marginTop={1} flexShrink={0}>
                 <text fg={theme.userFg}>
                   {selectedProvider.icon} {selectedProvider.name}
                 </text>
@@ -398,12 +491,13 @@ export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps
 
               {state === "selecting-model" ? (
                 providerModels.length > 0 ? (
-                  <scrollbox flexDirection="column" flexGrow={1} marginTop={1}>
+                  <scrollbox ref={modelScrollRef} flexDirection="column" flexGrow={1} flexShrink={1} minHeight={0} marginTop={1}>
                     {providerModels.map((model, i) => {
                       const isSel = i === selectedModelIndex;
                       return (
                         <text
                           key={model.id}
+                          id={`model-${i}`}
                           fg={isSel ? theme.agentFg : theme.mutedFg}
                           bg={isSel ? theme.bgSelected : undefined}
                         >
@@ -415,30 +509,30 @@ export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps
                     })}
                   </scrollbox>
                 ) : (
-                  <box flexDirection="column" justifyContent="center" flexGrow={1}>
+                  <box flexDirection="column" justifyContent="center" flexGrow={1} minHeight={0}>
                     <text fg={theme.mutedFg}>No models available</text>
                   </box>
                 )
               ) : (
-                <box flexDirection="column" justifyContent="center" flexGrow={1}>
+                <box flexDirection="column" justifyContent="center" flexGrow={1} minHeight={0}>
                   <text fg={theme.mutedFg}>Select provider and press Enter</text>
                 </box>
               )}
 
               {state === "selecting-model" && selectedModel && (
-                <text fg={theme.mutedFg} marginTop={1}>
+                <text fg={theme.mutedFg} marginTop={1} flexShrink={0}>
                   {selectedModel.description || "Select a model to connect"}
                 </text>
               )}
 
-              <text fg={theme.mutedFg} marginTop={1}>
+              <text fg={theme.mutedFg} marginTop={1} flexShrink={0}>
                 {state === "selecting-model"
                   ? "↑↓ Select model · Enter Connect · Esc Back"
                   : "Press Enter to continue"}
               </text>
             </>
           ) : (
-            <box flexDirection="column" justifyContent="center" flexGrow={1}>
+            <box flexDirection="column" justifyContent="center" flexGrow={1} minHeight={0}>
               <text fg={theme.mutedFg}>Select a provider to view available models</text>
             </box>
           )}
