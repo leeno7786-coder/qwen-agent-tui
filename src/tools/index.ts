@@ -22,6 +22,7 @@ import {
 } from "../subagent";
 import { normalizeLens } from "../subagent-lenses";
 import { fileChangeDiff } from "../lib/file-diff";
+import { ToolCacheManager, createToolCacheManager, globalToolCache } from "./cache";
 
 /** A tool that the agent can invoke. */
 export interface Tool {
@@ -1216,3 +1217,7 @@ export function toOpenAI(allTools: Tool[], cfg?: Config) {
     },
   }));
 }
+
+// Export cache utilities
+export { ToolCacheManager, createToolCacheManager, globalToolCache } from "./cache";
+export type { ToolCacheEntry, ToolCacheConfig } from "./cache";

@@ -1,6 +1,6 @@
 import { createClient, chat, streamChat } from "./llm";
 import type { ChatMessage } from "./llm";
-import { tools, toOpenAI, type ToolExecutionHooks } from "./tools";
+import { tools, toOpenAI, type ToolExecutionHooks, ToolCacheManager, createToolCacheManager } from "./tools";
 import type { SubAgentDispatchProgress } from "./subagent";
 import { detectContext } from "./context";
 import { loadSkills, matchSkillTriggers } from "./skills";
@@ -50,6 +50,8 @@ export class AgentCore {
   public activeSkills: Map<string, Skill> = new Map();
   /** Set of skill names previously auto-loaded to avoid re-triggering. */
   private _autoLoadedSkills: Set<string> = new Set();
+  /** Tool execution cache manager. */
+  public toolCache: ToolCacheManager;
 
 
   /**
@@ -58,16 +60,32 @@ export class AgentCore {
   constructor(cfg: Config) {
     this.cfg = cfg;
     this.client = createClient(cfg);
+    this.toolCache = createToolCacheManager(cfg);
   }
 
-  /**
+   /**
    * Reconfigure the agent (refreshes LM Studio model metadata when model/URL changes).
    */
   async reconfigure(newCfg: Partial<Config>) {
     const modelChanged =
       newCfg.model !== undefined || newCfg.baseURL !== undefined;
+    const workspaceChanged = newCfg.workspace !== undefined;
+    
     this.cfg = { ...this.cfg, ...newCfg };
     applySubAgentDefaults(this.cfg);
+    
+    // Update cache configuration if relevant options changed
+    if (newCfg.toolCacheEnabled !== undefined || 
+        newCfg.toolCacheTtlMs !== undefined || 
+        newCfg.toolCacheMaxSize !== undefined) {
+      this.toolCache = createToolCacheManager(this.cfg);
+    }
+    
+    // Clear cache if workspace changed
+    if (workspaceChanged) {
+      this.toolCache.clear();
+    }
+    
     if (modelChanged) {
       await this.applyRuntimeProfile();
     } else {
@@ -84,7 +102,7 @@ export class AgentCore {
     this.client = createClient(this.cfg);
   }
 
-  /**
+   /**
    * Reload config from disk and refresh LM Studio model metadata.
    * Keeps the current in-session workspace (e.g. after /cd).
    */
@@ -104,9 +122,16 @@ export class AgentCore {
       subAgentBaseURL: fresh.subAgentBaseURL,
       subAgentApiKey: fresh.subAgentApiKey,
       subAgentEnabled: fresh.subAgentEnabled,
+      toolCacheEnabled: fresh.toolCacheEnabled,
+      toolCacheTtlMs: fresh.toolCacheTtlMs,
+      toolCacheMaxSize: fresh.toolCacheMaxSize,
       workspace,
     };
     applySubAgentDefaults(this.cfg);
+    
+    // Recreate cache manager with new config
+    this.toolCache = createToolCacheManager(this.cfg);
+    
     await this.applyRuntimeProfile();
   }
 
@@ -420,6 +445,8 @@ export class AgentCore {
 
           const start = performance.now();
           let output: string;
+          let wasCached = false;
+          
           try {
             // Robust argument parsing (handles malformed JSON from any model)
             let args: any;
@@ -442,6 +469,34 @@ export class AgentCore {
               }
             } else {
               args = tc.arguments;
+            }
+            
+            // Check cache first
+            const cached = this.toolCache.get(tc.name, args, this.cfg.workspace);
+            if (cached) {
+              output = cached.result;
+              wasCached = true;
+              // Still record the duration for stats (use cached duration as estimate)
+              const duration = cached.duration;
+              
+              this.messages.push({
+                id: rnd(),
+                role: "tool",
+                content: output,
+                timestamp: now(),
+                toolCallId: tc.id,
+              });
+              
+              const finalOutput = this.messages[this.messages.length - 1]?.content || output;
+              this.onToolResult?.({
+                toolCallId: tc.id,
+                name: tc.name,
+                output: finalOutput,
+                duration,
+                cached: true,
+              });
+              this.currentTool = undefined;
+              continue; // Skip to next tool
             }
             
             if (tool?.executeAsync) {
@@ -474,6 +529,19 @@ export class AgentCore {
             output = JSON.stringify({ ok: false, error: e.message });
           }
           const duration = performance.now() - start;
+          
+          // Cache successful results (only if not from cache and tool exists)
+          if (!wasCached && tool) {
+            try {
+              // Only cache successful results
+              const resultObj = JSON.parse(output);
+              if (resultObj.ok !== false) {
+                this.toolCache.set(tc.name, args, this.cfg.workspace, output, duration, true);
+              }
+            } catch {
+              // If we can't parse the output, don't cache it
+            }
+          }
 
         this.messages.push({
           id: rnd(),
@@ -483,7 +551,7 @@ export class AgentCore {
           toolCallId: tc.id,
         });
 
-        // Intercept change_workspace results to sync agent state
+         // Intercept change_workspace results to sync agent state
         if (tc.name === "change_workspace") {
           try {
             const result = JSON.parse(output);
@@ -496,6 +564,16 @@ export class AgentCore {
           } catch {
             // ignore parse errors
           }
+        }
+
+        // Invalidate cache for file modification tools
+        if (['write_file', 'edit_file', 'edit_file_lines'].includes(tc.name)) {
+          this.toolCache.clear();
+        }
+
+        // Invalidate cache for git operations that change files
+        if (tc.name === 'git_commit') {
+          this.toolCache.clear();
         }
 
         // Intercept manage_todos results to sync agent state

@@ -57,6 +57,12 @@ export interface Config {
   subAgentMaxPerDispatch?: number;
   /** Minimum delay (ms) between LLM API calls to avoid rate limiting. 0 = disabled. */
   rateLimitMs?: number;
+  /** Enable tool execution caching (default: true). */
+  toolCacheEnabled?: boolean;
+  /** TTL for tool cache entries in milliseconds (default: 30000). */
+  toolCacheTtlMs?: number;
+  /** Maximum number of tool cache entries (default: 1000). */
+  toolCacheMaxSize?: number;
 }
 
 /** Possible states of the agent lifecycle. */
@@ -106,6 +112,8 @@ export interface ToolResult {
   output: string;
   /** Execution duration in milliseconds. */
   duration: number;
+  /** Whether the result was served from cache. */
+  cached?: boolean;
 }
 
 /** A user-managed todo item. */

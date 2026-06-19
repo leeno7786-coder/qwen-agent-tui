@@ -240,6 +240,19 @@ export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
     cfg.subAgentEnabled = false;
   }
 
+  // Tool cache configuration
+  if (process.env.QWEN_TOOL_CACHE_ENABLED === "0" || process.env.QWEN_TOOL_CACHE_ENABLED === "false") {
+    cfg.toolCacheEnabled = false;
+  }
+  if (process.env.QWEN_TOOL_CACHE_TTL_MS) {
+    const n = parseInt(process.env.QWEN_TOOL_CACHE_TTL_MS, 10);
+    if (!Number.isNaN(n) && n >= 0) cfg.toolCacheTtlMs = n;
+  }
+  if (process.env.QWEN_TOOL_CACHE_MAX_SIZE) {
+    const n = parseInt(process.env.QWEN_TOOL_CACHE_MAX_SIZE, 10);
+    if (!Number.isNaN(n) && n > 0) cfg.toolCacheMaxSize = n;
+  }
+
   applySubAgentDefaults(cfg);
 
   // Auto-detect small model mode (≤8B) — does not shrink context; that comes from the model id.
@@ -347,6 +360,22 @@ export function validateConfig(cfg: Config): {
     if (cfg.timeout < 1000 || cfg.timeout > 300000) {
       errors.push(
         `timeout must be between 1 and 300 seconds (1000-300000ms), got ${cfg.timeout}`
+      );
+    }
+  }
+
+  if (cfg.toolCacheTtlMs !== undefined) {
+    if (cfg.toolCacheTtlMs < 0 || cfg.toolCacheTtlMs > 300000) {
+      errors.push(
+        `toolCacheTtlMs must be between 0 and 300000ms, got ${cfg.toolCacheTtlMs}`
+      );
+    }
+  }
+
+  if (cfg.toolCacheMaxSize !== undefined) {
+    if (cfg.toolCacheMaxSize < 1 || cfg.toolCacheMaxSize > 10000) {
+      errors.push(
+        `toolCacheMaxSize must be between 1 and 10000, got ${cfg.toolCacheMaxSize}`
       );
     }
   }
