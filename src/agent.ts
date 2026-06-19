@@ -1,6 +1,6 @@
 import { createClient, chat, streamChat } from "./llm";
 import type { ChatMessage } from "./llm";
-import { tools, toOpenAI, type ToolExecutionHooks, ToolCacheManager, createToolCacheManager } from "./tools";
+import { tools, toOpenAI, type ToolExecutionHooks, ToolCacheManager, createToolCacheManager, groupToolsForParallelExecution, canRunInParallel } from "./tools";
 import type { SubAgentDispatchProgress } from "./subagent";
 import { detectContext } from "./context";
 import { loadSkills, matchSkillTriggers } from "./skills";
@@ -60,7 +60,7 @@ export class AgentCore {
   constructor(cfg: Config) {
     this.cfg = cfg;
     this.client = createClient(cfg);
-    this.toolCache = createToolCacheManager(cfg);
+    this.toolCache = createToolCacheManager(cfg, cfg.workspace);
   }
 
    /**
@@ -70,6 +70,7 @@ export class AgentCore {
     const modelChanged =
       newCfg.model !== undefined || newCfg.baseURL !== undefined;
     const workspaceChanged = newCfg.workspace !== undefined;
+    const oldWorkspace = this.cfg.workspace;
     
     this.cfg = { ...this.cfg, ...newCfg };
     applySubAgentDefaults(this.cfg);
@@ -77,8 +78,9 @@ export class AgentCore {
     // Update cache configuration if relevant options changed
     if (newCfg.toolCacheEnabled !== undefined || 
         newCfg.toolCacheTtlMs !== undefined || 
-        newCfg.toolCacheMaxSize !== undefined) {
-      this.toolCache = createToolCacheManager(this.cfg);
+        newCfg.toolCacheMaxSize !== undefined ||
+        workspaceChanged) {
+      this.toolCache = createToolCacheManager(this.cfg, this.cfg.workspace);
     }
     
     // Clear cache if workspace changed
@@ -437,112 +439,74 @@ export class AgentCore {
 
         // Execute tools (shared between streaming and non-streaming)
         const tcs = assistantMsg.toolCalls || [];
-        for (const tc of tcs) {
-          const tool = tools.find((t) => t.name === tc.name);
+        
+        // Group tools for parallel execution
+        const { parallel, sequential } = groupToolsForParallelExecution(tcs);
+        
+        // Execute parallel tools first
+        if (parallel.length > 0) {
+          await this.executeToolsParallel(parallel, signal);
+        }
+        
+        // Execute sequential tools
+        for (const tc of sequential) {
+          await this.executeToolSequential(tc, signal);
+        }
+    }
 
-          this.currentTool = { name: tc.name, args: tc.arguments };
-          this.setState("executing_tool");
+    this.addAssistantMessage("Max iterations reached without completion.");
+    this.setState("error");
+  }
 
-          const start = performance.now();
-          let output: string;
-          let wasCached = false;
-          
+  /**
+   * Parse tool arguments from a tool call.
+   */
+  private parseToolArgs(tc: { name: string; arguments: string }): any {
+    let args: any;
+    if (typeof tc.arguments === 'string') {
+      try {
+        args = JSON.parse(tc.arguments);
+      } catch {
+        const jsonMatch = tc.arguments.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
           try {
-            // Robust argument parsing (handles malformed JSON from any model)
-            let args: any;
-            if (typeof tc.arguments === 'string') {
-              // Try multiple parsing strategies for small models
-              try {
-                args = JSON.parse(tc.arguments);
-              } catch {
-                // Try to extract JSON from text
-                const jsonMatch = tc.arguments.match(/\{[\s\S]*\}/);
-                if (jsonMatch) {
-                  try {
-                    args = JSON.parse(jsonMatch[0]);
-                  } catch {
-                    args = { raw_input: tc.arguments };
-                  }
-                } else {
-                  args = { raw_input: tc.arguments };
-                }
-              }
-            } else {
-              args = tc.arguments;
-            }
-            
-            // Check cache first
-            const cached = this.toolCache.get(tc.name, args, this.cfg.workspace);
-            if (cached) {
-              output = cached.result;
-              wasCached = true;
-              // Still record the duration for stats (use cached duration as estimate)
-              const duration = cached.duration;
-              
-              this.messages.push({
-                id: rnd(),
-                role: "tool",
-                content: output,
-                timestamp: now(),
-                toolCallId: tc.id,
-              });
-              
-              const finalOutput = this.messages[this.messages.length - 1]?.content || output;
-              this.onToolResult?.({
-                toolCallId: tc.id,
-                name: tc.name,
-                output: finalOutput,
-                duration,
-                cached: true,
-              });
-              this.currentTool = undefined;
-              continue; // Skip to next tool
-            }
-            
-            if (tool?.executeAsync) {
-              const subHooks: ToolExecutionHooks | undefined =
-                tc.name === "dispatch_subagents" || tc.name === "explore_subagent"
-                  ? {
-                      onSubAgentProgress: (progress) => {
-                        this.currentTool = {
-                          name: tc.name,
-                          args: tc.arguments,
-                          subAgentProgress: progress,
-                        };
-                        this.onUpdate?.();
-                      },
-                    }
-                  : undefined;
-              output = await tool.executeAsync(
-                args,
-                this.cfg.workspace,
-                this.cfg,
-                signal,
-                subHooks
-              );
-            } else {
-              output = tool
-                ? tool.execute(args, this.cfg.workspace, this.cfg)
-                : JSON.stringify({ ok: false, error: "Unknown tool" });
-            }
-          } catch (e: any) {
-            output = JSON.stringify({ ok: false, error: e.message });
+            args = JSON.parse(jsonMatch[0]);
+          } catch {
+            args = { raw_input: tc.arguments };
           }
-          const duration = performance.now() - start;
-          
-          // Cache successful results (only if not from cache and tool exists)
-          if (!wasCached && tool) {
-            try {
-              // Only cache successful results
-              const resultObj = JSON.parse(output);
-              if (resultObj.ok !== false) {
-                this.toolCache.set(tc.name, args, this.cfg.workspace, output, duration, true);
-              }
-            } catch {
-              // If we can't parse the output, don't cache it
-            }
-          }
+        } else {
+          args = { raw_input: tc.arguments };
+        }
+      }
+    } else {
+      args = tc.arguments;
+    }
+    return args;
+  }
 
+  /**
+   * Execute a single tool sequentially.
+   */
+  private async executeToolSequential(tc: { name: string; arguments: string; id: string }, signal?: AbortSignal): Promise<void> {
+    const tool = tools.find((t) => t.name === tc.name);
+    
+    this.currentTool = { name: tc.name, args: tc.arguments };
+    this.setState("executing_tool");
+
+    const start = performance.now();
+    let output: string;
+    let wasCached = false;
+    
+    try {
+      const args = this.parseToolArgs(tc);
+      
+      // Check cache first
+      const cached = this.toolCache.get(tc.name, args, this.cfg.workspace);
+      if (cached) {
+        output = cached.result;
+        wasCached = true;
+        const duration = cached.duration;
+        
         this.messages.push({
           id: rnd(),
           role: "tool",
@@ -550,134 +514,311 @@ export class AgentCore {
           timestamp: now(),
           toolCallId: tc.id,
         });
-
-         // Intercept change_workspace results to sync agent state
-        if (tc.name === "change_workspace") {
-          try {
-            const result = JSON.parse(output);
-            if (result.ok && result.workspace) {
-              void this.reconfigure({ workspace: result.workspace });
-              this.todos = [];
-              this.syncTodoMessage();
-              this.onUpdate?.();
-            }
-          } catch {
-            // ignore parse errors
-          }
-        }
-
-        // Invalidate cache for file modification tools
-        if (['write_file', 'edit_file', 'edit_file_lines'].includes(tc.name)) {
-          this.toolCache.clear();
-        }
-
-        // Invalidate cache for git operations that change files
-        if (tc.name === 'git_commit') {
-          this.toolCache.clear();
-        }
-
-        // Intercept manage_todos results to sync agent state
-        if (tc.name === "manage_todos") {
-          try {
-            const result = JSON.parse(output);
-            if (result.ok) {
-              const lastMsg = this.messages[this.messages.length - 1];
-              if (result.action === "add" && result.text) {
-                // Use the id from tool result if provided, otherwise let addTodo generate one
-                if (result.id) {
-                  this.todos.push({
-                    id: result.id,
-                    text: result.text,
-                    done: result.done !== undefined ? result.done : false,
-                    createdAt: result.createdAt || now(),
-                  });
-                } else {
-                  this.addTodo(result.text);
-                }
-                // Update tool result with the generated id so the model can reference it
-                const newTodo = this.todos[this.todos.length - 1];
-                if (lastMsg && newTodo) {
-                  lastMsg.content = JSON.stringify({
-                    ok: true,
-                    action: "add",
-                    id: newTodo.id,
-                    text: newTodo.text,
-                  });
-                }
-                this.syncTodoMessage();
-                this.onUpdate?.();
-              } else if (result.action === "complete") {
-                const target = this.todos.find((t) => t.id === result.id);
-                if (target) {
-                  this.toggleTodo(result.id);
-                  if (lastMsg) {
-                    lastMsg.content = JSON.stringify({
-                      ok: true,
-                      action: "complete",
-                      id: result.id,
-                      text: target.text,
-                    });
-                  }
-                } else {
-                  if (lastMsg) {
-                    lastMsg.content = JSON.stringify({
-                      ok: false,
-                      action: "complete",
-                      error: `Todo id=${result.id} not found`,
-                    });
-                  }
-                }
-              } else if (result.action === "remove") {
-                const target = this.todos.find((t) => t.id === result.id);
-                if (target) {
-                  this.removeTodo(result.id);
-                  if (lastMsg) {
-                    lastMsg.content = JSON.stringify({
-                      ok: true,
-                      action: "remove",
-                      id: result.id,
-                      text: target.text,
-                    });
-                  }
-                } else {
-                  if (lastMsg) {
-                    lastMsg.content = JSON.stringify({
-                      ok: false,
-                      action: "remove",
-                      error: `Todo id=${result.id} not found`,
-                    });
-                  }
-                }
-              } else if (result.action === "list") {
-                const lastMsg = this.messages[this.messages.length - 1];
-                if (lastMsg) {
-                  lastMsg.content = JSON.stringify({
-                    ok: true,
-                    action: "list",
-                    count: this.todos.length,
-                    todos: this.todos.map((t) => ({ id: t.id, text: t.text, done: t.done })),
-                  });
-                }
-              }
-            }
-          } catch {
-            // ignore parse errors
-          }
-        }
-
+        
         const finalOutput = this.messages[this.messages.length - 1]?.content || output;
         this.onToolResult?.({
           toolCallId: tc.id,
           name: tc.name,
           output: finalOutput,
           duration,
+          cached: true,
         });
         this.currentTool = undefined;
+        return;
+      }
+      
+      if (tool?.executeAsync) {
+        const subHooks: ToolExecutionHooks | undefined =
+          tc.name === "dispatch_subagents" || tc.name === "explore_subagent"
+            ? {
+                onSubAgentProgress: (progress) => {
+                  this.currentTool = {
+                    name: tc.name,
+                    args: tc.arguments,
+                    subAgentProgress: progress,
+                  };
+                  this.onUpdate?.();
+                },
+              }
+            : undefined;
+        output = await tool.executeAsync(
+          args,
+          this.cfg.workspace,
+          this.cfg,
+          signal,
+          subHooks
+        );
+      } else {
+        output = tool
+          ? tool.execute(args, this.cfg.workspace, this.cfg)
+          : JSON.stringify({ ok: false, error: "Unknown tool" });
+      }
+    } catch (e: any) {
+      output = JSON.stringify({ ok: false, error: e.message });
+    }
+    const duration = performance.now() - start;
+    
+    // Cache successful results
+    if (!wasCached && tool) {
+      try {
+        const args = this.parseToolArgs(tc);
+        const resultObj = JSON.parse(output);
+        if (resultObj.ok !== false) {
+          this.toolCache.set(tc.name, args, this.cfg.workspace, output, duration, true);
+        }
+      } catch {
+        // If we can't parse the output, don't cache it
       }
     }
 
-    this.addAssistantMessage("Max iterations reached without completion.");
-    this.setState("error");
+    this.messages.push({
+      id: rnd(),
+      role: "tool",
+      content: output,
+      timestamp: now(),
+      toolCallId: tc.id,
+    });
+
+    // Handle special tool results
+    this.handleSpecialToolResults(tc.name, output, tc.id);
+
+    const finalOutput = this.messages[this.messages.length - 1]?.content || output;
+    this.onToolResult?.({
+      toolCallId: tc.id,
+      name: tc.name,
+      output: finalOutput,
+      duration,
+    });
+    this.currentTool = undefined;
+  }
+
+  /**
+   * Execute multiple tools in parallel.
+   */
+  private async executeToolsParallel(
+    parallelTools: Array<{ name: string; arguments: string; index: number; id: string }>,
+    signal?: AbortSignal
+  ): Promise<void> {
+    this.setState("executing_tool");
+    
+    const start = performance.now();
+    const results: Array<{ index: number; id: string; output: string; duration: number; wasCached: boolean }> = [];
+    
+    // Execute all parallel tools concurrently
+    const promises = parallelTools.map(async (tc) => {
+      const tool = tools.find((t) => t.name === tc.name);
+      const toolStart = performance.now();
+      let output: string;
+      let wasCached = false;
+      
+      try {
+        const args = this.parseToolArgs(tc);
+        
+        // Check cache first
+        const cached = this.toolCache.get(tc.name, args, this.cfg.workspace);
+        if (cached) {
+          output = cached.result;
+          wasCached = true;
+          return { index: tc.index, id: tc.id, output, duration: cached.duration, wasCached };
+        }
+        
+        // Execute the tool
+        if (tool?.executeAsync) {
+          output = await tool.executeAsync(
+            args,
+            this.cfg.workspace,
+            this.cfg,
+            signal
+          );
+        } else {
+          output = tool
+            ? tool.execute(args, this.cfg.workspace, this.cfg)
+            : JSON.stringify({ ok: false, error: "Unknown tool" });
+        }
+        
+        // Cache successful results
+        if (tool) {
+          try {
+            const resultObj = JSON.parse(output);
+            if (resultObj.ok !== false) {
+              const duration = performance.now() - toolStart;
+              this.toolCache.set(tc.name, args, this.cfg.workspace, output, duration, true);
+            }
+          } catch {
+            // If we can't parse the output, don't cache it
+          }
+        }
+        
+        return { index: tc.index, id: tc.id, output, duration: performance.now() - toolStart, wasCached };
+      } catch (e: any) {
+        return { index: tc.index, id: tc.id, output: JSON.stringify({ ok: false, error: e.message }), duration: performance.now() - toolStart, wasCached: false };
+      }
+    });
+    
+    // Wait for all parallel tools to complete
+    const settledResults = await Promise.allSettled(promises);
+    
+    // Process results in original order
+    for (const result of settledResults) {
+      if (result.status === 'fulfilled') {
+        results.push(result.value);
+      } else {
+        // Handle rejected promises
+        results.push({
+          index: -1,
+          id: '',
+          output: JSON.stringify({ ok: false, error: result.reason?.message || 'Unknown error' }),
+          duration: 0,
+          wasCached: false
+        });
+      }
+    }
+    
+    // Sort by original index to maintain order
+    results.sort((a, b) => a.index - b.index);
+    
+    // Add messages in order
+    for (const result of results) {
+      this.messages.push({
+        id: rnd(),
+        role: "tool",
+        content: result.output,
+        timestamp: now(),
+        toolCallId: result.id,
+      });
+      
+      // Handle special tool results
+      const tc = parallelTools.find(t => t.id === result.id);
+      if (tc) {
+        this.handleSpecialToolResults(tc.name, result.output, tc.id);
+      }
+      
+      this.onToolResult?.({
+        toolCallId: result.id,
+        name: parallelTools.find(t => t.id === result.id)?.name || '',
+        output: result.output,
+        duration: result.duration,
+        cached: result.wasCached,
+      });
+    }
+    
+    this.currentTool = undefined;
+  }
+
+  /**
+   * Handle special tool results that require agent state updates.
+   */
+  private handleSpecialToolResults(toolName: string, output: string, toolCallId: string): void {
+    // Intercept change_workspace results to sync agent state
+    if (toolName === "change_workspace") {
+      try {
+        const result = JSON.parse(output);
+        if (result.ok && result.workspace) {
+          void this.reconfigure({ workspace: result.workspace });
+          this.todos = [];
+          this.syncTodoMessage();
+          this.onUpdate?.();
+        }
+      } catch {
+        // ignore parse errors
+      }
+    }
+
+    // Invalidate cache for file modification tools
+    if (['write_file', 'edit_file', 'edit_file_lines'].includes(toolName)) {
+      this.toolCache.clear();
+    }
+
+    // Invalidate cache for git operations that change files
+    if (toolName === 'git_commit') {
+      this.toolCache.clear();
+    }
+
+    // Intercept manage_todos results to sync agent state
+    if (toolName === "manage_todos") {
+      try {
+        const result = JSON.parse(output);
+        if (result.ok) {
+          const lastMsg = this.messages[this.messages.length - 1];
+          if (result.action === "add" && result.text) {
+            if (result.id) {
+              this.todos.push({
+                id: result.id,
+                text: result.text,
+                done: result.done !== undefined ? result.done : false,
+                createdAt: result.createdAt || now(),
+              });
+            } else {
+              this.addTodo(result.text);
+            }
+            const newTodo = this.todos[this.todos.length - 1];
+            if (lastMsg && newTodo) {
+              lastMsg.content = JSON.stringify({
+                ok: true,
+                action: "add",
+                id: newTodo.id,
+                text: newTodo.text,
+              });
+            }
+            this.syncTodoMessage();
+            this.onUpdate?.();
+          } else if (result.action === "complete") {
+            const target = this.todos.find((t) => t.id === result.id);
+            if (target) {
+              this.toggleTodo(result.id);
+              if (lastMsg) {
+                lastMsg.content = JSON.stringify({
+                  ok: true,
+                  action: "complete",
+                  id: result.id,
+                  text: target.text,
+                });
+              }
+            } else {
+              if (lastMsg) {
+                lastMsg.content = JSON.stringify({
+                  ok: false,
+                  action: "complete",
+                  error: `Todo id=${result.id} not found`,
+                });
+              }
+            }
+          } else if (result.action === "remove") {
+            const target = this.todos.find((t) => t.id === result.id);
+            if (target) {
+              this.removeTodo(result.id);
+              if (lastMsg) {
+                lastMsg.content = JSON.stringify({
+                  ok: true,
+                  action: "remove",
+                  id: result.id,
+                  text: target.text,
+                });
+              }
+            } else {
+              if (lastMsg) {
+                lastMsg.content = JSON.stringify({
+                  ok: false,
+                  action: "remove",
+                  error: `Todo id=${result.id} not found`,
+                });
+              }
+            }
+          } else if (result.action === "list") {
+            if (lastMsg) {
+              lastMsg.content = JSON.stringify({
+                ok: true,
+                action: "list",
+                count: this.todos.length,
+                todos: this.todos.map((t) => ({ id: t.id, text: t.text, done: t.done })),
+              });
+            }
+          }
+        }
+      } catch {
+        // ignore parse errors
+      }
+    }
   }
 
   /** Build a short todo context string for the todo system message. */
