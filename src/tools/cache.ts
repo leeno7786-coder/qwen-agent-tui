@@ -4,6 +4,8 @@
  */
 
 import { createHash } from 'crypto';
+import { watch, type FSWatcher, existsSync, statSync } from 'fs';
+import { relative, resolve, dirname } from 'path';
 import type { Config } from '../types';
 
 /**
@@ -18,6 +20,10 @@ export interface ToolCacheEntry {
   duration: number;
   /** Whether the execution was successful */
   success: boolean;
+  /** Files that this cache entry depends on (for invalidation) */
+  dependencies?: Set<string>;
+  /** Workspace this entry belongs to */
+  workspace: string;
 }
 
 /**
@@ -59,6 +65,127 @@ export const DEFAULT_CACHE_CONFIG: ToolCacheConfig = {
 };
 
 /**
+ * Extract file dependencies from tool arguments.
+ * Returns a set of absolute file paths that the tool result depends on.
+ */
+export function extractDependencies(
+  toolName: string,
+  args: Record<string, unknown>,
+  workspace: string
+): Set<string> {
+  const dependencies = new Set<string>();
+  const fs = require('fs');
+
+  try {
+    switch (toolName) {
+      case 'read_file':
+        if (args.path) {
+          const path = resolve(workspace, String(args.path));
+          if (fs.existsSync(path)) {
+            dependencies.add(path);
+          }
+        }
+        break;
+
+      case 'list_dir':
+        if (args.path) {
+          const path = resolve(workspace, String(args.path));
+          if (fs.existsSync(path)) {
+            dependencies.add(path);
+            // Also track all files in the directory
+            try {
+              const entries = fs.readdirSync(path);
+              for (const entry of entries) {
+                const entryPath = resolve(path, entry);
+                dependencies.add(entryPath);
+              }
+            } catch {
+              // Ignore errors
+            }
+          }
+        } else {
+          // Default to workspace
+          dependencies.add(workspace);
+        }
+        break;
+
+      case 'stat_path':
+        if (args.path) {
+          const path = resolve(workspace, String(args.path));
+          if (fs.existsSync(path)) {
+            dependencies.add(path);
+          }
+        }
+        break;
+
+      case 'find_files':
+        if (args.path) {
+          const path = resolve(workspace, String(args.path));
+          if (fs.existsSync(path)) {
+            dependencies.add(path);
+          }
+        }
+        break;
+
+      case 'grep_search':
+        if (args.path) {
+          const path = resolve(workspace, String(args.path));
+          if (fs.existsSync(path)) {
+            dependencies.add(path);
+          }
+        }
+        break;
+
+      case 'search_and_view':
+        if (args.path) {
+          const path = resolve(workspace, String(args.path));
+          if (fs.existsSync(path)) {
+            dependencies.add(path);
+          }
+        }
+        break;
+
+      case 'batch_read_files':
+        if (args.paths && Array.isArray(args.paths)) {
+          for (const path of args.paths) {
+            const absPath = resolve(workspace, String(path));
+            if (fs.existsSync(absPath)) {
+              dependencies.add(absPath);
+            }
+          }
+        }
+        break;
+
+      case 'map_project_tree':
+        if (args.path) {
+          const path = resolve(workspace, String(args.path));
+          if (fs.existsSync(path)) {
+            dependencies.add(path);
+          }
+        }
+        break;
+
+      default:
+        // For other tools, try to extract path from common fields
+        const pathFields = ['path', 'file', 'filePath', 'directory', 'dir'];
+        for (const field of pathFields) {
+          if (args[field]) {
+            const path = resolve(workspace, String(args[field]));
+            if (fs.existsSync(path)) {
+              dependencies.add(path);
+            }
+          }
+        }
+        break;
+    }
+  } catch {
+    // Ignore errors in dependency extraction
+  }
+
+  return dependencies;
+}
+
+/**
  * Generates a cache key from tool name and arguments.
  * Uses a hash to ensure consistent keys regardless of argument order.
  */
@@ -83,12 +210,15 @@ export class ToolCacheManager {
   private config: ToolCacheConfig;
   private hits: number = 0;
   private misses: number = 0;
+  private fileWatchers: Map<string, FSWatcher> = new Map();
+  private workspace: string = '';
 
-  constructor(config: Partial<ToolCacheConfig> = {}) {
+  constructor(config: Partial<ToolCacheConfig> = {}, workspace: string = '') {
     this.config = {
       ...DEFAULT_CACHE_CONFIG,
       ...config,
     };
+    this.workspace = workspace;
   }
 
   /**
@@ -115,8 +245,32 @@ export class ToolCacheManager {
       return undefined;
     }
 
+    // Check if any dependencies have changed
+    if (entry.dependencies && entry.dependencies.size > 0) {
+      for (const dep of entry.dependencies) {
+        if (this.hasFileChanged(dep, entry.timestamp)) {
+          this.cache.delete(key);
+          this.misses++;
+          return undefined;
+        }
+      }
+    }
+
     this.hits++;
     return entry;
+  }
+
+  /**
+   * Check if a file has changed since a given timestamp.
+   */
+  private hasFileChanged(filePath: string, sinceTimestamp: number): boolean {
+    try {
+      const fs = require('fs');
+      const stats = fs.statSync(filePath);
+      return stats.mtimeMs > sinceTimestamp;
+    } catch {
+      return true; // If we can't stat the file, assume it changed
+    }
   }
 
   /**
@@ -128,12 +282,18 @@ export class ToolCacheManager {
     workspace: string,
     result: string,
     duration: number,
-    success: boolean
+    success: boolean,
+    dependencies?: string[]
   ): void {
     if (!this.config.enabled) return;
     if (this.config.excludedTools.has(toolName)) return;
 
     const key = generateCacheKey(toolName, args, workspace);
+    
+    // Auto-extract dependencies if not provided
+    const depSet = dependencies 
+      ? new Set(dependencies)
+      : extractDependencies(toolName, args, workspace);
 
     // Evict oldest entries if cache is full
     while (this.cache.size >= this.config.maxSize) {
@@ -159,7 +319,16 @@ export class ToolCacheManager {
       timestamp: Date.now(),
       duration,
       success,
+      dependencies: depSet,
+      workspace,
     });
+    
+    // Start watching dependencies for changes
+    if (this.config.enabled && depSet && depSet.size > 0) {
+      for (const dep of depSet) {
+        this.watchFile(dep);
+      }
+    }
   }
 
   /**
@@ -216,6 +385,113 @@ export class ToolCacheManager {
     this.cache.clear();
     this.hits = 0;
     this.misses = 0;
+    this.stopAllWatchers();
+  }
+
+  /**
+   * Update workspace and reinitialize watchers.
+   */
+  setWorkspace(workspace: string): void {
+    this.workspace = workspace;
+    // Stop all existing watchers
+    this.stopAllWatchers();
+    
+    // Re-watch all dependencies in the cache
+    for (const entry of this.cache.values()) {
+      if (entry.dependencies) {
+        for (const dep of entry.dependencies) {
+          this.watchFile(dep);
+        }
+      }
+    }
+  }
+
+  /**
+   * Start watching a file for changes to invalidate cache.
+   */
+  watchFile(filePath: string): void {
+    if (!this.config.enabled) return;
+    
+    const absPath = resolve(this.workspace, filePath);
+    if (this.fileWatchers.has(absPath)) return;
+
+    try {
+      const watcher = watch(absPath, (eventType: string) => {
+        this.invalidateByFile(absPath);
+      });
+      this.fileWatchers.set(absPath, watcher);
+    } catch {
+      // File watching not supported on this platform
+    }
+  }
+
+  /**
+   * Stop watching a specific file.
+   */
+  unwatchFile(filePath: string): void {
+    const absPath = resolve(this.workspace, filePath);
+    const watcher = this.fileWatchers.get(absPath);
+    if (watcher) {
+      watcher.close();
+      this.fileWatchers.delete(absPath);
+    }
+  }
+
+  /**
+   * Stop all file watchers.
+   */
+  stopAllWatchers(): void {
+    for (const watcher of this.fileWatchers.values()) {
+      try {
+        watcher.close();
+      } catch {
+        // Ignore errors
+      }
+    }
+    this.fileWatchers.clear();
+  }
+
+  /**
+   * Invalidate cache entries that depend on a specific file.
+   */
+  invalidateByFile(filePath: string): number {
+    let count = 0;
+    const absPath = resolve(filePath);
+
+    for (const [key, entry] of this.cache) {
+      if (entry.dependencies?.has(absPath)) {
+        this.cache.delete(key);
+        count++;
+      }
+    }
+
+    // Stop watching this file
+    this.unwatchFile(absPath);
+
+    return count;
+  }
+
+  /**
+   * Invalidate cache entries by pattern.
+   */
+  invalidateByPattern(pattern: RegExp | string): number {
+    let count = 0;
+    const regex = typeof pattern === 'string' ? new RegExp(pattern) : pattern;
+
+    for (const [key, entry] of this.cache) {
+      // Check if any dependency matches the pattern
+      if (entry.dependencies) {
+        for (const dep of entry.dependencies) {
+          if (regex.test(dep)) {
+            this.cache.delete(key);
+            count++;
+            break;
+          }
+        }
+      }
+    }
+
+    return count;
   }
 
   /**
@@ -271,7 +547,7 @@ export const globalToolCache = new ToolCacheManager();
 /**
  * Create a cache manager from agent configuration.
  */
-export function createToolCacheManager(cfg?: Config): ToolCacheManager {
+export function createToolCacheManager(cfg?: Config, workspace: string = ''): ToolCacheManager {
   const cacheConfig: Partial<ToolCacheConfig> = {};
 
   if (cfg?.toolCacheEnabled === false) {
@@ -286,5 +562,5 @@ export function createToolCacheManager(cfg?: Config): ToolCacheManager {
     cacheConfig.maxSize = cfg.toolCacheMaxSize;
   }
 
-  return new ToolCacheManager(cacheConfig);
+  return new ToolCacheManager(cacheConfig, workspace);
 }

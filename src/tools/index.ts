@@ -1186,6 +1186,37 @@ const SMALL_MODEL_EXCLUDED = new Set([
   "grep_search",
 ]);
 
+// Tools that can be executed in parallel (read-only, non-blocking)
+const PARALLEL_SAFE_TOOLS = new Set([
+  "read_file",
+  "list_dir",
+  "stat_path",
+  "find_files",
+  "grep_search",
+  "search_and_view",
+  "git_status",
+  "git_diff",
+  "map_project_tree",
+  "batch_read_files",
+]);
+
+// Tools that must run sequentially (write operations, state changes)
+const SEQUENTIAL_ONLY_TOOLS = new Set([
+  "write_file",
+  "edit_file",
+  "edit_file_lines",
+  "execute_command",
+  "git_commit",
+  "install_dependencies",
+  "run_tests",
+  "run_command",
+  "typecheck",
+  "change_workspace",
+  "manage_todos",
+  "explore_subagent",
+  "dispatch_subagents",
+]);
+
 export function subAgentAvailable(cfg?: Config): boolean {
   if (!cfg?.subAgentModel || cfg.subAgentEnabled === false) return false;
   if (!requiresDistinctSubAgentModels(cfg)) return true;
@@ -1221,3 +1252,43 @@ export function toOpenAI(allTools: Tool[], cfg?: Config) {
 // Export cache utilities
 export { ToolCacheManager, createToolCacheManager, globalToolCache } from "./cache";
 export type { ToolCacheEntry, ToolCacheConfig } from "./cache";
+
+// Export parallel execution utilities
+export { PARALLEL_SAFE_TOOLS, SEQUENTIAL_ONLY_TOOLS };
+
+/**
+ * Check if a tool can be executed in parallel with others.
+ */
+export function canRunInParallel(toolName: string): boolean {
+  return PARALLEL_SAFE_TOOLS.has(toolName);
+}
+
+/**
+ * Check if a tool must run sequentially.
+ */
+export function mustRunSequentially(toolName: string): boolean {
+  return SEQUENTIAL_ONLY_TOOLS.has(toolName);
+}
+
+/**
+ * Group tool calls into parallel and sequential batches.
+ */
+export function groupToolsForParallelExecution(
+  toolCalls: Array<{ name: string; arguments: string }>
+): {
+  parallel: Array<{ name: string; arguments: string; index: number }>;
+  sequential: Array<{ name: string; arguments: string; index: number }>;
+} {
+  const parallel: Array<{ name: string; arguments: string; index: number }> = [];
+  const sequential: Array<{ name: string; arguments: string; index: number }> = [];
+
+  toolCalls.forEach((tc, index) => {
+    if (canRunInParallel(tc.name)) {
+      parallel.push({ ...tc, index });
+    } else {
+      sequential.push({ ...tc, index });
+    }
+  });
+
+  return { parallel, sequential };
+}
