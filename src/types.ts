@@ -63,6 +63,16 @@ export interface Config {
   toolCacheTtlMs?: number;
   /** Maximum number of tool cache entries (default: 1000). */
   toolCacheMaxSize?: number;
+  /** Enable context window management (default: true). */
+  contextManagementEnabled?: boolean;
+  /** Threshold for context compaction (0-1, default: 0.8). */
+  contextCompactThreshold?: number;
+  /** Percentage of context to reserve for response (0-1, default: 0.3). */
+  contextSummaryReservedPercent?: number;
+  /** Minimum number of messages to keep (default: varies by model). */
+  contextKeepCount?: number;
+  /** Maximum history tokens (default: 16000). */
+  contextMaxHistoryTokens?: number;
 }
 
 /** Possible states of the agent lifecycle. */

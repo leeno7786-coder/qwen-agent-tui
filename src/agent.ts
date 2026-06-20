@@ -12,6 +12,7 @@ import {
 import { loadConfig, applySubAgentDefaults } from "./config";
 import type { Config, Message, ToolResult, AgentState, Todo, Skill } from "./types";
 import { subAgentAvailable } from "./tools";
+import { ContextManager, createContextManager } from "./context/manager";
 
 /**
  * Core agent orchestrator: manages conversation state, tool execution,
@@ -52,6 +53,8 @@ export class AgentCore {
   private _autoLoadedSkills: Set<string> = new Set();
   /** Tool execution cache manager. */
   public toolCache: ToolCacheManager;
+  /** Context window manager. */
+  public contextManager: ContextManager;
 
 
   /**
@@ -61,6 +64,7 @@ export class AgentCore {
     this.cfg = cfg;
     this.client = createClient(cfg);
     this.toolCache = createToolCacheManager(cfg, cfg.workspace);
+    this.contextManager = createContextManager(cfg, []);
   }
 
    /**
@@ -75,7 +79,7 @@ export class AgentCore {
     this.cfg = { ...this.cfg, ...newCfg };
     applySubAgentDefaults(this.cfg);
     
-    // Update cache configuration if relevant options changed
+     // Update cache configuration if relevant options changed
     if (newCfg.toolCacheEnabled !== undefined || 
         newCfg.toolCacheTtlMs !== undefined || 
         newCfg.toolCacheMaxSize !== undefined ||
@@ -88,7 +92,9 @@ export class AgentCore {
       this.toolCache.clear();
     }
     
+    // Update context manager if model changed
     if (modelChanged) {
+      this.contextManager.updateModel(this.cfg);
       await this.applyRuntimeProfile();
     } else {
       this.client = createClient(this.cfg);
@@ -230,12 +236,7 @@ export class AgentCore {
       return;
     }
 
-    this.messages.push({
-      id: rnd(),
-      role: "user",
-      content: userText,
-      timestamp: now(),
-    });
+    this.addUserMessage(userText);
 
     for (let i = 0; i < this.cfg.maxIterations; i++) {
       if (signal?.aborted) {
@@ -249,17 +250,21 @@ export class AgentCore {
         await new Promise((r) => setTimeout(r, this.cfg.rateLimitMs));
       }
 
+      // Check and compact context if needed
+      this.checkAndCompactContext();
+
       let assistantMsg: Message;
 
-      if (this.streaming) {
-        // Streaming mode: create partial message, fill it in as chunks arrive
-        assistantMsg = {
-          id: rnd(),
-          role: "assistant",
-          content: "",
-          timestamp: now(),
-        };
-        this.messages.push(assistantMsg);
+       if (this.streaming) {
+         // Streaming mode: create partial message, fill it in as chunks arrive
+         assistantMsg = {
+           id: rnd(),
+           role: "assistant",
+           content: "",
+           timestamp: now(),
+         };
+         this.messages.push(assistantMsg);
+         this.contextManager.addMessage(assistantMsg);
 
         try {
           const stream = streamChat(
@@ -372,17 +377,21 @@ export class AgentCore {
           this.onUpdate?.();
           return;
         }
-      } else {
-        // Non-streaming mode
-        let response: Awaited<ReturnType<typeof chat>>;
-        try {
-          response = await chat(
-            this.client,
-            this.cfg,
-            this.toChatMessages(),
-            toOpenAI(tools, this.cfg),
-            signal
-          );
+       } else {
+         // Non-streaming mode
+         let response: Awaited<ReturnType<typeof chat>>;
+         
+         // Check and compact context if needed
+         this.checkAndCompactContext();
+         
+         try {
+           response = await chat(
+             this.client,
+             this.cfg,
+             this.toChatMessages(),
+             toOpenAI(tools, this.cfg),
+             signal
+           );
         } catch (err: any) {
           const status = err?.status || err?.status_code;
           const msg = err?.message || String(err);
@@ -411,10 +420,11 @@ export class AgentCore {
             name: tc.function.name,
             arguments: tc.function.arguments,
           }));
-        }
-        this.messages.push(assistantMsg);
+         }
+         this.messages.push(assistantMsg);
+         this.contextManager.addMessage(assistantMsg);
 
-        if (!msg.tool_calls || msg.tool_calls.length === 0) {
+         if (!msg.tool_calls || msg.tool_calls.length === 0) {
           // If reasoning-only (no content, no tools), loop back instead of stopping
           if (!msg.content && msg.reasoning_content) {
             continue;
@@ -507,15 +517,9 @@ export class AgentCore {
         wasCached = true;
         const duration = cached.duration;
         
-        this.messages.push({
-          id: rnd(),
-          role: "tool",
-          content: output,
-          timestamp: now(),
-          toolCallId: tc.id,
-        });
+        this.addToolMessage(output, tc.id);
         
-        const finalOutput = this.messages[this.messages.length - 1]?.content || output;
+        const finalOutput = output;
         this.onToolResult?.({
           toolCallId: tc.id,
           name: tc.name,
@@ -677,21 +681,15 @@ export class AgentCore {
     // Sort by original index to maintain order
     results.sort((a, b) => a.index - b.index);
     
-    // Add messages in order
-    for (const result of results) {
-      this.messages.push({
-        id: rnd(),
-        role: "tool",
-        content: result.output,
-        timestamp: now(),
-        toolCallId: result.id,
-      });
-      
-      // Handle special tool results
-      const tc = parallelTools.find(t => t.id === result.id);
-      if (tc) {
-        this.handleSpecialToolResults(tc.name, result.output, tc.id);
-      }
+     // Add messages in order
+     for (const result of results) {
+       this.addToolMessage(result.output, result.id);
+       
+       // Handle special tool results
+       const tc = parallelTools.find(t => t.id === result.id);
+       if (tc) {
+         this.handleSpecialToolResults(tc.name, result.output, tc.id);
+       }
       
       this.onToolResult?.({
         toolCallId: result.id,
@@ -903,13 +901,78 @@ export class AgentCore {
 
   /** Append an assistant message and trigger an update. */
   private addAssistantMessage(content: string) {
-    this.messages.push({
+    const msg: Message = {
       id: rnd(),
       role: "assistant",
       content,
       timestamp: now(),
-    });
+    };
+    this.messages.push(msg);
+    this.contextManager.addMessage(msg);
     this.onUpdate?.();
+  }
+
+  /**
+   * Add a user message to the conversation.
+   */
+  private addUserMessage(content: string): void {
+    const msg: Message = {
+      id: rnd(),
+      role: "user",
+      content,
+      timestamp: now(),
+    };
+    this.messages.push(msg);
+    this.contextManager.addMessage(msg);
+    this.onUpdate?.();
+  }
+
+  /**
+   * Add a tool message to the conversation.
+   */
+  private addToolMessage(content: string, toolCallId?: string): void {
+    const msg: Message = {
+      id: rnd(),
+      role: "tool",
+      content,
+      timestamp: now(),
+      toolCallId,
+    };
+    this.messages.push(msg);
+    this.contextManager.addMessage(msg);
+    this.onUpdate?.();
+  }
+
+  /**
+   * Check if context needs compaction and perform it if necessary.
+   * Returns true if compaction was performed.
+   */
+  private checkAndCompactContext(): boolean {
+    if (!this.contextManager.needsCompaction()) {
+      return false;
+    }
+
+    const result = this.contextManager.compact();
+    
+    if (result.removedCount > 0) {
+      // Add a system message about compaction
+      if (result.summary) {
+        this.addAssistantMessage(result.summary);
+      }
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * Ensure there's enough context space for the next message.
+   * Compacts if necessary.
+   */
+  private ensureContextSpace(message: Message): void {
+    if (!this.contextManager.canFitMessage(message)) {
+      this.checkAndCompactContext();
+    }
   }
 
   /** Update agent state and notify listeners. */
