@@ -1,0 +1,148 @@
+name: Self Review
+
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+  schedule:
+    - cron: '0 0 * * *'  # Run daily at midnight
+
+jobs:
+  self-review:
+    name: Agent Self Review
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+          
+      - name: Install dependencies
+        run: bun install
+        
+      - name: Run all tests
+        run: bun test
+        
+      - name: Run security tests
+        run: bun test src/security/index.test.ts
+        
+      - name: Run self-test
+        run: bun run self-test
+        
+      - name: Verify CI workflows
+        run: |
+          echo "Verifying CI workflow files..."
+          # Check that workflow files exist
+          test -f .github/workflows/test.yml && echo "✅ test.yml exists" || exit 1
+          test -f .github/workflows/release.yml && echo "✅ release.yml exists" || exit 1
+          test -f .github/workflows/self-review.yml && echo "✅ self-review.yml exists" || exit 1
+          
+          # Check that workflow files are valid YAML
+          echo "Checking YAML syntax..."
+          for file in .github/workflows/*.yml; do
+            if ! python3 -c "import yaml; yaml.safe_load(open('$file'))" 2>/dev/null; then
+              echo "❌ Invalid YAML: $file"
+              exit 1
+            fi
+          done
+          echo "✅ All workflow files are valid YAML"
+        
+      - name: Verify documentation
+        run: |
+          echo "Verifying documentation..."
+          # Check that key documentation files exist
+          test -f README.md && echo "✅ README.md exists" || exit 1
+          test -f SECURITY.md && echo "✅ SECURITY.md exists" || exit 1
+          test -f CI_CD_SUMMARY.md && echo "✅ CI_CD_SUMMARY.md exists" || exit 1
+          
+          # Check that README has model recommendation
+          if grep -q "Jackrong\\\\Qwen3.5-4B" README.md; then
+            echo "✅ README.md has model recommendation"
+          else
+            echo "❌ README.md missing model recommendation"
+            exit 1
+          fi
+          
+          # Check that README has security section
+          if grep -q "Security" README.md; then
+            echo "✅ README.md has Security section"
+          else
+            echo "❌ README.md missing Security section"
+            exit 1
+          fi
+        
+      - name: Verify package.json scripts
+        run: |
+          echo "Verifying package.json scripts..."
+          if grep -q '"test"' package.json; then
+            echo "✅ test script exists"
+          else
+            echo "❌ test script missing"
+            exit 1
+          fi
+          
+          if grep -q '"self-test"' package.json; then
+            echo "✅ self-test script exists"
+          else
+            echo "❌ self-test script missing"
+            exit 1
+          fi
+          
+          if grep -q '"ci"' package.json; then
+            echo "✅ ci script exists"
+          else
+            echo "❌ ci script missing"
+            exit 1
+          fi
+        
+      - name: Verify security configuration
+        run: |
+          echo "Verifying security configuration..."
+          # Check that security is enabled by default
+          if grep -q '"securityEnabled": true' src/security/index.ts; then
+            echo "✅ Security enabled by default"
+          else
+            echo "❌ Security not enabled by default"
+            exit 1
+          fi
+          
+          # Check that dangerous commands are blocked
+          if grep -q "rm -rf" src/security/index.ts; then
+            echo "✅ Dangerous commands blocked"
+          else
+            echo "❌ Dangerous commands not blocked"
+            exit 1
+          fi
+          
+          # Check that sensitive paths are blocked
+          if grep -q "\.env" src/security/index.ts; then
+            echo "✅ Sensitive paths blocked"
+          else
+            echo "❌ Sensitive paths not blocked"
+            exit 1
+          fi
+        
+      - name: Verify git configuration
+        run: |
+          echo "Verifying git configuration..."
+          # Check that main is the default branch
+          DEFAULT_BRANCH=$(git remote show origin | grep "HEAD branch" | cut -d' ' -f4)
+          if [ "$DEFAULT_BRANCH" = "main" ]; then
+            echo "✅ Default branch is main"
+          else
+            echo "❌ Default branch is not main: $DEFAULT_BRANCH"
+            exit 1
+          fi
+          
+          # Check that Omega2 branch is deleted
+          if git branch -a | grep -q "Omega2"; then
+            echo "❌ Omega2 branch still exists"
+            exit 1
+          else
+            echo "✅ Omega2 branch deleted"
+          fi
