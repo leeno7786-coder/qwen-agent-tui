@@ -13,6 +13,7 @@ import { loadConfig, applySubAgentDefaults } from "./config";
 import type { Config, Message, ToolResult, AgentState, Todo, Skill } from "./types";
 import { subAgentAvailable } from "./tools";
 import { ContextManager, createContextManager } from "./context/manager";
+import { SecurityManager, createSecurityManager } from "./security";
 
 /**
  * Core agent orchestrator: manages conversation state, tool execution,
@@ -55,6 +56,8 @@ export class AgentCore {
   public toolCache: ToolCacheManager;
   /** Context window manager. */
   public contextManager: ContextManager;
+  /** Security manager for command and file access validation. */
+  public securityManager: SecurityManager;
 
 
   /**
@@ -65,6 +68,19 @@ export class AgentCore {
     this.client = createClient(cfg);
     this.toolCache = createToolCacheManager(cfg, cfg.workspace);
     this.contextManager = createContextManager(cfg, []);
+    this.securityManager = createSecurityManager(
+      {
+        enabled: cfg.securityEnabled,
+        validateCommands: cfg.securityValidateCommands,
+        validateFileAccess: cfg.securityValidateFileAccess,
+        sanitizeOutput: cfg.securitySanitizeOutput,
+        maxFileSize: cfg.securityMaxFileSize,
+        maxBatchFiles: cfg.securityMaxBatchFiles,
+        allowedPaths: cfg.securityAllowedPaths,
+        blockedPaths: cfg.securityBlockedPaths,
+      },
+      cfg.workspace
+    );
   }
 
    /**
@@ -98,6 +114,30 @@ export class AgentCore {
       await this.applyRuntimeProfile();
     } else {
       this.client = createClient(this.cfg);
+    }
+
+    // Update security manager if workspace changed
+    if (workspaceChanged) {
+      this.securityManager.setWorkspace(this.cfg.workspace);
+    }
+
+    // Update security config if relevant options changed
+    if (newCfg.securityEnabled !== undefined ||
+        newCfg.securityValidateCommands !== undefined ||
+        newCfg.securityValidateFileAccess !== undefined ||
+        newCfg.securitySanitizeOutput !== undefined ||
+        newCfg.securityMaxFileSize !== undefined ||
+        newCfg.securityMaxBatchFiles !== undefined) {
+      this.securityManager.updateConfig({
+        enabled: this.cfg.securityEnabled,
+        validateCommands: this.cfg.securityValidateCommands,
+        validateFileAccess: this.cfg.securityValidateFileAccess,
+        sanitizeOutput: this.cfg.securitySanitizeOutput,
+        maxFileSize: this.cfg.securityMaxFileSize,
+        maxBatchFiles: this.cfg.securityMaxBatchFiles,
+        allowedPaths: this.cfg.securityAllowedPaths,
+        blockedPaths: this.cfg.securityBlockedPaths,
+      });
     }
   }
 
@@ -531,6 +571,12 @@ export class AgentCore {
         return;
       }
       
+      // Create config with security manager
+      const configWithSecurity = {
+        ...this.cfg,
+        securityManager: this.securityManager,
+      };
+      
       if (tool?.executeAsync) {
         const subHooks: ToolExecutionHooks | undefined =
           tc.name === "dispatch_subagents" || tc.name === "explore_subagent"
@@ -548,13 +594,13 @@ export class AgentCore {
         output = await tool.executeAsync(
           args,
           this.cfg.workspace,
-          this.cfg,
+          configWithSecurity,
           signal,
           subHooks
         );
       } else {
         output = tool
-          ? tool.execute(args, this.cfg.workspace, this.cfg)
+          ? tool.execute(args, this.cfg.workspace, configWithSecurity)
           : JSON.stringify({ ok: false, error: "Unknown tool" });
       }
     } catch (e: any) {
@@ -626,17 +672,23 @@ export class AgentCore {
           return { index: tc.index, id: tc.id, output, duration: cached.duration, wasCached };
         }
         
-        // Execute the tool
+         // Execute the tool
+        // Create config with security manager
+        const configWithSecurity = {
+          ...this.cfg,
+          securityManager: this.securityManager,
+        };
+        
         if (tool?.executeAsync) {
           output = await tool.executeAsync(
             args,
             this.cfg.workspace,
-            this.cfg,
+            configWithSecurity,
             signal
           );
         } else {
           output = tool
-            ? tool.execute(args, this.cfg.workspace, this.cfg)
+            ? tool.execute(args, this.cfg.workspace, configWithSecurity)
             : JSON.stringify({ ok: false, error: "Unknown tool" });
         }
         
