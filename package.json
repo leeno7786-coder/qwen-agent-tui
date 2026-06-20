@@ -9,7 +9,10 @@
     "start:opentui": "bun run src/main.ts tui",
     "agent": "bun run src/main.ts run",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "test:security": "bun test src/security/index.test.ts",
+    "self-test": "bun run scripts/self-test.ts",
+    "ci": "bun test && bun run self-test"
   },
   "devDependencies": {
     "@types/bun": "latest",
