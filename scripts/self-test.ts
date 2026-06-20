@@ -105,7 +105,7 @@ test('File access control allows normal paths', () => {
   const allowedPaths = [
     'src/index.ts',
     'README.md',
-    'package.json'
+    'src/main.ts'
   ];
   
   for (const path of allowedPaths) {
