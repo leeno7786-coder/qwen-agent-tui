@@ -182,6 +182,7 @@ export class ContextManager {
     const currentTokens = this.countMessageTokens(this.messages);
     const maxTokens = Math.floor(contextSize * (1 - this.config.summaryReservedPercent));
     const usagePercent = contextSize > 0 ? currentTokens / contextSize : 0;
+    const availablePercent = maxTokens > 0 ? currentTokens / maxTokens : 0;
     
     // Check if we've exceeded the absolute compact threshold
     // If compactThreshold is a ratio (0-1), use it as such
@@ -189,7 +190,7 @@ export class ContextManager {
     const threshold = this.config.compactThreshold;
     const needsCompaction = threshold <= 1 
       ? usagePercent > threshold
-      : currentTokens > threshold;
+      : currentTokens > threshold || availablePercent > 0.95;
 
     this.stats = {
       currentTokens,
@@ -240,7 +241,9 @@ export class ContextManager {
     const messageTokens = this.countMessageTokens([message]);
     
     // Use the maxTokens from stats which already accounts for reserved space
-    return stats.currentTokens + messageTokens < stats.maxTokens;
+    // Also ensure we don't exceed the absolute context size
+    return stats.currentTokens + messageTokens < stats.maxTokens &&
+           stats.currentTokens + messageTokens < stats.maxTokens * 1.1; // Small buffer
   }
 
   /**
@@ -313,9 +316,9 @@ export class ContextManager {
       this.compactionCount++;
     }
 
-    // Generate a summary if we removed a significant amount
+    // Generate a summary if we removed any messages
     let summary: string | undefined;
-    if (removedCount > 1) {
+    if (removedCount > 0 && messagesToRemove.length > 0) {
       summary = this.generateCompactionSummary(messagesToRemove);
     }
 
