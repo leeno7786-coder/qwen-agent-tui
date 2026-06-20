@@ -1,5 +1,6 @@
 {
   "name": "qwen-agent-tui",
+  "version": "1.1.0-alpha.1",
   "module": "src/opentui/index.tsx",
   "type": "module",
   "private": true,
@@ -12,7 +13,11 @@
     "test": "bun test",
     "test:security": "bun test src/security/index.test.ts",
     "self-test": "bun run scripts/self-test.ts",
-    "ci": "bun test && bun run self-test"
+    "ci": "bun test && bun run self-test",
+    "build": "bun build src/main.ts --outdir dist --minify --target node",
+    "build:all": "bun build src/main.ts src/opentui/index.tsx --outdir dist --minify --target node",
+    "package": "npm pack",
+    "prepack": "bun run build:all"
   },
   "devDependencies": {
     "@types/bun": "latest",
