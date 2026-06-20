@@ -253,6 +253,27 @@ export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
     if (!Number.isNaN(n) && n > 0) cfg.toolCacheMaxSize = n;
   }
 
+  // Context management configuration
+  if (process.env.QWEN_CONTEXT_MANAGEMENT_ENABLED === "0" || process.env.QWEN_CONTEXT_MANAGEMENT_ENABLED === "false") {
+    cfg.contextManagementEnabled = false;
+  }
+  if (process.env.QWEN_CONTEXT_COMPACT_THRESHOLD) {
+    const n = parseFloat(process.env.QWEN_CONTEXT_COMPACT_THRESHOLD);
+    if (!Number.isNaN(n) && n >= 0 && n <= 1) cfg.contextCompactThreshold = n;
+  }
+  if (process.env.QWEN_CONTEXT_SUMMARY_RESERVED_PERCENT) {
+    const n = parseFloat(process.env.QWEN_CONTEXT_SUMMARY_RESERVED_PERCENT);
+    if (!Number.isNaN(n) && n >= 0 && n <= 1) cfg.contextSummaryReservedPercent = n;
+  }
+  if (process.env.QWEN_CONTEXT_KEEP_COUNT) {
+    const n = parseInt(process.env.QWEN_CONTEXT_KEEP_COUNT, 10);
+    if (!Number.isNaN(n) && n > 0) cfg.contextKeepCount = n;
+  }
+  if (process.env.QWEN_CONTEXT_MAX_HISTORY_TOKENS) {
+    const n = parseInt(process.env.QWEN_CONTEXT_MAX_HISTORY_TOKENS, 10);
+    if (!Number.isNaN(n) && n > 0) cfg.contextMaxHistoryTokens = n;
+  }
+
   applySubAgentDefaults(cfg);
 
   // Auto-detect small model mode (≤8B) — does not shrink context; that comes from the model id.
@@ -376,6 +397,38 @@ export function validateConfig(cfg: Config): {
     if (cfg.toolCacheMaxSize < 1 || cfg.toolCacheMaxSize > 10000) {
       errors.push(
         `toolCacheMaxSize must be between 1 and 10000, got ${cfg.toolCacheMaxSize}`
+      );
+    }
+  }
+
+  if (cfg.contextCompactThreshold !== undefined) {
+    if (cfg.contextCompactThreshold < 0 || cfg.contextCompactThreshold > 1) {
+      errors.push(
+        `contextCompactThreshold must be between 0 and 1, got ${cfg.contextCompactThreshold}`
+      );
+    }
+  }
+
+  if (cfg.contextSummaryReservedPercent !== undefined) {
+    if (cfg.contextSummaryReservedPercent < 0 || cfg.contextSummaryReservedPercent > 1) {
+      errors.push(
+        `contextSummaryReservedPercent must be between 0 and 1, got ${cfg.contextSummaryReservedPercent}`
+      );
+    }
+  }
+
+  if (cfg.contextKeepCount !== undefined) {
+    if (cfg.contextKeepCount < 1 || cfg.contextKeepCount > 100) {
+      errors.push(
+        `contextKeepCount must be between 1 and 100, got ${cfg.contextKeepCount}`
+      );
+    }
+  }
+
+  if (cfg.contextMaxHistoryTokens !== undefined) {
+    if (cfg.contextMaxHistoryTokens < 100 || cfg.contextMaxHistoryTokens > 1000000) {
+      errors.push(
+        `contextMaxHistoryTokens must be between 100 and 1000000, got ${cfg.contextMaxHistoryTokens}`
       );
     }
   }
