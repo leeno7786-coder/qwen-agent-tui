@@ -80,6 +80,27 @@ Exit codes: `0` success, `1` failure. Errors include a suggested invocation.
 | `/skill` | List loaded skills |
 | `/exit` | Quit |
 
+## Security
+
+qwen-agent-tui includes **built-in security hardening** to protect against common risks:
+
+- 🛡️ **Command Validation** - Blocks dangerous commands (`rm -rf`, `dd`, `sudo`, etc.)
+- 📁 **File Access Control** - Restricts access to workspace and blocks sensitive paths (`.env`, `.git`, etc.)
+- 🔒 **Output Sanitization** - Automatically redacts API keys, tokens, and secrets from outputs
+
+Security is **enabled by default**. Configure via `~/.qwen-agent.json`:
+
+```json
+{
+  "securityEnabled": true,
+  "securityValidateCommands": true,
+  "securityValidateFileAccess": true,
+  "securitySanitizeOutput": true
+}
+```
+
+See [SECURITY.md](SECURITY.md) for detailed documentation.
+
 ## Architecture
 
 ```
