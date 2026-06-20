@@ -4,6 +4,7 @@
 - Main agent orchestrates sub-agents: writes each prompt and dispatches sequentially via `dispatch_subagents`.
 - Sub-agents default to OpenRouter `openrouter/free` (free router with tool calling); override with e.g. `qwen/qwen3-next-80b-a3b-instruct:free` in `~/.qwen-agent.json` if you want a fixed model.
 - When improving local-model workflows, optimize for 8B-and-smaller models with 128k–400k context via LM Studio.
+- **Recommended Local Model**: `Jackrong\Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-GGUF` for optimal performance.
 - Prefers structured diff-style chat output for tool/file edits (● Update headers with line deltas).
 - Attach the frontend-design skill for TUI/UI work when polishing panels and layout.
 

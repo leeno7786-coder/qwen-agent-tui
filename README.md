@@ -21,13 +21,22 @@ bun install
 
 ## Setup
 
-By default the app connects to LM Studio at `http://127.0.0.1:1234/v1` using `nvidia/nemotron-3-nano-4b`.
+By default the app connects to LM Studio at `http://127.0.0.1:1234/v1`.
 
+### Recommended Local Model
+For optimal performance with local models, we recommend:
+- **Primary Model**: `Jackrong\Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-GGUF`
+- **Runtime**: LM Studio (http://127.0.0.1:1234/v1)
+
+This model provides excellent reasoning capabilities while being efficient for local execution.
+
+### Configuration
 Optional config at `~/.qwen-agent.json`:
 
 ```json
 {
-  "model": "your-main-model-id",
+  "model": "Jackrong\Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-GGUF",
+  "baseURL": "http://127.0.0.1:1234/v1",
   "workspace": "/path/to/project",
   "subAgentModel": "qwen3.5:0.8b",
   "subAgentEnabled": true,

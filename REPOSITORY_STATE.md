@@ -101,6 +101,14 @@ Ran 191 tests across 15 files
 
 ## Workflow
 
+### Recommended Local Model Configuration
+For optimal performance with local models:
+- **Runtime**: LM Studio
+- **Base URL**: `http://127.0.0.1:1234/v1`
+- **Recommended Model**: `Jackrong\Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-GGUF`
+
+This model provides excellent reasoning capabilities while being efficient for local execution.
+
 ### For Contributors
 
 1. **Clone the repository**
@@ -129,6 +137,8 @@ Ran 191 tests across 15 files
 
 1. **Use main branch for production**
    ```bash
+   git clone https://github.com/leeno7786-coder/qwen-agent-tui.git
+   cd qwen-agent-tui
    git checkout main
    bun install
    bun run start
@@ -137,6 +147,7 @@ Ran 191 tests across 15 files
 2. **Report issues on main branch**
    - Issues should reference the `main` branch
    - Include version/commit hash
+   - Specify model and runtime used (LM Studio recommended)
 
 ---
 
