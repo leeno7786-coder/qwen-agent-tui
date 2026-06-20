@@ -274,6 +274,34 @@ export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
     if (!Number.isNaN(n) && n > 0) cfg.contextMaxHistoryTokens = n;
   }
 
+  // Security configuration
+  if (process.env.QWEN_SECURITY_ENABLED === "0" || process.env.QWEN_SECURITY_ENABLED === "false") {
+    cfg.securityEnabled = false;
+  }
+  if (process.env.QWEN_SECURITY_VALIDATE_COMMANDS === "0" || process.env.QWEN_SECURITY_VALIDATE_COMMANDS === "false") {
+    cfg.securityValidateCommands = false;
+  }
+  if (process.env.QWEN_SECURITY_VALIDATE_FILE_ACCESS === "0" || process.env.QWEN_SECURITY_VALIDATE_FILE_ACCESS === "false") {
+    cfg.securityValidateFileAccess = false;
+  }
+  if (process.env.QWEN_SECURITY_SANITIZE_OUTPUT === "0" || process.env.QWEN_SECURITY_SANITIZE_OUTPUT === "false") {
+    cfg.securitySanitizeOutput = false;
+  }
+  if (process.env.QWEN_SECURITY_MAX_FILE_SIZE) {
+    const n = parseInt(process.env.QWEN_SECURITY_MAX_FILE_SIZE, 10);
+    if (!Number.isNaN(n) && n > 0) cfg.securityMaxFileSize = n;
+  }
+  if (process.env.QWEN_SECURITY_MAX_BATCH_FILES) {
+    const n = parseInt(process.env.QWEN_SECURITY_MAX_BATCH_FILES, 10);
+    if (!Number.isNaN(n) && n > 0) cfg.securityMaxBatchFiles = n;
+  }
+  if (process.env.QWEN_SECURITY_ALLOWED_PATHS) {
+    cfg.securityAllowedPaths = process.env.QWEN_SECURITY_ALLOWED_PATHS.split(',').map(p => p.trim());
+  }
+  if (process.env.QWEN_SECURITY_BLOCKED_PATHS) {
+    cfg.securityBlockedPaths = process.env.QWEN_SECURITY_BLOCKED_PATHS.split(',').map(p => p.trim());
+  }
+
   applySubAgentDefaults(cfg);
 
   // Auto-detect small model mode (≤8B) — does not shrink context; that comes from the model id.
@@ -429,6 +457,23 @@ export function validateConfig(cfg: Config): {
     if (cfg.contextMaxHistoryTokens < 100 || cfg.contextMaxHistoryTokens > 1000000) {
       errors.push(
         `contextMaxHistoryTokens must be between 100 and 1000000, got ${cfg.contextMaxHistoryTokens}`
+      );
+    }
+  }
+
+  // Security configuration validation
+  if (cfg.securityMaxFileSize !== undefined) {
+    if (cfg.securityMaxFileSize < 1 || cfg.securityMaxFileSize > 100 * 1024 * 1024) {
+      errors.push(
+        `securityMaxFileSize must be between 1 and 104857600 (100MB), got ${cfg.securityMaxFileSize}`
+      );
+    }
+  }
+
+  if (cfg.securityMaxBatchFiles !== undefined) {
+    if (cfg.securityMaxBatchFiles < 1 || cfg.securityMaxBatchFiles > 1000) {
+      errors.push(
+        `securityMaxBatchFiles must be between 1 and 1000, got ${cfg.securityMaxBatchFiles}`
       );
     }
   }

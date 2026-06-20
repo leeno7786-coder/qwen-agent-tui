@@ -23,6 +23,7 @@ import {
 import { normalizeLens } from "../subagent-lenses";
 import { fileChangeDiff } from "../lib/file-diff";
 import { ToolCacheManager, createToolCacheManager, globalToolCache } from "./cache";
+import type { SecurityManager } from "../security";
 
 /** A tool that the agent can invoke. */
 export interface Tool {
@@ -333,13 +334,21 @@ export const tools: Tool[] = [
     }
   },
 // File System Tools - Core file operations
-{
-  name: "read_file",
+  {
+    name: "read_file",
     description: "Read a file from the workspace",
-  parameters: { type: "object", properties: { path: { type: "string", description: "File path to read" }, offset: { type: "number", description: "Line offset to start reading from (0-indexed, optional)" }, limit: { type: "number", description: "Maximum lines to read (optional)" }, numbered: { type: "boolean", description: "Return lines with line numbers (default: auto for small models)" } }, required: ["path"] },
-  execute: (args, ws, cfg) => {
-    try {
-      const p = safe(args.path, ws, cfg);
+    parameters: { type: "object", properties: { path: { type: "string", description: "File path to read" }, offset: { type: "number", description: "Line offset to start reading from (0-indexed, optional)" }, limit: { type: "number", description: "Maximum lines to read (optional)" }, numbered: { type: "boolean", description: "Return lines with line numbers (default: auto for small models)" } }, required: ["path"] },
+    execute: (args, ws, cfg) => {
+      try {
+        const p = safe(args.path, ws, cfg);
+        
+        // Check with security manager if available
+        if (cfg?.securityManager) {
+          const result = cfg.securityManager.validateFileAccess(p, 'read');
+          if (!result.ok) {
+            return JSON.stringify({ ok: false, error: result.error || "Access denied" });
+          }
+        }
       const st = statSync(p);
       if (!st.isFile()) return JSON.stringify({ ok: false, error: `Not a file: ${args.path}` });
       const text = readFileSync(p, "utf-8");
@@ -390,13 +399,21 @@ export const tools: Tool[] = [
     }
   },
 },
-{
-  name: "write_file",
+  {
+    name: "write_file",
     description: "Write content to a file",
-  parameters: { type: "object", properties: { path: { type: "string", description: "File path to write" }, content: { type: "string", description: "Content to write" } }, required: ["path", "content"] },
-  execute: (args, ws, cfg) => {
-    try {
-      const p = safe(args.path, ws, cfg);
+    parameters: { type: "object", properties: { path: { type: "string", description: "File path to write" }, content: { type: "string", description: "Content to write" } }, required: ["path", "content"] },
+    execute: (args, ws, cfg) => {
+      try {
+        const p = safe(args.path, ws, cfg);
+        
+        // Check with security manager if available
+        if (cfg?.securityManager) {
+          const result = cfg.securityManager.validateFileAccess(p, 'write');
+          if (!result.ok) {
+            return JSON.stringify({ ok: false, error: result.error || "Access denied" });
+          }
+        }
       const relPath = rel(p, ws);
       let oldText = "";
       let existed = false;
@@ -424,13 +441,21 @@ export const tools: Tool[] = [
     } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
   },
 },
-{
-  name: "edit_file",
+  {
+    name: "edit_file",
     description: "Replace exact text in a file",
-  parameters: { type: "object", properties: { path: { type: "string", description: "File path to edit" }, old_text: { type: "string", description: "Exact text to replace" }, new_text: { type: "string", description: "Replacement text" }, replace_all: { type: "boolean", description: "Replace all occurrences (default: false)" } }, required: ["path", "old_text", "new_text"] },
-  execute: (args, ws, cfg) => {
-    try {
-      const p = safe(args.path, ws, cfg);
+    parameters: { type: "object", properties: { path: { type: "string", description: "File path to edit" }, old_text: { type: "string", description: "Exact text to replace" }, new_text: { type: "string", description: "Replacement text" }, replace_all: { type: "boolean", description: "Replace all occurrences (default: false)" } }, required: ["path", "old_text", "new_text"] },
+    execute: (args, ws, cfg) => {
+      try {
+        const p = safe(args.path, ws, cfg);
+        
+        // Check with security manager if available
+        if (cfg?.securityManager) {
+          const result = cfg.securityManager.validateFileAccess(p, 'write');
+          if (!result.ok) {
+            return JSON.stringify({ ok: false, error: result.error || "Access denied" });
+          }
+        }
       const oldText = String(args.old_text ?? "");
       if (!oldText) return JSON.stringify({ ok: false, error: "old_text cannot be empty" });
       const text = readFileSync(p, "utf-8");
@@ -443,13 +468,21 @@ export const tools: Tool[] = [
     } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
   },
 },
-{
-  name: "edit_file_lines",
+  {
+    name: "edit_file_lines",
     description: "Replace a range of lines in a file by line number. Use this when edit_file fails with 'old_text not found' or when you know the exact line numbers to change",
-  parameters: { type: "object", properties: { path: { type: "string", description: "File path to edit" }, start_line: { type: "number", description: "First line number to replace (1-indexed, inclusive)" }, end_line: { type: "number", description: "Last line number to replace (1-indexed, inclusive)" }, new_text: { type: "string", description: "Replacement text (can be multiple lines)" } }, required: ["path", "start_line", "end_line", "new_text"] },
-  execute: (args, ws, cfg) => {
-    try {
-      const p = safe(args.path, ws, cfg);
+    parameters: { type: "object", properties: { path: { type: "string", description: "File path to edit" }, start_line: { type: "number", description: "First line number to replace (1-indexed, inclusive)" }, end_line: { type: "number", description: "Last line number to replace (1-indexed, inclusive)" }, new_text: { type: "string", description: "Replacement text (can be multiple lines)" } }, required: ["path", "start_line", "end_line", "new_text"] },
+    execute: (args, ws, cfg) => {
+      try {
+        const p = safe(args.path, ws, cfg);
+        
+        // Check with security manager if available
+        if (cfg?.securityManager) {
+          const result = cfg.securityManager.validateFileAccess(p, 'write');
+          if (!result.ok) {
+            return JSON.stringify({ ok: false, error: result.error || "Access denied" });
+          }
+        }
       const startLine = Number(args.start_line);
       const endLine = Number(args.end_line);
       if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) {
@@ -875,23 +908,43 @@ export const tools: Tool[] = [
 },
 
 // Command Execution and Build Tools
-{
-  name: "execute_command",
-  description: "Run a shell command in the workspace",
-  parameters: { type: "object", properties: { command: { type: "string", description: "Shell command to execute (e.g., 'dir', 'git status', 'bun test')" } }, required: ["command"] },
-  execute: (args, ws) => {
-    const cmd = String(args.command || "").trim();
-    if (!cmd) return JSON.stringify({ ok: false, error: "Command cannot be empty" });
-    if (isDangerous(cmd)) return JSON.stringify({ ok: false, error: "Command blocked for security reasons" });
-    return execCmd(cmd, ws);
+  {
+    name: "execute_command",
+    description: "Run a shell command in the workspace",
+    parameters: { type: "object", properties: { command: { type: "string", description: "Shell command to execute (e.g., 'dir', 'git status', 'bun test')" } }, required: ["command"] },
+    execute: (args, ws, cfg) => {
+      const cmd = String(args.command || "").trim();
+      if (!cmd) return JSON.stringify({ ok: false, error: "Command cannot be empty" });
+      
+      // Check with security manager if available
+      if (cfg?.securityManager) {
+        const result = cfg.securityManager.validateCommand(cmd);
+        if (!result.ok) {
+          return JSON.stringify({ ok: false, error: result.error || "Command blocked for security reasons" });
+        }
+      } else if (isDangerous(cmd)) {
+        return JSON.stringify({ ok: false, error: "Command blocked for security reasons" });
+      }
+      
+      return execCmd(cmd, ws);
+    },
+    executeAsync: async (args, ws, cfg, signal) => {
+      const cmd = String(args.command || "").trim();
+      if (!cmd) return JSON.stringify({ ok: false, error: "Command cannot be empty" });
+      
+      // Check with security manager if available
+      if (cfg?.securityManager) {
+        const result = cfg.securityManager.validateCommand(cmd);
+        if (!result.ok) {
+          return JSON.stringify({ ok: false, error: result.error || "Command blocked for security reasons" });
+        }
+      } else if (isDangerous(cmd)) {
+        return JSON.stringify({ ok: false, error: "Command blocked for security reasons" });
+      }
+      
+      return execCmdAsync(cmd, ws, 60, signal);
+    }
   },
-  executeAsync: async (args, ws, _cfg, signal) => {
-    const cmd = String(args.command || "").trim();
-    if (!cmd) return JSON.stringify({ ok: false, error: "Command cannot be empty" });
-    if (isDangerous(cmd)) return JSON.stringify({ ok: false, error: "Command blocked for security reasons" });
-    return execCmdAsync(cmd, ws, 60, signal);
-  }
-},
 {
   name: "run_tests",
     description: "Run project tests",

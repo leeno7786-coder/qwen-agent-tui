@@ -73,6 +73,24 @@ export interface Config {
   contextKeepCount?: number;
   /** Maximum history tokens (default: 16000). */
   contextMaxHistoryTokens?: number;
+  /** Enable security checks (default: true). */
+  securityEnabled?: boolean;
+  /** Enable command validation (default: true). */
+  securityValidateCommands?: boolean;
+  /** Enable file access validation (default: true). */
+  securityValidateFileAccess?: boolean;
+  /** Enable output sanitization (default: true). */
+  securitySanitizeOutput?: boolean;
+  /** Maximum file size to read (bytes, default: 10485760 = 10MB). */
+  securityMaxFileSize?: number;
+  /** Maximum batch files (default: 50). */
+  securityMaxBatchFiles?: number;
+  /** Allowed paths for file access (glob patterns). */
+  securityAllowedPaths?: string[];
+  /** Blocked paths for file access (glob patterns). */
+  securityBlockedPaths?: string[];
+  /** Security manager instance for runtime security checks. */
+  securityManager?: any;
 }
 
 /** Possible states of the agent lifecycle. */
@@ -124,6 +142,11 @@ export interface ToolResult {
   duration: number;
   /** Whether the result was served from cache. */
   cached?: boolean;
+}
+
+// Add SecurityManager to Config for tool access
+export interface ConfigWithSecurity extends Config {
+  securityManager?: any;
 }
 
 /** A user-managed todo item. */
