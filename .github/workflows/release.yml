@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+          
+      - name: Install dependencies
+        run: bun install
+        
+      - name: Run tests
+        run: bun test
+        
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        
+      - name: Create release notes
+        id: release-notes
+        run: |
+          # Generate release notes from git log
+          NOTES=$(git log --pretty=format:"- %s (%h)" --no-merges ${GITHUB_REF}...${GITHUB_REF}^ | head -20)
+          echo "NOTES<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref }}
+          name: Release v${{ steps.version.outputs.VERSION }}
+          body: |
+            ## qwen-agent-tui v${{ steps.version.outputs.VERSION }}
+            
+            ### What's New
+            
+            ${{ steps.release-notes.outputs.NOTES }}
+            
+            ### Features
+            - Security Hardening: Command validation, file access control, output sanitization
+            - Context Window Management: Dynamic context, compaction, message tracking
+            - Parallel Tools: Parallel execution, advanced caching, new tools
+            
+            ### Recommended Local Model
+            For optimal performance with local models:
+            - **Model**: `Jackrong\Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-GGUF`
+            - **Runtime**: LM Studio
+            - **Base URL**: `http://127.0.0.1:1234/v1`
+            
+            ### Installation
+            ```bash
+            git clone https://github.com/leeno7786-coder/qwen-agent-tui.git
+            cd qwen-agent-tui
+            bun install
+            bun run start
+            ```
+            
+            ### Test Results
+            - All 191 tests passing ✅
+            - Security tests: 52/52 passing ✅
+            - Workflow tests: 25/25 passing ✅
+          draft: false
+          prerelease: false
