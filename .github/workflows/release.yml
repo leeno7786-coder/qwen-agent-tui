@@ -34,7 +34,6 @@ jobs:
       - name: Create release notes
         id: release-notes
         run: |
-          # Generate release notes from git log
           NOTES=$(git log --pretty=format:"- %s (%h)" --no-merges ${GITHUB_REF}...${GITHUB_REF}^ | head -20)
           echo "NOTES<<EOF" >> $GITHUB_OUTPUT
           echo "$NOTES" >> $GITHUB_OUTPUT
@@ -72,8 +71,8 @@ jobs:
             ```
             
             ### Test Results
-            - All 191 tests passing ✅
-            - Security tests: 52/52 passing ✅
-            - Workflow tests: 25/25 passing ✅
+            - All 191 tests passing
+            - Security tests: 52/52 passing
+            - Self-tests: All passing
           draft: false
           prerelease: false
