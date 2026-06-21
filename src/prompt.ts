@@ -6,6 +6,7 @@ export interface PromptContext {
   workspace: string;
   branch?: string;
   skillNames?: string[];
+  skillInfos?: { name: string; desc: string }[];
   allowedPaths?: string[];
   platformNote?: string;
 }
@@ -102,8 +103,10 @@ export function appendPromptExtras(
   if (ctx.branch) {
     system += `\nGit branch: ${ctx.branch}`;
   }
-  if (ctx.skillNames?.length) {
-    system += `\n\n## Skills\nUse /skill:name to load a skill with specialized instructions. Skills also auto-load when you mention related keywords.\nAvailable: ${ctx.skillNames.join(", ")}`;
+  if (ctx.skillInfos?.length) {
+    system += `\n\n## Skills\nType /skill:name to load one. Skills also auto-load when you mention related keywords.\n${ctx.skillInfos.map(s => `- /skill:${s.name} — ${s.desc}`).join("\n")}`;
+  } else if (ctx.skillNames?.length) {
+    system += `\n\n## Skills\nType /skill:name to load one. Skills also auto-load when you mention related keywords.\nAvailable: ${ctx.skillNames.join(", ")}`;
   }
   if (ctx.platformNote) {
     system += `\n\n${ctx.platformNote}`;

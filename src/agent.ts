@@ -200,10 +200,15 @@ export class AgentCore {
       }
     }
 
+    const skillInfos = allSkills.size > 0
+      ? Array.from(allSkills.values()).map(s => ({ name: s.name, desc: (s.description || "").slice(0, 120) }))
+      : undefined;
+
     let system = buildSystemPrompt(this.cfg, {
       workspace: this.cfg.workspace,
       branch: ctx.isGit ? ctx.branch : undefined,
       skillNames: allSkills.size > 0 ? Array.from(allSkills.keys()) : undefined,
+      skillInfos,
       allowedPaths: this.cfg.allowedPaths,
     });
     if (this.cfg.modelContextLength) {
