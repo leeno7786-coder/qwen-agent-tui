@@ -115,11 +115,11 @@ jobs:
               ),
               (
                   "Dangerous commands blocked",
-                  r"const DANGEROUS_COMMAND_PATTERNS: RegExp\[\] = \[[\s\S]*?/rm\\s\+-rf/i",
+                  rf"const DANGEROUS_COMMAND_PATTERNS: RegExp\[\] = \[[\s\S]*?{re.escape('/rm\\s+-rf/i')}",
               ),
               (
                   "Sensitive paths blocked",
-                  r"blockedPaths:\s*\[[\s\S]*?['\"]\*\*/\.env['\"]",
+                  rf"blockedPaths:\s*\[[\s\S]*?['\"]{re.escape('**/.env')}['\"]",
               ),
           ]
           
