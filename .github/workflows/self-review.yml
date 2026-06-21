@@ -135,7 +135,7 @@ jobs:
         run: |
           echo "Verifying git configuration..."
           # Check that main is the default branch
-          DEFAULT_BRANCH=$(git remote show origin | grep "HEAD branch" | cut -d' ' -f4)
+          DEFAULT_BRANCH=$(git remote show origin | grep "HEAD branch" | awk '{print $NF}')
           if [ "$DEFAULT_BRANCH" = "main" ]; then
             echo "✅ Default branch is main"
           else
