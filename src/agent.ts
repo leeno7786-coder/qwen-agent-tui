@@ -212,7 +212,7 @@ export class AgentCore {
         this.cfg.modelParamBillions !== undefined
           ? ` · ~${this.cfg.modelParamBillions}B params`
           : "";
-      system += `\n\n## Runtime\nLM Studio: ${ctxK}k context loaded${param}.`;
+      system += `\n\n## Runtime\n${ctxK}k context loaded${param}.`;
     }
     if (subAgentAvailable(this.cfg)) {
       system += `\nSub-agents: OpenRouter \`${this.cfg.subAgentModel}\` — dispatch_subagents (you set prompts, sequential) or explore_subagent (one task).`;

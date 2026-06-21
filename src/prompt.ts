@@ -23,7 +23,7 @@ export function buildSmallModelPrompt(ctx: PromptContext): string {
     "NEVER describe what you would do — actually DO it using tools.",
     "",
     "## Workflow",
-    "1. **First** — list_dir to see what files exist",
+    "1. **Explore** — list_dir to see files; find_files (by name) or search_and_view (by content) to locate code",
     "2. **Read** — read_file to examine files before editing",
     "3. **Edit** — edit_file (exact old_text) or edit_file_lines (1-based line numbers)",
     "4. **Run** — execute_command for shell commands (PowerShell on Windows)",
@@ -92,8 +92,7 @@ export function buildLargeModelPrompt(
  */
 export function appendPromptExtras(
   base: string,
-  ctx: PromptContext,
-  small: boolean
+  ctx: PromptContext
 ): string {
   let system = base;
 
@@ -110,9 +109,7 @@ export function appendPromptExtras(
     system += `\n\n${ctx.platformNote}`;
   }
 
-  system += small
-    ? "\n\n## Reminder: USE TOOLS\nYou have tools like list_dir, read_file, etc. Call them now — do not just describe what you would do."
-    : "\n\n## Todos\nBreak multi-step requests into manage_todos items. Mark complete via the tool — do not skip it.";
+  system += "\n\n## Todos\nBreak multi-step requests into manage_todos items. Mark complete via the tool — do not skip it.";
 
   return system;
 }
@@ -122,7 +119,7 @@ export function appendPromptExtras(
  */
 export function buildSystemPrompt(cfg: Config, ctx: PromptContext): string {
   if (cfg.systemPrompt) {
-    return appendPromptExtras(cfg.systemPrompt, ctx, isSmallModelFromConfig(cfg));
+    return appendPromptExtras(cfg.systemPrompt, ctx);
   }
 
   const small = isSmallModelFromConfig(cfg);
@@ -134,5 +131,5 @@ export function buildSystemPrompt(cfg: Config, ctx: PromptContext): string {
       ? "Platform: Windows — shell commands run in PowerShell."
       : undefined;
 
-  return appendPromptExtras(base, { ...ctx, platformNote }, small);
+  return appendPromptExtras(base, { ...ctx, platformNote });
 }
