@@ -142,7 +142,7 @@ describe("tools", () => {
     const gitDiff = tools.find((t) => t.name === "git_diff")!;
     const out = JSON.parse(gitDiff.execute({}, ws));
     expect(out.ok).toBe(true);
-    expect(out.stdout).toContain("modified");
+    expect(out.diff).toContain("modified");
   });
 
   it("git_commit stages and commits successfully", () => {

@@ -238,6 +238,33 @@ function isDangerous(cmd: string): boolean {
     .some(p => p.test(cmd));
 }
 
+/**
+ * Run a git command directly (bypasses PowerShell translation for speed on Windows).
+ * Sets GIT_OPTIONAL_LOCKS=0 to avoid lock contention during read-only operations.
+ */
+function execGit(args: string[], ws: string, opts: { timeout?: number; maxBuffer?: number; write?: boolean } = {}): { ok: boolean; stdout: string; stderr: string; code: number | null } {
+  const isWin = process.platform === "win32";
+  const env = { ...process.env, GIT_OPTIONAL_LOCKS: "0" };
+  // Build command string. On Windows, ensure git.exe is found via PATH.
+  const cmd = "git " + args.map(a => a.includes(" ") ? `"${a}"` : a).join(" ");
+  try {
+    const out = execSync(cmd, {
+      cwd: ws,
+      encoding: "utf-8",
+      timeout: opts.timeout ?? 30000,
+      maxBuffer: opts.maxBuffer ?? 10 * 1024 * 1024,
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: isWin ? "cmd.exe" : undefined,
+      env,
+    });
+    return { ok: true, stdout: (out || "").replace(/\u0000/g, ""), stderr: "", code: 0 };
+  } catch (e: any) {
+    const stdout = (e.stdout || "").replace(/\u0000/g, "");
+    const stderr = (e.stderr || "").replace(/\u0000/g, "");
+    return { ok: false, stdout, stderr: stderr || e.message, code: e.status ?? null };
+  }
+}
+
 /** Built-in tools available to the agent. */
 export const tools: Tool[] = [
   {
@@ -307,33 +334,23 @@ export const tools: Tool[] = [
     }
   },
   {
-    name: "git_diff",
+  name: "git_diff",
     description: "View uncommitted git changes",
-    parameters: { type: "object", properties: {} },
-    execute: (_args, ws) => {
-      try {
-        // First check if this is a git repository
-        const gitCheck = execSync("git rev-parse --is-inside-work-tree", { 
-          cwd: ws, 
-          encoding: "utf-8", 
-          timeout: 5000, 
-          stdio: ["pipe", "pipe", "ignore"] 
-        });
-        if (gitCheck.trim() !== "true") {
-          return JSON.stringify({ ok: true, diff: "", isGit: false, message: "not a git repository" });
-        }
-        
-        // Get git diff
-        return execCmd("git diff", ws);
-      } catch (e: any) {
-        const errorMsg = e.message?.toLowerCase() || "";
-        if (errorMsg.includes("not a git repository") || errorMsg.includes("not recognized")) {
-          return JSON.stringify({ ok: true, diff: "", isGit: false, message: "not a git repository" });
-        }
-        return JSON.stringify({ ok: false, error: `git diff failed: ${e.message}` });
-      }
+  parameters: { type: "object", properties: {} },
+  execute: (_args, ws) => {
+    const r = execGit(["rev-parse", "--is-inside-work-tree"], ws, { timeout: 5000 });
+    if (!r.ok || r.stdout.trim() !== "true") {
+      return JSON.stringify({ ok: true, diff: "", isGit: false, message: "not a git repository" });
     }
+
+    const diff = execGit(["--no-optional-locks", "diff"], ws, { timeout: 15000 });
+    if (!diff.ok) {
+      return JSON.stringify({ ok: false, error: `git diff failed: ${diff.stderr?.substring(0, 200)}` });
+    }
+    return JSON.stringify({ ok: true, diff: diff.stdout, isGit: true });
   },
+},
+
 // File System Tools - Core file operations
   {
     name: "read_file",
@@ -822,45 +839,26 @@ export const tools: Tool[] = [
     description: "Show git repository status",
   parameters: { type: "object", properties: {} },
   execute: (_args, ws) => {
-    try {
-      // First check if this is a git repository (with minimal network interaction)
-      const gitCheck = execSync("git rev-parse --show-toplevel", { 
-        cwd: ws, 
-        encoding: "utf-8", 
-        timeout: 5000, 
-        stdio: ["pipe", "pipe", "pipe"] 
-      });
-      
-      // If we get here, we're in a git repo - just get basic status without network calls
-      const out = execSync("git status --porcelain --untracked-files=no", { 
-        cwd: ws, 
-        encoding: "utf-8", 
-        timeout: 8000, 
-        stdio: "pipe" 
-      });
-      
-      const status = out.trim();
-      const hasChanges = status.length > 0;
-      
-      return JSON.stringify({ 
-        ok: true, 
-        status: hasChanges ? "has changes" : "clean", 
-        isGit: true,
-        details: hasChanges ? status.split('\n').filter(l => l.trim()).length + " files changed" : "no changes"
-      });
-    } catch (e: any) {
-      // Handle cases where git is not installed or other errors
-      const errorMsg = e.message?.toLowerCase() || "";
-      if (errorMsg.includes("not a git repository") || errorMsg.includes("fatal:") || e.stderr?.toLowerCase().includes("not a git repository")) {
-        return JSON.stringify({ ok: true, status: "not a git repository", isGit: false });
-      }
-      // Specifically handle timeout errors
-      if (errorMsg.includes("timed out") || e.code === 'ETIMEDOUT' || e.signal === 'SIGTERM') {
-        return JSON.stringify({ ok: false, error: "git status command timed out - repository may be very large or inaccessible" });
-      }
-      // Handle other git errors gracefully
-      return JSON.stringify({ ok: true, status: "error accessing git status", isGit: true, error: e.message?.substring(0, 100) });
+    // Check working tree status (fast, no lock contention)
+    const r = execGit(["rev-parse", "--is-inside-work-tree"], ws, { timeout: 5000 });
+    if (!r.ok || r.stdout.trim() !== "true") {
+      return JSON.stringify({ ok: true, status: "not a git repository", isGit: false });
     }
+
+    // Get porcelain status (skip untracked files for speed)
+    const status = execGit(["--no-optional-locks", "status", "--porcelain", "--untracked-files=no"], ws, { timeout: 10000 });
+    if (!status.ok) {
+      return JSON.stringify({ ok: false, error: `git status failed: ${status.stderr?.substring(0, 200)}` });
+    }
+
+    const lines = status.stdout.trim();
+    const hasChanges = lines.length > 0;
+    return JSON.stringify({
+      ok: true,
+      status: hasChanges ? "has changes" : "clean",
+      isGit: true,
+      details: hasChanges ? lines.split('\n').filter(l => l.trim()).length + " files changed" : "no changes"
+    });
   },
 },
 {
@@ -870,42 +868,31 @@ export const tools: Tool[] = [
   execute: (args, ws) => {
     const msg = String(args.message || "");
     if (!msg) return JSON.stringify({ ok: false, error: "Commit message is required" });
-    
-    try {
-      const gitCheck = execSync("git rev-parse --is-inside-work-tree", { 
-        cwd: ws, 
-        encoding: "utf-8", 
-        timeout: 10000, 
-        stdio: ["pipe", "pipe", "ignore"] 
-      });
-      if (gitCheck.trim() !== "true") {
-        return JSON.stringify({ ok: false, error: "not a git repository - cannot commit" });
-      }
-      
-      const isWin = process.platform === "win32";
-      execSync("git add -A", { cwd: ws, stdio: ["pipe", "pipe", "pipe"] });
-      const commitCmd = `git commit -m "${msg.replace(/"/g, '\\"')}"`;
-      return execCmd(commitCmd, ws);
-    } catch (e: any) {
-      const errorMsg = e.message?.toLowerCase() || "";
-      if (errorMsg.includes("not a git repository") || errorMsg.includes("not recognized")) {
-        return JSON.stringify({ ok: false, error: "not a git repository - cannot commit" });
-      }
-      // Specifically handle timeout errors
-      if (errorMsg.includes("timed out") || e.code === 'ETIMEDOUT') {
-        return JSON.stringify({
-          ok: false,
-          error: "git commit command timed out - repository may be very large or inaccessible"
-        });
-      }
+
+    // Check we're in a git repo
+    const check = execGit(["rev-parse", "--is-inside-work-tree"], ws, { timeout: 5000 });
+    if (!check.ok || check.stdout.trim() !== "true") {
+      return JSON.stringify({ ok: false, error: "not a git repository - cannot commit" });
+    }
+
+    // Stage all
+    const add = execGit(["add", "-A"], ws, { timeout: 15000 });
+    if (!add.ok) {
+      return JSON.stringify({ ok: false, error: add.stderr?.substring(0, 200) || "git add failed" });
+    }
+
+    // Commit
+    const commit = execGit(["commit", "-m", msg], ws, { timeout: 15000 });
+    if (!commit.ok) {
       return JSON.stringify({
         ok: false,
-        error: e.message,
-        stdout: e.stdout?.toString() || "",
-        stderr: e.stderr?.toString() || ""
+        error: commit.stderr?.substring(0, 200) || "git commit failed",
+        stdout: commit.stdout,
+        stderr: commit.stderr,
       });
     }
-  }
+    return JSON.stringify({ ok: true, stdout: commit.stdout });
+  },
 },
 
 // Command Execution and Build Tools
