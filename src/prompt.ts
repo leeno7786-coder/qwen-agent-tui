@@ -103,7 +103,7 @@ export function appendPromptExtras(
     system += `\nGit branch: ${ctx.branch}`;
   }
   if (ctx.skillNames?.length) {
-    system += `\nSkills (slash commands): ${ctx.skillNames.join(", ")}`;
+    system += `\n\n## Skills\nUse /skill:name to load a skill with specialized instructions. Skills also auto-load when you mention related keywords.\nAvailable: ${ctx.skillNames.join(", ")}`;
   }
   if (ctx.platformNote) {
     system += `\n\n${ctx.platformNote}`;

@@ -3,7 +3,7 @@ import type { ChatMessage } from "./llm";
 import { tools, toOpenAI, type ToolExecutionHooks, ToolCacheManager, createToolCacheManager, groupToolsForParallelExecution, canRunInParallel } from "./tools";
 import type { SubAgentDispatchProgress } from "./subagent";
 import { detectContext } from "./context";
-import { loadSkills, matchSkillTriggers } from "./skills";
+import { loadSkills, matchSkillTriggers, getSkill } from "./skills";
 import { buildSystemPrompt } from "./prompt";
 import {
   enrichConfigWithRuntime,
@@ -273,6 +273,55 @@ export class AgentCore {
         "4. Give me a short description and example prompt.\n" +
         "I'll generate a complete, ready-to-use `.json` skill file for you."
       );
+      return;
+    }
+
+    // Handle skill load commands (/skill:name, /skill-load name)
+    const trimmed = userText.trim();
+    if (trimmed.startsWith("/skill:")) {
+      const skillName = trimmed.replace(/^\/skill:/, "").split(/\s+/)[0];
+      const skill = getSkill(skillName);
+      if (skill && this.loadSkill(skill)) {
+        this.addAssistantMessage(`**Skill Loaded: ${skill.name}**\n\n${skill.description}\n\nHow would you like to use this skill?`);
+      } else if (skill) {
+        this.addAssistantMessage(`Skill "${skillName}" is already loaded.`);
+      } else {
+        this.addAssistantMessage(`Skill "${skillName}" not found. Available skills: ${Array.from(loadSkills().keys()).join(", ")}`);
+      }
+      return;
+    }
+
+    if (trimmed.startsWith("/skill-load ")) {
+      const skillName = trimmed.replace("/skill-load ", "").trim().split(/\s+/)[0];
+      const skill = getSkill(skillName);
+      if (skill && this.loadSkill(skill)) {
+        this.addAssistantMessage(`**Skill Loaded: ${skill.name}**\n\n${skill.description}\n\nHow would you like to use this skill?`);
+      } else if (skill) {
+        this.addAssistantMessage(`Skill "${skillName}" is already loaded.`);
+      } else {
+        this.addAssistantMessage(`Skill "${skillName}" not found. Available skills: ${Array.from(loadSkills().keys()).join(", ")}`);
+      }
+      return;
+    }
+
+    // Handle skill unload command (/unload name)
+    if (trimmed.startsWith("/unload ")) {
+      const name = trimmed.replace("/unload ", "").trim().split(/\s+/)[0];
+      const unloaded = this.unloadSkill(name) || this.unloadSkill(`skill:${name}`);
+      this.addAssistantMessage(unloaded ? `Skill "${name}" unloaded.` : `Skill "${name}" not found in active skills.`);
+      return;
+    }
+
+    // Handle /skills (list available skills)
+    if (trimmed === "/skills" || trimmed === "/skill" || trimmed === "/skills ") {
+      const all = loadSkills();
+      const active = this.getActiveSkillNames();
+      const lines = ["## Available Skills", ""];
+      for (const [name, s] of all) {
+        const status = active.includes(name) ? " (active)" : "";
+        lines.push(`- /skill:${name} — ${s.description}${status}`);
+      }
+      this.addAssistantMessage(lines.join("\n"));
       return;
     }
 
