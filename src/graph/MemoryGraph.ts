@@ -17,6 +17,7 @@ import { GraphNode, GraphEdge, GraphQuery, GraphQueryResult, GraphBuildOptions }
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
+import * as ts from 'typescript';
 
 const GRAPH_VERSION = '1.0.0';
 const GRAPH_DIRECTORY = '.qwen-graph';
@@ -283,7 +284,7 @@ export class MemoryGraph {
     switch (language) {
       case 'typescript':
       case 'javascript':
-        await this.processTypeScriptFile(filePath, content, fileNode);
+        this.processTypeScriptFile(filePath, content, fileNode);
         break;
       case 'json':
         this.processJsonFile(filePath, content, fileNode);
@@ -330,189 +331,363 @@ export class MemoryGraph {
   }
 
   /**
-   * Process TypeScript/JavaScript file
+   * Process TypeScript/JavaScript file using the native TS compiler AST parser
    */
-  private async processTypeScriptFile(filePath: string, content: string, fileNode: GraphNode): Promise<void> {
-    // Simple parsing - in production, use a proper parser like @babel/parser or typescript-eslint
-    const lines = content.split('\n');
+  private processTypeScriptFile(filePath: string, content: string, fileNode: GraphNode): void {
+    const isTSX = filePath.endsWith('.tsx');
+    const sourceFile = ts.createSourceFile(
+      filePath,
+      content,
+      ts.ScriptTarget.Latest,
+      true,
+      isTSX ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+    );
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const lineNum = i + 1;
+    for (const statement of sourceFile.statements) {
+      this.processTSStatement(statement, fileNode, sourceFile);
+    }
+  }
 
-      // Skip empty lines and comments
-      if (!line.trim() || line.trim().startsWith('//') || line.trim().startsWith('*') || line.trim().startsWith('/**')) {
-        continue;
+  private processTSStatement(node: ts.Statement, fileNode: GraphNode, sf: ts.SourceFile): void {
+    if (ts.isImportDeclaration(node)) {
+      this.processTSImport(node, fileNode, sf);
+    } else if (ts.isExportDeclaration(node)) {
+      this.processTSExport(node, fileNode, sf);
+    } else if (ts.isClassDeclaration(node) && node.name) {
+      this.processTSClass(node, fileNode, sf);
+    } else if (ts.isFunctionDeclaration(node) && node.name) {
+      this.processTSFunction(node, fileNode, sf);
+    } else if (ts.isVariableStatement(node)) {
+      this.processTSVariables(node, fileNode, sf);
+    } else if (ts.isInterfaceDeclaration(node) && node.name) {
+      this.processTSType(node, fileNode, sf, 'interface');
+    } else if (ts.isTypeAliasDeclaration(node) && node.name) {
+      this.processTSType(node, fileNode, sf, 'alias');
+    } else if (ts.isEnumDeclaration(node) && node.name) {
+      this.processTSEnum(node, fileNode, sf);
+    } else if (ts.isModuleDeclaration(node) && node.name) {
+      this.processTSModule(node, fileNode, sf);
+    } else if (ts.isExportAssignment(node)) {
+      this.processTSExportDefault(node, fileNode, sf);
+    }
+  }
+
+  private tsLine(node: ts.Node, sf: ts.SourceFile): number {
+    return sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+  }
+
+  private tsCode(node: ts.Node, sf: ts.SourceFile): string | undefined {
+    return this.options.includeCode ? node.getText(sf) : undefined;
+  }
+
+  private processTSImport(node: ts.ImportDeclaration, fileNode: GraphNode, sf: ts.SourceFile): void {
+    const modulePath = (node.moduleSpecifier as ts.StringLiteral).text;
+    const clause = node.importClause;
+    if (!clause) return;
+
+    if (clause.name) {
+      this.addImportNode(clause.name.text, modulePath, fileNode, node, sf);
+    }
+
+    if (clause.namedBindings) {
+      if (ts.isNamedImports(clause.namedBindings)) {
+        for (const elem of clause.namedBindings.elements) {
+          const name = (elem.propertyName || elem.name).text;
+          this.addImportNode(name, modulePath, fileNode, node, sf);
+        }
+      } else if (ts.isNamespaceImport(clause.namedBindings)) {
+        this.addImportNode(clause.namedBindings.name.text, modulePath, fileNode, node, sf);
       }
+    }
+  }
 
-      // Extract imports
-      const importMatch = line.match(/^import\s+{(.+?)}\s+from\s+['"](.+?)['"]/);
-      if (importMatch) {
-        const imports = importMatch[1].split(',').map(i => i.trim());
-        const from = importMatch[2];
-        
-        for (const imp of imports) {
-          const importNode: GraphNode = {
-            id: `import:${fileNode.id}:${imp}`,
-            type: 'module',
-            name: imp,
-            path: from,
-            line: lineNum,
+  private addImportNode(name: string, modulePath: string, fileNode: GraphNode, node: ts.Node, sf: ts.SourceFile): void {
+    const importNode: GraphNode = {
+      id: `import:${fileNode.id}:${name}`,
+      type: 'module',
+      name,
+      path: modulePath,
+      line: this.tsLine(node, sf),
+      language: fileNode.language,
+      metadata: { importedFrom: modulePath, file: fileNode.id },
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    this.addNode(importNode);
+    this.addEdge({
+      id: `edge:${fileNode.id}:${importNode.id}`,
+      source: fileNode.id,
+      target: importNode.id,
+      type: 'imports',
+      createdAt: Date.now()
+    });
+  }
+
+  private processTSExport(node: ts.ExportDeclaration, fileNode: GraphNode, sf: ts.SourceFile): void {
+    if (!node.moduleSpecifier || !node.exportClause) return;
+    if (!ts.isNamedExports(node.exportClause)) return;
+
+    const modulePath = (node.moduleSpecifier as ts.StringLiteral).text;
+    for (const elem of node.exportClause.elements) {
+      this.addImportNode(elem.name.text, modulePath, fileNode, node, sf);
+    }
+  }
+
+  private processTSExportDefault(node: ts.ExportAssignment, fileNode: GraphNode, sf: ts.SourceFile): void {
+    const fn: GraphNode = {
+      id: `function:${fileNode.id}:default`,
+      type: 'function',
+      name: 'default',
+      path: fileNode.path,
+      line: this.tsLine(node, sf),
+      language: fileNode.language,
+      code: this.tsCode(node, sf),
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    this.addNode(fn);
+    this.addEdge({ id: `edge:${fileNode.id}:${fn.id}`, source: fileNode.id, target: fn.id, type: 'part_of', createdAt: Date.now() });
+  }
+
+  private processTSClass(node: ts.ClassDeclaration, fileNode: GraphNode, sf: ts.SourceFile): void {
+    const className = node.name!.text;
+    const classNode: GraphNode = {
+      id: `class:${fileNode.id}:${className}`,
+      type: 'class',
+      name: className,
+      path: fileNode.path,
+      line: this.tsLine(node, sf),
+      language: fileNode.language,
+      code: this.tsCode(node, sf),
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    this.addNode(classNode);
+    this.addEdge({ id: `edge:${fileNode.id}:${classNode.id}`, source: fileNode.id, target: classNode.id, type: 'part_of', createdAt: Date.now() });
+
+    if (node.heritageClauses) {
+      for (const clause of node.heritageClauses) {
+        if (clause.token === ts.SyntaxKind.ExtendsKeyword) {
+          for (const t of clause.types) {
+            const p = t.expression.getText(sf);
+            this.addHeritageRef(`class:${fileNode.id}:${p}`, 'class', p, fileNode, node, sf);
+            this.addEdge({ id: `edge:${classNode.id}:extends:${p}`, source: classNode.id, target: `class:${fileNode.id}:${p}`, type: 'extends', createdAt: Date.now() });
+          }
+        } else if (clause.token === ts.SyntaxKind.ImplementsKeyword) {
+          for (const t of clause.types) {
+            const p = t.expression.getText(sf);
+            this.addHeritageRef(`type:${fileNode.id}:${p}`, 'type', p, fileNode, node, sf);
+            this.addEdge({ id: `edge:${classNode.id}:implements:${p}`, source: classNode.id, target: `type:${fileNode.id}:${p}`, type: 'implements', createdAt: Date.now() });
+          }
+        }
+      }
+    }
+
+    if (node.members) {
+      for (const m of node.members) {
+        if (ts.isMethodDeclaration(m) && m.name) {
+          const mn = m.name.getText(sf);
+          const fn: GraphNode = {
+            id: `function:${classNode.id}:${mn}`,
+            type: 'function',
+            name: mn,
+            path: fileNode.path,
+            line: this.tsLine(m, sf),
             language: fileNode.language,
-            metadata: {
-              importedFrom: from,
-              file: fileNode.id
-            },
+            code: this.tsCode(m, sf),
+            metadata: { class: className },
             createdAt: Date.now(),
             updatedAt: Date.now()
           };
-          this.addNode(importNode);
-          
-          this.addEdge({
-            id: `edge:${fileNode.id}:${importNode.id}`,
-            source: fileNode.id,
-            target: importNode.id,
-            type: 'imports',
-            createdAt: Date.now()
-          });
+          this.addNode(fn);
+          this.addEdge({ id: `edge:${classNode.id}:${fn.id}`, source: classNode.id, target: fn.id, type: 'part_of', createdAt: Date.now() });
+          this.extractCalls(m, fn, fileNode, sf);
         }
-        continue;
-      }
 
-      // Extract class definitions
-      const classMatch = line.match(/^class\s+(\w+)/);
-      if (classMatch) {
-        const className = classMatch[1];
-        const classNode: GraphNode = {
-          id: `class:${fileNode.id}:${className}`,
-          type: 'class',
-          name: className,
-          path: fileNode.path,
-          line: lineNum,
-          language: fileNode.language,
-          code: this.options.includeCode ? line : undefined,
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        };
-        this.addNode(classNode);
-        
-        this.addEdge({
-          id: `edge:${fileNode.id}:${classNode.id}`,
-          source: fileNode.id,
-          target: classNode.id,
-          type: 'part_of',
-          createdAt: Date.now()
-        });
-        continue;
-      }
-
-      // Extract function definitions
-      const funcMatch = line.match(/^\s*(async\s+)?function\s+(\w+)\s*\(/);
-      if (funcMatch) {
-        const funcName = funcMatch[2];
-        const funcNode: GraphNode = {
-          id: `function:${fileNode.id}:${funcName}`,
-          type: 'function',
-          name: funcName,
-          path: fileNode.path,
-          line: lineNum,
-          language: fileNode.language,
-          code: this.options.includeCode ? line : undefined,
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        };
-        this.addNode(funcNode);
-        
-        this.addEdge({
-          id: `edge:${fileNode.id}:${funcNode.id}`,
-          source: fileNode.id,
-          target: funcNode.id,
-          type: 'part_of',
-          createdAt: Date.now()
-        });
-        continue;
-      }
-
-      // Extract arrow function assignments
-      const arrowMatch = line.match(/^\s*const\s+(\w+)\s*=\s*\(/);
-      if (arrowMatch) {
-        const funcName = arrowMatch[1];
-        const funcNode: GraphNode = {
-          id: `function:${fileNode.id}:${funcName}`,
-          type: 'function',
-          name: funcName,
-          path: fileNode.path,
-          line: lineNum,
-          language: fileNode.language,
-          code: this.options.includeCode ? line : undefined,
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        };
-        this.addNode(funcNode);
-        
-        this.addEdge({
-          id: `edge:${fileNode.id}:${funcNode.id}`,
-          source: fileNode.id,
-          target: funcNode.id,
-          type: 'part_of',
-          createdAt: Date.now()
-        });
-        continue;
-      }
-
-      // Extract type definitions
-      const typeMatch = line.match(/^\s*(interface|type)\s+(\w+)/);
-      if (typeMatch) {
-        const typeName = typeMatch[2];
-        const typeNode: GraphNode = {
-          id: `type:${fileNode.id}:${typeName}`,
-          type: 'type',
-          name: typeName,
-          path: fileNode.path,
-          line: lineNum,
-          language: fileNode.language,
-          code: this.options.includeCode ? line : undefined,
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        };
-        this.addNode(typeNode);
-        
-        this.addEdge({
-          id: `edge:${fileNode.id}:${typeNode.id}`,
-          source: fileNode.id,
-          target: typeNode.id,
-          type: 'part_of',
-          createdAt: Date.now()
-        });
-        continue;
-      }
-
-      // Extract variable declarations
-      const varMatch = line.match(/^\s*(const|let|var)\s+(\w+)\s*[:=]/);
-      if (varMatch) {
-        const varName = varMatch[2];
-        const varNode: GraphNode = {
-          id: `variable:${fileNode.id}:${varName}`,
-          type: 'variable',
-          name: varName,
-          path: fileNode.path,
-          line: lineNum,
-          language: fileNode.language,
-          code: this.options.includeCode ? line : undefined,
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        };
-        this.addNode(varNode);
-        
-        this.addEdge({
-          id: `edge:${fileNode.id}:${varNode.id}`,
-          source: fileNode.id,
-          target: varNode.id,
-          type: 'part_of',
-          createdAt: Date.now()
-        });
+        if (ts.isPropertyDeclaration(m) && m.name && ts.isIdentifier(m.name)) {
+          const pn = m.name.text;
+          const pv: GraphNode = {
+            id: `variable:${classNode.id}:${pn}`,
+            type: 'variable',
+            name: pn,
+            path: fileNode.path,
+            line: this.tsLine(m, sf),
+            language: fileNode.language,
+            code: this.tsCode(m, sf),
+            metadata: { class: className },
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+          };
+          this.addNode(pv);
+          this.addEdge({ id: `edge:${classNode.id}:${pv.id}`, source: classNode.id, target: pv.id, type: 'part_of', createdAt: Date.now() });
+        }
       }
     }
+  }
+
+  private addHeritageRef(id: string, type: GraphNode['type'], name: string, fileNode: GraphNode, node: ts.Node, sf: ts.SourceFile): void {
+    if (this.nodes.has(id)) return;
+    this.addNode({
+      id, type, name,
+      path: fileNode.path,
+      line: this.tsLine(node, sf),
+      language: fileNode.language,
+      metadata: { external: true },
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    });
+    this.addEdge({ id: `edge:${fileNode.id}:${id}`, source: fileNode.id, target: id, type: 'part_of', createdAt: Date.now() });
+  }
+
+  private processTSFunction(node: ts.FunctionLikeDeclaration, fileNode: GraphNode, sf: ts.SourceFile): void {
+    const funcName = (node.name as ts.Identifier | undefined)?.text;
+    if (!funcName) return;
+
+    const fn: GraphNode = {
+      id: `function:${fileNode.id}:${funcName}`,
+      type: 'function',
+      name: funcName,
+      path: fileNode.path,
+      line: this.tsLine(node, sf),
+      language: fileNode.language,
+      code: this.tsCode(node, sf),
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    this.addNode(fn);
+    this.addEdge({ id: `edge:${fileNode.id}:${fn.id}`, source: fileNode.id, target: fn.id, type: 'part_of', createdAt: Date.now() });
+    this.extractCalls(node, fn, fileNode, sf);
+  }
+
+  private processTSVariables(node: ts.VariableStatement, fileNode: GraphNode, sf: ts.SourceFile): void {
+    for (const decl of node.declarationList.declarations) {
+      if (!decl.name || !ts.isIdentifier(decl.name)) continue;
+
+      const varName = decl.name.text;
+      const isFunction = decl.initializer && (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer));
+      const type: 'function' | 'variable' = isFunction ? 'function' : 'variable';
+      const prefix = isFunction ? 'function' : 'variable';
+      const line = this.tsLine(decl, sf);
+
+      const n: GraphNode = {
+        id: `${prefix}:${fileNode.id}:${varName}`,
+        type,
+        name: varName,
+        path: fileNode.path,
+        line,
+        language: fileNode.language,
+        code: this.tsCode(decl, sf),
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+      this.addNode(n);
+      this.addEdge({ id: `edge:${fileNode.id}:${n.id}`, source: fileNode.id, target: n.id, type: 'part_of', createdAt: Date.now() });
+
+      if (decl.initializer && ts.isFunctionLike(decl.initializer)) {
+        this.extractCalls(decl.initializer as ts.FunctionLikeDeclaration, n, fileNode, sf);
+      }
+    }
+  }
+
+  private processTSType(
+    node: ts.InterfaceDeclaration | ts.TypeAliasDeclaration,
+    fileNode: GraphNode,
+    sf: ts.SourceFile,
+    subType: 'interface' | 'alias'
+  ): void {
+    const typeName = node.name.text;
+    const tn: GraphNode = {
+      id: `type:${fileNode.id}:${typeName}`,
+      type: 'type',
+      name: typeName,
+      path: fileNode.path,
+      line: this.tsLine(node, sf),
+      language: fileNode.language,
+      code: this.tsCode(node, sf),
+      metadata: { tsType: subType },
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    this.addNode(tn);
+    this.addEdge({ id: `edge:${fileNode.id}:${tn.id}`, source: fileNode.id, target: tn.id, type: 'part_of', createdAt: Date.now() });
+
+    if (ts.isInterfaceDeclaration(node) && node.heritageClauses) {
+      for (const clause of node.heritageClauses) {
+        if (clause.token === ts.SyntaxKind.ExtendsKeyword) {
+          for (const t of clause.types) {
+            const p = t.expression.getText(sf);
+            this.addHeritageRef(`type:${fileNode.id}:${p}`, 'type', p, fileNode, node, sf);
+            this.addEdge({ id: `edge:${tn.id}:extends:${p}`, source: tn.id, target: `type:${fileNode.id}:${p}`, type: 'extends', createdAt: Date.now() });
+          }
+        }
+      }
+    }
+  }
+
+  private processTSEnum(node: ts.EnumDeclaration, fileNode: GraphNode, sf: ts.SourceFile): void {
+    const en: GraphNode = {
+      id: `type:${fileNode.id}:${node.name.text}`,
+      type: 'type',
+      name: node.name.text,
+      path: fileNode.path,
+      line: this.tsLine(node, sf),
+      language: fileNode.language,
+      code: this.tsCode(node, sf),
+      metadata: { tsType: 'enum' },
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    this.addNode(en);
+    this.addEdge({ id: `edge:${fileNode.id}:${en.id}`, source: fileNode.id, target: en.id, type: 'part_of', createdAt: Date.now() });
+  }
+
+  private processTSModule(node: ts.ModuleDeclaration, fileNode: GraphNode, sf: ts.SourceFile): void {
+    const mn: GraphNode = {
+      id: `concept:${fileNode.id}:${node.name.text}`,
+      type: 'concept',
+      name: node.name.text,
+      path: fileNode.path,
+      line: this.tsLine(node, sf),
+      language: fileNode.language,
+      code: this.tsCode(node, sf),
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    this.addNode(mn);
+    this.addEdge({ id: `edge:${fileNode.id}:${mn.id}`, source: fileNode.id, target: mn.id, type: 'part_of', createdAt: Date.now() });
+  }
+
+  private extractCalls(container: ts.Node, parentNode: GraphNode, fileNode: GraphNode, sf: ts.SourceFile): void {
+    ts.forEachChild(container, child => {
+      if (ts.isCallExpression(child)) {
+        const callee = child.expression;
+        let calledName: string | undefined;
+
+        if (ts.isIdentifier(callee)) {
+          calledName = callee.text;
+        } else if (ts.isPropertyAccessExpression(callee)) {
+          calledName = callee.name.text;
+        }
+
+        if (calledName) {
+          const targetId = `function:${fileNode.id}:${calledName}`;
+          const altTargetId = `variable:${fileNode.id}:${calledName}`;
+          const actualTarget = this.nodes.has(targetId) ? targetId :
+            this.nodes.has(altTargetId) ? altTargetId : undefined;
+          if (actualTarget) {
+            this.addEdge({
+              id: `edge:${parentNode.id}:calls:${calledName}`,
+              source: parentNode.id,
+              target: actualTarget,
+              type: 'calls',
+              metadata: { line: this.tsLine(child, sf) },
+              createdAt: Date.now()
+            });
+          }
+        }
+      }
+      this.extractCalls(child, parentNode, fileNode, sf);
+    });
   }
 
   /**
