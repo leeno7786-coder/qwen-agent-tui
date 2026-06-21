@@ -103,29 +103,23 @@ jobs:
       - name: Verify security configuration
         run: |
           echo "Verifying security configuration..."
-          # Check that security is enabled by default
-          if grep -q 'enabled: true' src/security/index.ts; then
-            echo "✅ Security enabled by default"
-          else
-            echo "❌ Security not enabled by default"
-            exit 1
-          fi
+          python3 - <<'PY'
+          from pathlib import Path
           
-          # Check that dangerous commands are blocked
-          if grep -Fq '/rm\s+-rf/i' src/security/index.ts; then
-            echo "✅ Dangerous commands blocked"
-          else
-            echo "❌ Dangerous commands not blocked"
-            exit 1
-          fi
+          source = Path("src/security/index.ts").read_text()
+          checks = [
+              ("Security enabled by default", "enabled: true"),
+              ("Dangerous commands blocked", "/rm\\s+-rf/i"),
+              ("Sensitive paths blocked", ".env"),
+          ]
           
-          # Check that sensitive paths are blocked
-          if grep -q "\.env" src/security/index.ts; then
-            echo "✅ Sensitive paths blocked"
-          else
-            echo "❌ Sensitive paths not blocked"
-            exit 1
-          fi
+          for success_message, needle in checks:
+              if needle in source:
+                  print(f"✅ {success_message}")
+              else:
+                  print(f"❌ {success_message}")
+                  raise SystemExit(1)
+          PY
         
       - name: Verify git configuration
         run: |
