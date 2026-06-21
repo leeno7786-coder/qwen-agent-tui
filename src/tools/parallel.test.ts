@@ -55,10 +55,10 @@ describe('Parallel Tool Execution', () => {
   describe('groupToolsForParallelExecution', () => {
     it('should separate parallel and sequential tools', () => {
       const toolCalls = [
-        { name: 'read_file', arguments: JSON.stringify({ path: 'a.txt' }) },
-        { name: 'write_file', arguments: JSON.stringify({ path: 'b.txt', content: 'test' }) },
-        { name: 'list_dir', arguments: JSON.stringify({ path: '.' }) },
-        { name: 'execute_command', arguments: JSON.stringify({ command: 'ls' }) },
+        { name: 'read_file', arguments: JSON.stringify({ path: 'a.txt' }), id: 'call_1' },
+        { name: 'write_file', arguments: JSON.stringify({ path: 'b.txt', content: 'test' }), id: 'call_2' },
+        { name: 'list_dir', arguments: JSON.stringify({ path: '.' }), id: 'call_3' },
+        { name: 'execute_command', arguments: JSON.stringify({ command: 'ls' }), id: 'call_4' },
       ];
 
       const result = groupToolsForParallelExecution(toolCalls);
@@ -73,16 +73,19 @@ describe('Parallel Tool Execution', () => {
 
     it('should preserve original order in indices', () => {
       const toolCalls = [
-        { name: 'read_file', arguments: JSON.stringify({ path: 'a.txt' }) },
-        { name: 'write_file', arguments: JSON.stringify({ path: 'b.txt', content: 'test' }) },
-        { name: 'list_dir', arguments: JSON.stringify({ path: '.' }) },
+        { name: 'read_file', arguments: JSON.stringify({ path: 'a.txt' }), id: 'call_1' },
+        { name: 'write_file', arguments: JSON.stringify({ path: 'b.txt', content: 'test' }), id: 'call_2' },
+        { name: 'list_dir', arguments: JSON.stringify({ path: '.' }), id: 'call_3' },
       ];
 
       const result = groupToolsForParallelExecution(toolCalls);
 
       expect(result.parallel[0].index).toBe(0);
+      expect(result.parallel[0].id).toBe('call_1');
       expect(result.sequential[0].index).toBe(1);
+      expect(result.sequential[0].id).toBe('call_2');
       expect(result.parallel[1].index).toBe(2);
+      expect(result.parallel[1].id).toBe('call_3');
     });
 
     it('should handle empty input', () => {
@@ -93,9 +96,9 @@ describe('Parallel Tool Execution', () => {
 
     it('should handle all parallel tools', () => {
       const toolCalls = [
-        { name: 'read_file', arguments: JSON.stringify({ path: 'a.txt' }) },
-        { name: 'list_dir', arguments: JSON.stringify({ path: '.' }) },
-        { name: 'grep_search', arguments: JSON.stringify({ query: 'test' }) },
+        { name: 'read_file', arguments: JSON.stringify({ path: 'a.txt' }), id: 'call_1' },
+        { name: 'list_dir', arguments: JSON.stringify({ path: '.' }), id: 'call_2' },
+        { name: 'grep_search', arguments: JSON.stringify({ query: 'test' }), id: 'call_3' },
       ];
 
       const result = groupToolsForParallelExecution(toolCalls);
@@ -105,9 +108,9 @@ describe('Parallel Tool Execution', () => {
 
     it('should handle all sequential tools', () => {
       const toolCalls = [
-        { name: 'write_file', arguments: JSON.stringify({ path: 'a.txt', content: 'test' }) },
-        { name: 'execute_command', arguments: JSON.stringify({ command: 'ls' }) },
-        { name: 'git_commit', arguments: JSON.stringify({ message: 'test' }) },
+        { name: 'write_file', arguments: JSON.stringify({ path: 'a.txt', content: 'test' }), id: 'call_1' },
+        { name: 'execute_command', arguments: JSON.stringify({ command: 'ls' }), id: 'call_2' },
+        { name: 'git_commit', arguments: JSON.stringify({ message: 'test' }), id: 'call_3' },
       ];
 
       const result = groupToolsForParallelExecution(toolCalls);

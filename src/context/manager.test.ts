@@ -17,6 +17,7 @@ describe('ContextManager', () => {
       workspace: '/test/workspace',
       maxIterations: 10,
       temperature: 0.2,
+      apiKey: 'test-key',
     };
     contextManager = createContextManager(cfg);
   });

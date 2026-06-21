@@ -332,24 +332,6 @@ export class ToolCacheManager {
   }
 
   /**
-   * Invalidate cache entries that match a pattern.
-   * Useful for invalidating cache when files change.
-   */
-  invalidateByPattern(pattern: RegExp | string): number {
-    let count = 0;
-    const regex = typeof pattern === 'string' ? new RegExp(pattern) : pattern;
-
-    for (const [key, entry] of this.cache) {
-      // We can't easily reverse the hash, so we'll do a full clear for now
-      // In a more advanced implementation, we could store metadata with entries
-    }
-
-    // For now, clear all cache when invalidating
-    this.cache.clear();
-    return count;
-  }
-
-  /**
    * Invalidate cache entries for a specific tool.
    */
   invalidateTool(toolName: string): number {

@@ -1,4 +1,5 @@
 import { exec, execSync } from "child_process";
+import * as MemoryGraphTools from "../graph/tools";
 import {
   existsSync,
   mkdirSync,
@@ -1226,6 +1227,76 @@ export const tools: Tool[] = [
     return JSON.stringify({ ok: true, action: args.action, text: args.text, id: args.id });
   },
 },
+
+// Memory Graph
+{
+  name: "build_memory_graph",
+  description: "Build a memory graph from the codebase for better understanding and querying of code structure. Use when you need to understand the codebase architecture or find related code.",
+  parameters: { type: "object", properties: {}, required: [] },
+  execute: () => JSON.stringify({ ok: false, error: "Use executeAsync for this tool" }),
+  executeAsync: async (args, ws) => JSON.stringify(await MemoryGraphTools.build_memory_graph({ workspace: ws })),
+},
+{
+  name: "query_memory_graph",
+  description: "Query the memory graph for nodes, edges, and paths. Supported query types: 'node' (by type/name/path), 'edge' (by type/from/to), 'path' (shortest path between nodes), 'pattern' (regex search across all data), 'semantic' (related nodes).",
+  parameters: { type: "object", properties: { query: { type: "object", description: "Query object with type ('node'|'edge'|'path'|'pattern'|'semantic') and query parameters" } }, required: ["query"] },
+  execute: () => JSON.stringify({ ok: false, error: "Use executeAsync for this tool" }),
+  executeAsync: async (args, ws) => {
+    try {
+      await MemoryGraphTools.build_memory_graph({ workspace: ws });
+      return JSON.stringify(await MemoryGraphTools.query_memory_graph({ workspace: ws, query: args.query }));
+    } catch (e: any) { return JSON.stringify({ error: e.message }); }
+  },
+},
+{
+  name: "get_graph_stats",
+  description: "Get statistics about the memory graph (node counts by type and language).",
+  parameters: { type: "object", properties: {}, required: [] },
+  execute: () => JSON.stringify({ ok: false, error: "Use executeAsync for this tool" }),
+  executeAsync: async (args, ws) => JSON.stringify(await MemoryGraphTools.get_graph_stats({ workspace: ws })),
+},
+{
+  name: "search_nodes_by_type",
+  description: "Search for nodes in the memory graph by type (file, function, class, type, variable, import, export, interface, enum, module).",
+  parameters: { type: "object", properties: { type: { type: "string", description: "Node type to search for" }, limit: { type: "number", description: "Max results" } }, required: ["type"] },
+  execute: () => JSON.stringify({ ok: false, error: "Use executeAsync for this tool" }),
+  executeAsync: async (args, ws) => JSON.stringify(await MemoryGraphTools.search_nodes_by_type({ workspace: ws, type: args.type, limit: args.limit })),
+},
+{
+  name: "search_nodes_by_name",
+  description: "Search for nodes in the memory graph by name (function name, class name, variable name, etc.).",
+  parameters: { type: "object", properties: { name: { type: "string", description: "Name to search for" }, limit: { type: "number", description: "Max results" } }, required: ["name"] },
+  execute: () => JSON.stringify({ ok: false, error: "Use executeAsync for this tool" }),
+  executeAsync: async (args, ws) => JSON.stringify(await MemoryGraphTools.search_nodes_by_name({ workspace: ws, name: args.name, limit: args.limit })),
+},
+{
+  name: "search_nodes_by_path",
+  description: "Search for nodes in the memory graph by file path.",
+  parameters: { type: "object", properties: { path: { type: "string", description: "File path to search for" }, limit: { type: "number", description: "Max results" } }, required: ["path"] },
+  execute: () => JSON.stringify({ ok: false, error: "Use executeAsync for this tool" }),
+  executeAsync: async (args, ws) => JSON.stringify(await MemoryGraphTools.search_nodes_by_path({ workspace: ws, path: args.path, limit: args.limit })),
+},
+{
+  name: "find_dependencies",
+  description: "Find dependencies of a node in the memory graph by node ID.",
+  parameters: { type: "object", properties: { nodeId: { type: "string", description: "Node ID to find dependencies for" }, maxDepth: { type: "number", description: "Max depth to traverse" } }, required: ["nodeId"] },
+  execute: () => JSON.stringify({ ok: false, error: "Use executeAsync for this tool" }),
+  executeAsync: async (args, ws) => JSON.stringify(await MemoryGraphTools.find_dependencies({ workspace: ws, nodeId: args.nodeId, maxDepth: args.maxDepth })),
+},
+{
+  name: "find_path",
+  description: "Find the shortest path between two nodes in the memory graph.",
+  parameters: { type: "object", properties: { from: { type: "string", description: "Starting node ID" }, to: { type: "string", description: "Target node ID" }, maxDepth: { type: "number", description: "Max search depth" } }, required: ["from", "to"] },
+  execute: () => JSON.stringify({ ok: false, error: "Use executeAsync for this tool" }),
+  executeAsync: async (args, ws) => JSON.stringify(await MemoryGraphTools.find_path({ workspace: ws, from: args.from, to: args.to, maxDepth: args.maxDepth })),
+},
+{
+  name: "pattern_search",
+  description: "Search the memory graph using a regex pattern across all node data (name, path, type, code).",
+  parameters: { type: "object", properties: { pattern: { type: "string", description: "Regex pattern to search" }, limit: { type: "number", description: "Max results" } }, required: ["pattern"] },
+  execute: () => JSON.stringify({ ok: false, error: "Use executeAsync for this tool" }),
+  executeAsync: async (args, ws) => JSON.stringify(await MemoryGraphTools.pattern_search({ workspace: ws, pattern: args.pattern, limit: args.limit })),
+},
 ];
 
 // Tools excluded for ≤8B models — fewer choices, less wrong-tool drift
@@ -1327,13 +1398,13 @@ export function mustRunSequentially(toolName: string): boolean {
  * Group tool calls into parallel and sequential batches.
  */
 export function groupToolsForParallelExecution(
-  toolCalls: Array<{ name: string; arguments: string }>
+  toolCalls: Array<{ name: string; arguments: string; id: string }>
 ): {
-  parallel: Array<{ name: string; arguments: string; index: number }>;
-  sequential: Array<{ name: string; arguments: string; index: number }>;
+  parallel: Array<{ name: string; arguments: string; index: number; id: string }>;
+  sequential: Array<{ name: string; arguments: string; index: number; id: string }>;
 } {
-  const parallel: Array<{ name: string; arguments: string; index: number }> = [];
-  const sequential: Array<{ name: string; arguments: string; index: number }> = [];
+  const parallel: Array<{ name: string; arguments: string; index: number; id: string }> = [];
+  const sequential: Array<{ name: string; arguments: string; index: number; id: string }> = [];
 
   toolCalls.forEach((tc, index) => {
     if (canRunInParallel(tc.name)) {

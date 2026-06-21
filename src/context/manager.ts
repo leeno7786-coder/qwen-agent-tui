@@ -215,13 +215,13 @@ export class ContextManager {
         total += countTokens(msg.content, this.modelId);
       }
       // Count tokens in tool calls
-      if (msg.tool_calls) {
-        for (const tc of msg.tool_calls) {
-          if (tc.function?.name) {
-            total += countTokens(tc.function.name, this.modelId);
+      if (msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          if (tc.name) {
+            total += countTokens(tc.name, this.modelId);
           }
-          if (tc.function?.arguments) {
-            total += countTokens(tc.function.arguments, this.modelId);
+          if (tc.arguments) {
+            total += countTokens(tc.arguments, this.modelId);
           }
         }
       }
@@ -371,7 +371,7 @@ export class ContextManager {
     }
 
     if (summaries.length === 0) {
-      return undefined;
+      return '';
     }
 
     return `[Conversation history compacted - ${removedMessages.length} messages removed. Summary: ${summaries.slice(0, 3).join(' | ')}]`;
