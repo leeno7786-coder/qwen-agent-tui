@@ -133,6 +133,8 @@ describe("tools", () => {
 
   it("git_diff returns differences in repo", () => {
     execSync("git init", { cwd: ws, stdio: "ignore" });
+    execSync("git config user.email \"test@example.com\"", { cwd: ws, stdio: "ignore" });
+    execSync("git config user.name \"Test User\"", { cwd: ws, stdio: "ignore" });
     writeFileSync(join(ws, "a.txt"), "hello", "utf-8");
     execSync("git add a.txt && git commit -m \"initial\"", { cwd: ws, stdio: "ignore" });
     writeFileSync(join(ws, "a.txt"), "hello modified", "utf-8");

@@ -103,29 +103,33 @@ jobs:
       - name: Verify security configuration
         run: |
           echo "Verifying security configuration..."
-          # Check that security is enabled by default
-          if grep -q '"securityEnabled": true' src/security/index.ts; then
-            echo "✅ Security enabled by default"
-          else
-            echo "❌ Security not enabled by default"
-            exit 1
-          fi
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
           
-          # Check that dangerous commands are blocked
-          if grep -q "rm -rf" src/security/index.ts; then
-            echo "✅ Dangerous commands blocked"
-          else
-            echo "❌ Dangerous commands not blocked"
-            exit 1
-          fi
+          source = Path("src/security/index.ts").read_text()
+          checks = [
+              (
+                  "Security enabled by default",
+                  r"export const DEFAULT_SECURITY_CONFIG: SecurityConfig = \{[\s\S]*?\benabled:\s*true,",
+              ),
+              (
+                  "Dangerous commands blocked",
+                  rf"const DANGEROUS_COMMAND_PATTERNS: RegExp\[\] = \[[\s\S]*?{re.escape('/rm\\s+-rf/i')}",
+              ),
+              (
+                  "Sensitive paths blocked",
+                  rf"blockedPaths:\s*\[[\s\S]*?['\"]{re.escape('**/.env')}['\"]",
+              ),
+          ]
           
-          # Check that sensitive paths are blocked
-          if grep -q "\.env" src/security/index.ts; then
-            echo "✅ Sensitive paths blocked"
-          else
-            echo "❌ Sensitive paths not blocked"
-            exit 1
-          fi
+          for success_message, pattern in checks:
+              if re.search(pattern, source):
+                  print(f"✅ {success_message}")
+              else:
+                  print(f"❌ {success_message}")
+                  raise SystemExit(1)
+          PY
         
       - name: Verify git configuration
         run: |
