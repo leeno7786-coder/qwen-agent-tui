@@ -105,16 +105,26 @@ jobs:
           echo "Verifying security configuration..."
           python3 - <<'PY'
           from pathlib import Path
+          import re
           
           source = Path("src/security/index.ts").read_text()
           checks = [
-              ("Security enabled by default", "enabled: true"),
-              ("Dangerous commands blocked", "/rm\\s+-rf/i"),
-              ("Sensitive paths blocked", ".env"),
+              (
+                  "Security enabled by default",
+                  r"export const DEFAULT_SECURITY_CONFIG: SecurityConfig = \{[\s\S]*?\benabled:\s*true,",
+              ),
+              (
+                  "Dangerous commands blocked",
+                  r"const DANGEROUS_COMMAND_PATTERNS: RegExp\[\] = \[[\s\S]*?/rm\\s\+-rf/i",
+              ),
+              (
+                  "Sensitive paths blocked",
+                  r"blockedPaths:\s*\[[\s\S]*?['\"]\*\*/\.env['\"]",
+              ),
           ]
           
-          for success_message, needle in checks:
-              if needle in source:
+          for success_message, pattern in checks:
+              if re.search(pattern, source):
                   print(f"✅ {success_message}")
               else:
                   print(f"❌ {success_message}")
