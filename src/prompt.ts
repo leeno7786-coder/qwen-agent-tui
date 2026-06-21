@@ -112,6 +112,8 @@ export function appendPromptExtras(
     system += `\n\n${ctx.platformNote}`;
   }
 
+  system += "\n\n## Memory Graph\nYou can build a memory graph of the codebase (files, functions, classes, imports, calls) to understand architecture and find related code. Ask the user before building — do not build it automatically.";
+
   system += "\n\n## Todos\nBreak multi-step requests into manage_todos items. Mark complete via the tool — do not skip it.";
 
   return system;
