@@ -570,23 +570,27 @@ export async function chat(
             undefined,
           tool_calls: msg?.tool_calls?.map((tc) => {
             const func = tc as ChatCompletionMessageFunctionToolCall;
-            return {
-              id: func.id || `call_${Math.random().toString(36).slice(2, 10)}`,
-              type: "function" as const,
-              function: {
-                name: func.function.name,
-                arguments: func.function.arguments,
-              },
-            };
-          }),
-        },
-        usage: completion.usage
-          ? {
-            input_tokens: completion.usage.prompt_tokens,
-            output_tokens: completion.usage.completion_tokens,
-          }
-          : undefined,
-      };
+               // Validate required fields; generate missing id, skip calls with no name
+               if (!func.function?.name) {
+                 return null;
+               }
+               return {
+                 id: func.id || `call_${Math.random().toString(36).slice(2, 10)}`,
+                 type: "function" as const,
+                 function: {
+                   name: func.function.name,
+                   arguments: func.function.arguments || "{}",
+                 },
+               };
+             }).filter(Boolean),
+           },
+           usage: completion.usage
+             ? {
+               input_tokens: completion.usage.prompt_tokens,
+               output_tokens: completion.usage.completion_tokens,
+             }
+             : undefined,
+         };
     } catch (err: any) {
       if (err.name === 'AbortError' || signal?.aborted) {
         throw err;

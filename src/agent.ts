@@ -1,9 +1,10 @@
-import { createClient, chat, streamChat } from "./llm";
+import { createClient, chat, streamChat, isLocalProvider } from "./llm";
 import type { ChatMessage } from "./llm";
 import { tools, toOpenAI, type ToolExecutionHooks, ToolCacheManager, createToolCacheManager, groupToolsForParallelExecution, canRunInParallel } from "./tools";
 import type { SubAgentDispatchProgress } from "./subagent";
 import { detectContext } from "./context";
-import { loadSkills, matchSkillTriggers, getSkill } from "./skills";
+import { SkillManager } from "./skill-manager";
+import { loadSkills } from "./skills";
 import { buildSystemPrompt } from "./prompt";
 import {
   enrichConfigWithRuntime,
@@ -48,10 +49,10 @@ export class AgentCore {
   public maxRounds: number = 30;
   /** Whether the current model is a small/quantized model (stored from init). */
   private _smallModel: boolean = false;
-  /** Skills currently loaded into the agent context. */
-  public activeSkills: Map<string, Skill> = new Map();
-  /** Set of skill names previously auto-loaded to avoid re-triggering. */
-  private _autoLoadedSkills: Set<string> = new Set();
+  /** Public accessor for small model flag (used by TUI skill operations). */
+  get isSmallModel(): boolean { return this._smallModel; }
+  /** Skills manager — load, unload, and sync skill prompts. */
+  public skillManager: SkillManager = new SkillManager();
   /** Tool execution cache manager. */
   public toolCache: ToolCacheManager;
   /** Context window manager. */
@@ -121,6 +122,9 @@ export class AgentCore {
       this.securityManager.setWorkspace(this.cfg.workspace);
     }
 
+    // Always preserve security manager reference on config
+    this.cfg.securityManager = this.securityManager;
+
     // Update security config if relevant options changed
     if (newCfg.securityEnabled !== undefined ||
         newCfg.securityValidateCommands !== undefined ||
@@ -179,7 +183,10 @@ export class AgentCore {
     
     // Recreate cache manager with new config
     this.toolCache = createToolCacheManager(this.cfg);
-    
+
+    // Preserve security manager across config reload
+    this.cfg.securityManager = this.securityManager;
+
     await this.applyRuntimeProfile();
   }
 
@@ -192,11 +199,12 @@ export class AgentCore {
 
     const ctx = detectContext(this.cfg.workspace);
     const allSkills = loadSkills();
+    this.skillManager = new SkillManager();
 
     // Populate activeSkills with enabled skills (always-active from config)
     for (const [name, skill] of allSkills) {
       if (skill.enabled === true || this.cfg.systemPrompt?.includes(`skill:${name}`)) {
-        this.activeSkills.set(name, skill);
+        this.skillManager.activeSkills.set(name, skill);
       }
     }
 
@@ -220,13 +228,21 @@ export class AgentCore {
       system += `\n\n## Runtime\n${ctxK}k context loaded${param}.`;
     }
     if (subAgentAvailable(this.cfg)) {
-      system += `\nSub-agents: OpenRouter \`${this.cfg.subAgentModel}\` — dispatch_subagents (you set prompts, sequential) or explore_subagent (one task).`;
+      const subBase = this.cfg.subAgentBaseURL ?? this.cfg.baseURL;
+      const providerName = subBase.toLowerCase().includes("mistral.ai")
+        ? "Mistral"
+        : subBase.toLowerCase().includes("openrouter.ai")
+          ? "OpenRouter"
+          : isLocalProvider(subBase)
+            ? "Local"
+            : "Cloud";
+      system += `\nSub-agents: ${providerName} \`${this.cfg.subAgentModel}\` — dispatch_subagents (you set prompts, sequential) or explore_subagent (one task).`;
     }
     this.messages = [
       { id: "system-base", role: "system", content: system, timestamp: now() },
     ];
     this.syncTodoMessage();
-    this._syncSkillMessages();
+    this.skillManager.syncSkillMessages(this.messages, this._smallModel);
 
     // Debug: log model detection info
     if (process.env.QWEN_DEBUG_LLM) {
@@ -247,19 +263,11 @@ export class AgentCore {
   async run(userText: string, signal?: AbortSignal) {
     this.setState("thinking");
 
-    // Increment round counter and check if max rounds reached
     this.roundCounter++;
-    if (this.roundCounter > this.maxRounds) {
-      this.addAssistantMessage(this._smallModel
-        ? `Agent reached max rounds (${this.maxRounds}). Stopping.`
-        : `⚠️ Agent has reached the maximum number of rounds (${this.maxRounds}). Stopping to prevent infinite loops.`);
-      this.setState("idle");
-      return;
-    }
 
     // Auto-load skills matching user input triggers
     if (!userText.trim().startsWith("/")) {
-      const autoLoaded = this.autoLoadMatchingSkills(userText);
+      const autoLoaded = this.skillManager.autoLoad(userText, this.messages, this._smallModel, this.onUpdate);
       if (autoLoaded.length > 0) {
         const names = autoLoaded.map(s => s.name).join(", ");
         this.addAssistantMessage(`Auto-loaded skills: ${names} — these are now active in context.`);
@@ -281,56 +289,58 @@ export class AgentCore {
       return;
     }
 
-    // Handle skill load commands (/skill:name, /skill-load name)
+    // Handle skill commands
     const trimmed = userText.trim();
+    const sm = this.skillManager;
+
     if (trimmed.startsWith("/skill:")) {
       const skillName = trimmed.replace(/^\/skill:/, "").split(/\s+/)[0];
-      const skill = getSkill(skillName);
-      if (skill && this.loadSkill(skill)) {
+      const skill = SkillManager.getByName(skillName);
+      if (skill && sm.load(skill, this.messages, this._smallModel, this.onUpdate)) {
         this.addAssistantMessage(`**Skill Loaded: ${skill.name}**\n\n${skill.description}\n\nHow would you like to use this skill?`);
       } else if (skill) {
         this.addAssistantMessage(`Skill "${skillName}" is already loaded.`);
       } else {
-        this.addAssistantMessage(`Skill "${skillName}" not found. Available skills: ${Array.from(loadSkills().keys()).join(", ")}`);
+        this.addAssistantMessage(`Skill "${skillName}" not found.`);
       }
       return;
     }
 
     if (trimmed.startsWith("/skill-load ")) {
       const skillName = trimmed.replace("/skill-load ", "").trim().split(/\s+/)[0];
-      const skill = getSkill(skillName);
-      if (skill && this.loadSkill(skill)) {
+      const skill = SkillManager.getByName(skillName);
+      if (skill && sm.load(skill, this.messages, this._smallModel, this.onUpdate)) {
         this.addAssistantMessage(`**Skill Loaded: ${skill.name}**\n\n${skill.description}\n\nHow would you like to use this skill?`);
       } else if (skill) {
         this.addAssistantMessage(`Skill "${skillName}" is already loaded.`);
       } else {
-        this.addAssistantMessage(`Skill "${skillName}" not found. Available skills: ${Array.from(loadSkills().keys()).join(", ")}`);
+        this.addAssistantMessage(`Skill "${skillName}" not found.`);
       }
       return;
     }
 
-    // Handle skill unload command (/unload name)
     if (trimmed.startsWith("/unload ")) {
       const name = trimmed.replace("/unload ", "").trim().split(/\s+/)[0];
-      const unloaded = this.unloadSkill(name) || this.unloadSkill(`skill:${name}`);
+      const unloaded = sm.unload(name, this.messages, this._smallModel, this.onUpdate) ||
+        sm.unload(`skill:${name}`, this.messages, this._smallModel, this.onUpdate);
       this.addAssistantMessage(unloaded ? `Skill "${name}" unloaded.` : `Skill "${name}" not found in active skills.`);
       return;
     }
 
-    // Handle /skills (list available skills)
-    if (trimmed === "/skills" || trimmed === "/skill" || trimmed === "/skills ") {
-      const all = loadSkills();
-      const active = this.getActiveSkillNames();
+    if (trimmed === "/skills" || trimmed === "/skill") {
+      const all = sm.getAllWithStatus();
       const lines = ["## Available Skills", ""];
-      for (const [name, s] of all) {
-        const status = active.includes(name) ? " (active)" : "";
-        lines.push(`- /skill:${name} — ${s.description}${status}`);
+      for (const s of all) {
+        lines.push(`- /skill:${s.name} — ${s.description}${s.active ? " (active)" : ""}`);
       }
       this.addAssistantMessage(lines.join("\n"));
       return;
     }
 
     this.addUserMessage(userText);
+
+    let reasoningOnlyStreak = 0;
+    const MAX_REASONING_ONLY = 3;
 
     for (let i = 0; i < this.cfg.maxIterations; i++) {
       if (signal?.aborted) {
@@ -421,6 +431,7 @@ export class AgentCore {
 
           if (hasToolCalls && toolCallBuffers.length > 0) {
             assistantMsg.toolCalls = toolCallBuffers;
+            reasoningOnlyStreak = 0;
           }
 
           // Some models (notably Nemotron) may emit tool calls with empty content in streaming mode.
@@ -450,11 +461,22 @@ export class AgentCore {
 
           // Reasoning-only: model was just thinking, loop back for actual content
           if (!assistantMsg.toolCalls && assistantMsg.content.trim() === "" && assistantMsg.reasoningContent) {
+            reasoningOnlyStreak++;
+            if (reasoningOnlyStreak >= MAX_REASONING_ONLY) {
+              this.addAssistantMessage(
+                `Model produced ${MAX_REASONING_ONLY} reasoning-only responses without tool calls. ` +
+                `Try rephrasing your request or switching to a model that supports tool calling.`
+              );
+              this.setState("error");
+              this.onUpdate?.();
+              return;
+            }
             continue;
           }
 
           // No tool calls = we're done (has real content, this is the final answer)
           if (!assistantMsg.toolCalls || assistantMsg.toolCalls.length === 0) {
+            reasoningOnlyStreak = 0;
             this.setState("idle");
             this.onUpdate?.();
             return;
@@ -463,7 +485,12 @@ export class AgentCore {
           const status = err?.status || err?.status_code;
           const msg = err?.message || String(err);
           if (status === 401) {
-            assistantMsg.content = `Authentication failed: ${msg}\n\nCheck your API key.`;
+            const envVar = this.cfg.baseURL?.includes("mistral.ai")
+              ? "MISTRAL_API_KEY"
+              : this.cfg.baseURL?.includes("openrouter.ai")
+                ? "OPENROUTER_API_KEY"
+                : "your API key";
+            assistantMsg.content = `${msg}\n\nMake sure ${envVar} is set correctly in your environment or use /connect to update it.`;
           } else {
             assistantMsg.content = `API error (${status || "unknown"}): ${msg}`;
           }
@@ -490,8 +517,13 @@ export class AgentCore {
           const status = err?.status || err?.status_code;
           const msg = err?.message || String(err);
           if (status === 401) {
+            const envVar = this.cfg.baseURL?.includes("mistral.ai")
+              ? "MISTRAL_API_KEY"
+              : this.cfg.baseURL?.includes("openrouter.ai")
+                ? "OPENROUTER_API_KEY"
+                : "your API key";
             this.addAssistantMessage(
-              `Authentication failed: ${msg}\n\nCheck your API key.`
+              `${msg}\n\nMake sure ${envVar} is set correctly in your environment or use /connect to update it.`
             );
           } else {
             this.addAssistantMessage(`API error (${status || "unknown"}): ${msg}`);
@@ -521,6 +553,16 @@ export class AgentCore {
          if (!msg.tool_calls || msg.tool_calls.length === 0) {
           // If reasoning-only (no content, no tools), loop back instead of stopping
           if (!msg.content && msg.reasoning_content) {
+            reasoningOnlyStreak++;
+            if (reasoningOnlyStreak >= MAX_REASONING_ONLY) {
+              this.addAssistantMessage(
+                `Model produced ${MAX_REASONING_ONLY} reasoning-only responses without tool calls. ` +
+                `Try rephrasing your request or switching to a model that supports tool calling.`
+              );
+              this.setState("error");
+              this.onUpdate?.();
+              return;
+            }
             continue;
           }
           this.setState("idle");
@@ -613,6 +655,9 @@ export class AgentCore {
         
         this.addToolMessage(output, tc.id);
         
+        // Handle special tool results even for cached responses
+        this.handleSpecialToolResults(tc.name, output, tc.id);
+        
         const finalOutput = output;
         this.onToolResult?.({
           toolCallId: tc.id,
@@ -655,10 +700,16 @@ export class AgentCore {
       } else {
         output = tool
           ? tool.execute(args, this.cfg.workspace, configWithSecurity)
-          : JSON.stringify({ ok: false, error: "Unknown tool" });
+          : JSON.stringify({ ok: false, error: `Unknown tool: ${tc.name}`, tool: tc.name });
       }
     } catch (e: any) {
-      output = JSON.stringify({ ok: false, error: e.message });
+      const errMsg = e?.message || String(e);
+      output = JSON.stringify({
+        ok: false,
+        error: errMsg,
+        tool: tc.name,
+        ...(process.env.QWEN_DEBUG_LLM ? { stack: e?.stack } : {}),
+      });
     }
     const duration = performance.now() - start;
     
@@ -773,10 +824,12 @@ export class AgentCore {
       if (result.status === 'fulfilled') {
         results.push(result.value);
       } else {
-        // Handle rejected promises
+        // Handle rejected promises — use the original index from parallelTools
+        // to maintain correct ordering (index: -1 would sort to the front)
+        const originalTc = parallelTools[settledResults.indexOf(result)];
         results.push({
-          index: -1,
-          id: '',
+          index: originalTc?.index ?? settledResults.indexOf(result),
+          id: originalTc?.id ?? '',
           output: JSON.stringify({ ok: false, error: result.reason?.message || 'Unknown error' }),
           duration: 0,
           wasCached: false
@@ -1071,16 +1124,6 @@ export class AgentCore {
     return false;
   }
 
-  /**
-   * Ensure there's enough context space for the next message.
-   * Compacts if necessary.
-   */
-  private ensureContextSpace(message: Message): void {
-    if (!this.contextManager.canFitMessage(message)) {
-      this.checkAndCompactContext();
-    }
-  }
-
   /** Update agent state and notify listeners. */
   private setState(s: AgentState) {
     this.state = s;
@@ -1111,70 +1154,6 @@ export class AgentCore {
     this.onUpdate?.();
   }
 
-  /** Load a skill into the active context. Returns true if loaded. */
-  loadSkill(skill: Skill): boolean {
-    if (this.activeSkills.has(skill.name)) return false;
-    this.activeSkills.set(skill.name, skill);
-
-    this._autoLoadedSkills.add(skill.name);
-    this._syncSkillMessages();
-    this.onUpdate?.();
-    return true;
-  }
-
-  /** Unload a skill from the active context. Returns true if unloaded. */
-  unloadSkill(name: string): boolean {
-    if (!this.activeSkills.has(name)) return false;
-    this.activeSkills.delete(name);
-
-    this._autoLoadedSkills.delete(name);
-    this._syncSkillMessages();
-    this.onUpdate?.();
-    return true;
-  }
-
-  /** Rebuild the system-base message to include active skill prompts. */
-  private _syncSkillMessages(): void {
-    const base = this.messages.find((m) => m.id === "system-base");
-    if (!base) return;
-
-    const cleanBase = base.content.replace(/\n\n## Active skill[\s\S]*?(?=\n\n##|$)/g, "").trimEnd();
-
-    const skillCharCap = this._smallModel ? 6000 : 3500;
-    let skillSection = "";
-    for (const [name, skill] of this.activeSkills) {
-      let prompt = (skill.prompt || "").replace(/\bbash\b/g, "execute_command");
-      if (prompt.length > skillCharCap) {
-        prompt =
-          prompt.slice(0, skillCharCap) +
-          `\n\n[Skill truncated to ${skillCharCap} chars for context efficiency.]`;
-      }
-      skillSection += `\n\n## Active skill: ${name}\n${prompt}`;
-    }
-
-    base.content = cleanBase + skillSection;
-  }
-
-  /** Get list of actively loaded skill names. */
-  getActiveSkillNames(): string[] {
-    return Array.from(this.activeSkills.keys());
-  }
-
-  /** Auto-load skills matching user input triggers. Called before processing input. */
-  autoLoadMatchingSkills(userText: string): Skill[] {
-    const allSkills = loadSkills();
-    const matched = matchSkillTriggers(userText, allSkills);
-
-    const newlyLoaded: Skill[] = [];
-    for (const skill of matched) {
-      if (this._autoLoadedSkills.has(skill.name)) continue;
-      if (this.activeSkills.has(skill.name)) continue;
-      this.loadSkill(skill);
-      newlyLoaded.push(skill);
-    }
-
-    return newlyLoaded;
-  }
 }
 
 function rnd() {

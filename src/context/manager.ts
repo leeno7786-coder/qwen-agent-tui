@@ -63,6 +63,9 @@ export class ContextManager {
   private runtime?: { contextLength?: number; maxContextLength?: number };
   private compactionCount: number = 0;
   private stats: ContextStats | null = null;
+  // Track token counts per message index for O(1) add/remove instead of O(n) recompute
+  private messageTokenCache: Map<string, number> = new Map();
+  private cachedTotalTokens: number = 0;
 
   constructor(
     cfg: Config,
@@ -160,7 +163,10 @@ export class ContextManager {
    * Add a message to the context.
    */
   addMessage(message: Message): void {
+    const tokens = this.countSingleMessageTokens(message);
     this.messages.push(message);
+    this.messageTokenCache.set(message.id, tokens);
+    this.cachedTotalTokens += tokens;
     this.stats = null; // Invalidate cached stats
   }
 
@@ -205,28 +211,42 @@ export class ContextManager {
   }
 
   /**
-   * Count tokens in messages.
+   * Count tokens for a single message (uncached — used internally).
+   */
+  private countSingleMessageTokens(msg: Message): number {
+    let total = 0;
+    if (msg.content) {
+      total += countTokens(msg.content, this.modelId);
+    }
+    if (msg.toolCalls) {
+      for (const tc of msg.toolCalls) {
+        if (tc.name) total += countTokens(tc.name, this.modelId);
+        if (tc.arguments) total += countTokens(tc.arguments, this.modelId);
+      }
+    }
+    total += countTokens(msg.role, this.modelId);
+    return total;
+  }
+
+  /**
+   * Count tokens in messages — uses cached totals for the full list,
+   * or computes on-demand for arbitrary subsets (e.g. canFitMessage checks).
    */
   private countMessageTokens(messages: Message[]): number {
+    // Fast path: if counting all messages, use the cached total
+    if (messages.length === this.messages.length &&
+        messages.every((m, i) => m.id === this.messages[i]?.id)) {
+      return this.cachedTotalTokens;
+    }
+    // Slow path: compute for a subset or out-of-order list
     let total = 0;
     for (const msg of messages) {
-      // Count tokens in content
-      if (msg.content) {
-        total += countTokens(msg.content, this.modelId);
+      const cached = this.messageTokenCache.get(msg.id);
+      if (cached !== undefined) {
+        total += cached;
+      } else {
+        total += this.countSingleMessageTokens(msg);
       }
-      // Count tokens in tool calls
-      if (msg.toolCalls) {
-        for (const tc of msg.toolCalls) {
-          if (tc.name) {
-            total += countTokens(tc.name, this.modelId);
-          }
-          if (tc.arguments) {
-            total += countTokens(tc.arguments, this.modelId);
-          }
-        }
-      }
-      // Count tokens in role
-      total += countTokens(msg.role, this.modelId);
     }
     return total;
   }
@@ -313,6 +333,14 @@ export class ContextManager {
     // Remove the messages
     if (messagesToRemove.length > 0) {
       this.messages = this.messages.slice(messagesToRemove.length);
+      // Update cached totals and remove stale cache entries
+      for (const msg of messagesToRemove) {
+        const tokens = this.messageTokenCache.get(msg.id);
+        if (tokens !== undefined) {
+          this.cachedTotalTokens -= tokens;
+          this.messageTokenCache.delete(msg.id);
+        }
+      }
       this.compactionCount++;
     }
 
