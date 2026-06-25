@@ -88,6 +88,14 @@ const SMALL_TOOL_DESCRIPTIONS: Record<string, string> = {
   git_commit: "git add -A and commit with message.",
   change_workspace: "Change working directory.",
   manage_todos: "add | complete | remove | list subtasks.",
+  // Short descriptions for tools excluded from small models (kept for reference)
+  grep_search: "Search text patterns across files.",
+  map_project_tree: "Project structure tree.",
+  batch_read_files: "Read multiple files at once.",
+  typecheck: "Run tsc --noEmit.",
+  run_tests: "Run project test suite.",
+  run_command: "Run a build/lint/format script.",
+  install_dependencies: "Install project dependencies.",
 };
 
 function safe(p: string, ws: string, cfg?: Config): string {
@@ -1419,6 +1427,16 @@ const SMALL_MODEL_EXCLUDED = new Set([
   "grep_search",
   "explore_subagent",
   "dispatch_subagents",
+  // Graph tools — too complex/heavy for ≤8B models
+  "build_memory_graph",
+  "query_memory_graph",
+  "get_graph_stats",
+  "search_nodes_by_type",
+  "search_nodes_by_name",
+  "search_nodes_by_path",
+  "find_dependencies",
+  "find_path",
+  "pattern_search",
 ]);
 
 // Tools that can be executed in parallel (read-only, non-blocking)
@@ -1433,6 +1451,15 @@ const PARALLEL_SAFE_TOOLS = new Set([
   "git_diff",
   "map_project_tree",
   "batch_read_files",
+  // Graph read queries — read-only, safe to parallelize
+  "get_graph_stats",
+  "search_nodes_by_type",
+  "search_nodes_by_name",
+  "search_nodes_by_path",
+  "find_dependencies",
+  "find_path",
+  "pattern_search",
+  "query_memory_graph",
 ]);
 
 // Tools that must run sequentially (write operations, state changes)
@@ -1450,6 +1477,8 @@ const SEQUENTIAL_ONLY_TOOLS = new Set([
   "manage_todos",
   "explore_subagent",
   "dispatch_subagents",
+  // Graph build is expensive and mutates state
+  "build_memory_graph",
 ]);
 
 export function subAgentAvailable(cfg?: Config): boolean {
