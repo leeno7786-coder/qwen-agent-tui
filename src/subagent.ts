@@ -1,8 +1,8 @@
 import { resolve, relative, isAbsolute } from "path";
-import { createClient, chat, type ChatMessage, isLocalProvider } from "./llm";
+import { createClient, chat, type ChatMessage, isLocalProvider, estimateModelContextSize } from "./llm";
 import { tools, toOpenAI } from "./tools";
 import type { Config } from "./types";
-import { DEFAULT_SUB_AGENT_MAX_ITERATIONS } from "./config";
+import { DEFAULT_SUB_AGENT_MAX_ITERATIONS, getApiKey } from "./config";
 import { modelIdsMatch, requiresDistinctSubAgentModels, isSmallModelFromConfig } from "./model-runtime";
 import {
   parseTextToolCalls,
@@ -192,7 +192,7 @@ export interface SubAgentProgressSnap {
   error?: string;
 }
 
-export type SubAgentAgentStatus = "pending" | "running" | "done" | "failed";
+export type SubAgentAgentStatus = "pending" | "running" | "done" | "failed" | "skipped";
 
 export interface SubAgentDispatchAgentRow {
   name: string;
@@ -236,7 +236,7 @@ export function isOpenRouterBaseURL(baseURL: string): boolean {
   return baseURL.toLowerCase().includes("openrouter.ai");
 }
 
-/** OpenRouter free tier: cap agents per dispatch to avoid long 429 retry chains. */
+/** Default cap on sub-agents per dispatch (OpenRouter free tier: 2). */
 export const DEFAULT_OPENROUTER_DISPATCH_LIMIT = 2;
 
 const SKIPPED_RATE_LIMIT_MSG =
@@ -264,8 +264,9 @@ export function capSubAgentTasks(
   };
 }
 
-function cappedDispatchSkipMessage(limit: number): string {
-  return `Skipped — OpenRouter allows max ${limit} agents per dispatch. Use explore_subagent for additional lenses.`;
+export function cappedDispatchSkipMessage(limit: number, agentName?: string): string {
+  const hint = agentName?.trim() ? ` Use explore_subagent for "${agentName.trim()}".` : "";
+  return `Skipped — max ${limit} agents per dispatch.${hint}`;
 }
 
 function isRateLimitMessage(message?: string): boolean {
@@ -276,9 +277,16 @@ function isRateLimitMessage(message?: string): boolean {
 
 function subAgentConfig(cfg: Config): Config {
   const baseURL = cfg.subAgentBaseURL ?? cfg.baseURL;
-  const apiKey =
-    cfg.subAgentApiKey ??
-    (isLocalProvider(baseURL) ? cfg.apiKey || "lm-studio" : cfg.apiKey);
+  let apiKey = cfg.subAgentApiKey;
+  if (!apiKey) {
+    if (baseURL.includes("mistral.ai")) {
+      apiKey = process.env.MISTRAL_API_KEY || getApiKey("MISTRAL_API_KEY") || "";
+    } else if (isLocalProvider(baseURL)) {
+      apiKey = cfg.apiKey || "lm-studio";
+    } else {
+      apiKey = cfg.apiKey;
+    }
+  }
   const model = cfg.subAgentModel!;
   const onOpenRouter = isOpenRouterBaseURL(baseURL);
   return {
@@ -525,7 +533,7 @@ export async function runExploreSubAgent(
       iterations: 0,
       tools_used: [],
       error:
-        "Missing OpenRouter API key for sub-agents. Reconnect in the UI or set OPENROUTER_API_KEY.",
+        "Missing API key for sub-agents. Reconnect in the UI or set MISTRAL_API_KEY in your .env.",
       lens,
       name: agentName,
       task: taskLabel,
@@ -568,13 +576,61 @@ export async function runExploreSubAgent(
   const seededTask = buildSeededTask(workspace, task, options);
   const system = `${SUB_AGENT_SYSTEM}${lensSystemAddendum(lens)}\n\nWorkspace: ${workspace}`;
 
-  const messages: ChatMessage[] = [
+  let messages: ChatMessage[] = [
     { role: "system", content: system },
     { role: "user", content: seededTask },
   ];
 
   const maxIter = subCfg.maxIterations;
   const errorCounts = new Map<string, number>();
+
+  // Context management: trim older tool results to prevent unbounded growth.
+  // When message history exceeds 70% of the sub-agent model's context window,
+  // replace old tool results with a compact summary.
+  const estimateMessageTokens = (msgs: ChatMessage[]): number => {
+    let total = 2; // baseline overhead
+    for (const m of msgs) {
+      total += 4; // per-message framing
+      if (m.content) total += m.content.length >> 2; // rough token estimate
+      if (m.tool_calls) total += m.tool_calls.length * 8;
+      if (m.role === "tool") total += 4;
+    }
+    return total;
+  };
+
+  const trimContext = (msgs: ChatMessage[]): ChatMessage[] => {
+    const contextSize = estimateModelContextSize(model);
+    const threshold = Math.floor(contextSize * 0.7);
+    const currentTokens = estimateMessageTokens(msgs);
+
+    if (currentTokens <= threshold) return msgs;
+
+    // Keep system + user prompt + last 4 messages, trim everything in between
+    const keepTail = 4;
+    if (msgs.length <= keepTail + 2) return msgs;
+
+    const head = msgs.slice(0, 2); // system + user
+    const tail = msgs.slice(-keepTail);
+    const trimmedCount = msgs.length - keepTail - 2;
+
+    // Build a compact note about what was trimmed
+    const toolSummary = msgs
+      .slice(2, -keepTail)
+      .filter((m) => m.role === "tool")
+      .slice(0, 3)
+      .map((m) => {
+        const preview = m.content?.slice(0, 80) || "";
+        return m.tool_call_id ? `${m.tool_call_id.slice(0, 8)}: ${preview}` : preview;
+      })
+      .join(" | ");
+
+    const note: ChatMessage = {
+      role: "user",
+      content: `[Context trimmed: ${trimmedCount} older messages removed to stay within context window. Key tool results: ${toolSummary || "none"}]`,
+    };
+
+    return [...head, note, ...tail];
+  };
 
   try {
     ping("running", { iterations: 0 });
@@ -659,7 +715,7 @@ export async function runExploreSubAgent(
         ping("failed", { iterations: i + 1, error: "no summary" });
         return withUsage({
           ok: false,
-          summary: "",
+          summary: msg.content?.trim() || "",
           model,
           iterations: i + 1,
           tools_used: toolsUsed,
@@ -724,6 +780,10 @@ export async function runExploreSubAgent(
           tool_call_id: tc.id,
         });
       }
+
+      // Trim context to prevent unbounded growth across iterations
+      messages = trimContext(messages);
+
       ping("running", { iterations: i + 1 });
     }
 
@@ -843,6 +903,7 @@ function syncRowFromSnap(
 }
 
 function syncRowFromResult(row: SubAgentDispatchAgentRow, result: SubAgentResult) {
+  if (row.status === "skipped") return;
   row.status = result.ok ? "done" : "failed";
   row.tools_used = result.tools_used.length;
   row.input_tokens = result.usage?.input_tokens ?? row.input_tokens;
@@ -908,9 +969,9 @@ export async function runSequentialSubAgents(
     const task = allTasks[i]!;
     const reason =
       limit != null
-        ? cappedDispatchSkipMessage(limit)
+        ? cappedDispatchSkipMessage(limit, task.name)
         : "Skipped — not scheduled in this dispatch.";
-    row.status = "failed";
+    row.status = "skipped";
     row.error = reason;
     ordered[i] = makeSkippedSubAgentResult(task, cfg, reason);
   }
@@ -947,7 +1008,7 @@ export async function runSequentialSubAgents(
       for (let j = i + 1; j < runnable.length; j++) {
         const skipTask = runnable[j]!;
         const skipRow = rows[j]!;
-        skipRow.status = "failed";
+        skipRow.status = "skipped";
         skipRow.error = SKIPPED_RATE_LIMIT_MSG;
         ordered[j] = makeSkippedSubAgentResult(skipTask, cfg, SKIPPED_RATE_LIMIT_MSG);
       }

@@ -45,59 +45,34 @@ export const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
   allowedCommands: new Set([]),
   allowedPaths: [],
   blockedPaths: [
-    '**/.env',
-    '**/.env.*',
-    '**/.git/**',
+    // Secrets / credentials
+    '**/.env', '**/.env.*',
     '**/.ssh/**',
+    '**/secrets/**', '**/credentials/**',
+    '**/*.pem', '**/*.key', '**/*.crt', '**/*.cer', '**/*.p12', '**/*.pfx',
+    '**/id_rsa*', '**/id_ed25519*', '**/id_ecdsa*',
+    '**/known_hosts', '**/authorized_keys',
+    // System auth files
+    '**/shadow', '**/passwd', '**/sudoers',
+    '**/hosts', '**/resolv.conf',
+    // VCS
+    '**/.git/**',
+    // Dependencies / lock files
     '**/node_modules/**',
-    '**/bun.lock',
-    '**/package-lock.json',
-    '**/yarn.lock',
-    '**/pnpm-lock.yaml',
-    '**/.npmrc',
-    '**/.yarnrc',
-    '**/tsconfig.json',
-    '**/tsconfig.*.json',
+    '**/bun.lock', '**/package-lock.json', '**/yarn.lock', '**/pnpm-lock.yaml',
+    '**/.npmrc', '**/.yarnrc',
     '**/bunfig.toml',
-    '**/package.json',
-    '**/composer.lock',
-    '**/Gemfile.lock',
-    '**/Cargo.lock',
-    '**/go.mod',
-    '**/go.sum',
-    '**/Pipfile.lock',
-    '**/poetry.lock',
-    '**/requirements.txt',
+    '**/composer.lock', '**/Gemfile.lock', '**/Cargo.lock',
+    '**/go.mod', '**/go.sum',
+    '**/Pipfile.lock', '**/poetry.lock', '**/requirements.txt',
+    // Config / metadata (package.json and tsconfig.json are needed for legitimate operations)
     '**/config/**',
-    '**/secrets/**',
-    '**/credentials/**',
-    '**/*.pem',
-    '**/*.key',
-    '**/*.crt',
-    '**/*.cer',
-    '**/*.p12',
-    '**/*.pfx',
-    '**/id_rsa*',
-    '**/id_ed25519*',
-    '**/id_ecdsa*',
-    '**/known_hosts',
-    '**/authorized_keys',
-    '**/shadow',
-    '**/passwd',
-    '**/sudoers',
-    '**/hosts',
-    '**/resolv.conf',
-    '**/etc/**',
-    '**/var/**',
-    '**/usr/**',
-    '**/bin/**',
-    '**/sbin/**',
-    '**/boot/**',
-    '**/dev/**',
-    '**/proc/**',
-    '**/sys/**',
-    '**/tmp/**',
-    '**/temp/**',
+    '**/tsconfig.*.json',
+    // System directories
+    '**/etc/**', '**/var/**', '**/usr/**',
+    '**/bin/**', '**/sbin/**', '**/boot/**',
+    '**/dev/**', '**/proc/**', '**/sys/**',
+    '**/tmp/**', '**/temp/**',
   ],
   maxFileSize: 10 * 1024 * 1024, // 10MB
   maxBatchFiles: 50,
@@ -349,8 +324,8 @@ export class SecurityManager {
   constructor(config: Partial<SecurityConfig> = {}, workspace: string = '') {
     this.config = {
       ...DEFAULT_SECURITY_CONFIG,
-      ...config,
-    };
+      ...Object.fromEntries(Object.entries(config).filter(([_, v]) => v !== undefined)),
+    } as SecurityConfig;
     this.workspace = workspace;
   }
 
@@ -429,9 +404,11 @@ export class SecurityManager {
 
     // Check against allowed paths first (if any are specified)
     // Allowed paths take precedence over blocked paths
+    // Use the original (non-resolved) path for pattern matching so user-provided
+    // Unix-style patterns work correctly regardless of OS drive letter resolution.
     if (this.config.allowedPaths.length > 0) {
       const isAllowed = this.config.allowedPaths.some(pattern =>
-        this.pathMatchesPattern(resolved, pattern)
+        this.pathMatchesPattern(path, pattern)
       );
       if (!isAllowed) {
         return { ok: false, error: `Access denied: path not in allowed paths` };
@@ -440,7 +417,7 @@ export class SecurityManager {
     } else {
       // Check against blocked paths
       for (const pattern of this.config.blockedPaths) {
-        if (this.pathMatchesPattern(resolved, pattern)) {
+        if (this.pathMatchesPattern(path, pattern)) {
           return { ok: false, error: `Access denied: path matches blocked pattern (${pattern})` };
         }
       }
@@ -464,16 +441,17 @@ export class SecurityManager {
       // For now, we'll just allow it but this could be enhanced
     }
 
-    return { ok: true, path: resolved };
+    return { ok: true, path };
   }
 
   /**
    * Resolve a path relative to the workspace.
+   * Absolute paths are resolved to their canonical form for validation.
    */
   private resolvePath(path: string): string | null {
     try {
       if (isAbsolute(path)) {
-        return path;
+        return resolve(path);
       }
       if (this.workspace) {
         return resolve(this.workspace, path);
@@ -486,6 +464,7 @@ export class SecurityManager {
 
   /**
    * Check if a path is within the workspace.
+   * Uses canonical path comparison with proper separator handling for cross-platform safety.
    */
   private isWithinWorkspace(path: string): boolean {
     if (!this.workspace) {
@@ -495,9 +474,13 @@ export class SecurityManager {
     const workspace = resolve(this.workspace);
     const resolvedPath = resolve(path);
     
-    // Check if the resolved path starts with the workspace
-    return resolvedPath.startsWith(workspace + (workspace.endsWith('/') || workspace.endsWith('\\') ? '' : '/')) ||
-           resolvedPath.startsWith(workspace);
+    // Normalize both paths to use forward slashes for comparison
+    const normWorkspace = workspace.replace(/\\/g, '/');
+    const normPath = resolvedPath.replace(/\\/g, '/');
+    
+    // Path must be the workspace itself or a subdirectory
+    return normPath === normWorkspace || 
+           normPath.startsWith(normWorkspace + '/');
   }
 
   /**

@@ -3,6 +3,21 @@ import type { ChatCompletionMessageFunctionToolCall } from "openai/resources/cha
 import type { Config } from "./types";
 import type { StreamChunk } from "./streaming";
 
+/**
+ * Custom error that preserves the HTTP status code through retry re-throws.
+ * The OpenAI SDK's APIError has .status, but when we catch and re-throw
+ * a plain Error that info is lost. This keeps it available for callers
+ * (e.g. agent.ts can check err.status === 401 for custom messaging).
+ */
+export class ApiError extends Error {
+  status?: number;
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 // --- Types used internally by llm.ts ---
 
 export interface ChatMessage {
@@ -130,11 +145,35 @@ export function countTokens(text: string, modelId?: string): number {
  */
 export function doesChatFitInContext(
   modelId: string,
-  messages: Array<{ role: string; content?: string }>
+  messages: Array<{ role: string; content?: string; toolCalls?: Array<{ name: string; arguments: string }> }>
 ): boolean {
   const contextLength = estimateModelContextSize(modelId);
-  const formatted = messages.map(m => `${m.role}: ${m.content || ""}`).join("\n");
-  const totalTokens = countTokens(formatted, modelId);
+  
+  // Count content tokens
+  let contentTokens = 0;
+  for (const m of messages) {
+    contentTokens += countTokens(`${m.role}: ${m.content || ""}`, modelId);
+  }
+  
+  // Account for OpenAI-style framing overhead:
+  // - Per message: ~4 tokens for role delimiter and content framing
+  // - Per tool call: ~8 tokens for function name + arguments structure + delimiter
+  // - Per tool response message: ~4 tokens for tool_call_id + role framing
+  // - Baseline conversation overhead: ~2 tokens for BOS/EOS delimiters
+  const baselineOverhead = 2;
+  let overhead = baselineOverhead;
+  
+  for (const m of messages) {
+    overhead += 4; // per-message framing
+    if (m.toolCalls) {
+      overhead += m.toolCalls.length * 8; // per-tool-call framing
+    }
+    if (m.role === 'tool') {
+      overhead += 4; // tool response framing
+    }
+  }
+  
+  const totalTokens = contentTokens + overhead;
   return totalTokens < contextLength;
 }
 
@@ -359,22 +398,47 @@ export function createClient(cfg: Config) {
  * @param attempt - Current retry attempt (1-based).
  * @returns Localised error message.
  */
+function extractApiMessage(err: any): string {
+  // OpenAI: { error: { message } }
+  if (err?.error?.message) return err.error.message;
+  // Mistral: { message } at root level
+  if (err?.message && !err.message.startsWith("HTTP ")) return err.message;
+  // Provider-specific: error_object, error_detail
+  if (err?.error_object?.message) return err.error_object.message;
+  if (err?.error_detail) return err.error_detail;
+  return "";
+}
+
 function errorMessage(
   status: number,
   attempt: number,
   originalErr?: any,
   maxAttempts = 3
 ): string {
-  if (status === 401) return `Authentication failed (401). Check your API key.`;
-  if (status === 404) return `Model not found (404). Try a different model name.`;
+  if (status === 401) {
+    const detail = extractApiMessage(originalErr);
+    return detail ? `Authentication failed (401): ${detail}` : `Authentication failed (401). Check your API key.`;
+  }
+  if (status === 404) {
+    const detail = extractApiMessage(originalErr);
+    return detail ? `Model not found (404): ${detail}` : `Model not found (404). Try a different model name.`;
+  }
+  if (status === 422) {
+    const detail = extractApiMessage(originalErr);
+    return `Request rejected (422): ${detail || "Check max_tokens, model name, or message format."}`;
+  }
   if (status === 429) {
+    const detail = extractApiMessage(originalErr);
     return attempt >= maxAttempts
-      ? "Rate limited by provider — wait a minute, then retry with fewer sub-agents."
+      ? `Rate limited by provider.${detail ? " " + detail : ""} Wait a minute, then retry with fewer sub-agents.`
       : "Rate limited. Retrying...";
   }
-  if (status >= 500) return `Server error. Retrying (attempt ${attempt}/3)...`;
-  const apiMsg = originalErr?.message || originalErr?.error?.message || "";
-  if (apiMsg && !apiMsg.startsWith("HTTP ")) return `HTTP ${status}: ${apiMsg}`;
+  if (status === 503) {
+    return `Provider temporarily unavailable (503). Retrying (attempt ${attempt}/${maxAttempts})...`;
+  }
+  if (status >= 500) return `Server error. Retrying (attempt ${attempt}/${maxAttempts})...`;
+  const apiMsg = extractApiMessage(originalErr);
+  if (apiMsg) return `HTTP ${status}: ${apiMsg}`;
   return `HTTP ${status}`;
 }
 
@@ -383,12 +447,36 @@ function errorMessage(
  * @param status - HTTP status code (may be undefined for network errors).
  * @returns True if the request should be retried.
  */
-function shouldRetry(status?: number, attempt?: number): boolean {
+/** Error keywords that indicate a non-retriable request (retrying will fail identically). */
+const NON_RETRIABLE_ERRORS = [
+  "context_length_exceeded",
+  "context too long",
+  "maximum context length",
+  "content_moderation",
+  "content policy",
+  "invalid_max_tokens",
+  "model_not_found",
+  "invalid_model",
+  "invalid_api_key",
+  "insufficient_quota",
+];
+
+function isRetriable(err?: any): boolean {
+  if (!err) return true;
+  const msg = (err.message || err.code || err.type || "").toLowerCase();
+  return !NON_RETRIABLE_ERRORS.some((kw) => msg.includes(kw));
+}
+
+function shouldRetry(status?: number, attempt?: number, err?: any): boolean {
+  if (!isRetriable(err)) return false;
   if (status === undefined) return true; // network error
   if (status === 429) return true;
+  if (status === 503) return true;
   if (status >= 500) return true;
   // Some providers return transient 400s under load — retry once
   if (status === 400 && attempt !== undefined && attempt < 2) return true;
+  // Mistral sometimes returns 422 on transient validation errors
+  if (status === 422 && attempt !== undefined && attempt < 2) return true;
   return false;
 }
 
@@ -463,6 +551,7 @@ export async function chat(
       max_tokens: getMaxOutputTokens(cfg.model, cfg.maxTokens),
       tools: tools?.length ? tools : undefined,
       tool_choice: tools?.length ? "auto" as const : undefined,
+      ...(isLocalProvider(cfg.baseURL) && tools?.length ? { parallel_tool_calls: false } : {}),
       ...(enableThinking ? { enable_thinking: true } : {}),
     },
     { signal }
@@ -505,13 +594,13 @@ export async function chat(
       const status = err?.status || err?.status_code || err?.response?.status;
       lastError = err;
 
-      if (!shouldRetry(status, attempt)) {
-        throw new Error(errorMessage(status, attempt, err, maxRetries));
+      if (!shouldRetry(status, attempt, err)) {
+        throw new ApiError(errorMessage(status, attempt, err, maxRetries), status);
       }
 
       const message = errorMessage(status, attempt, err, maxRetries);
       if (attempt === maxRetries) {
-        throw new Error(message);
+        throw new ApiError(message, status);
       }
 
       // Exponential backoff with jitter: 1-2s, 2-4s, 4-8s
@@ -521,7 +610,7 @@ export async function chat(
     }
   }
 
-  throw lastError || new Error("Unknown error");
+  throw lastError || new ApiError("Unknown error");
 }
 
 /**
@@ -568,6 +657,7 @@ export async function* streamChat(
           max_tokens: getMaxOutputTokens(cfg.model, cfg.maxTokens),
           tools: tools?.length ? tools : undefined,
           tool_choice: tools?.length ? "auto" as const : undefined,
+          ...(isLocalProvider(cfg.baseURL) && tools?.length ? { parallel_tool_calls: false } : {}),
           stream: true,
           ...(enableThinking ? { enable_thinking: true } : {}),
         },
@@ -682,13 +772,13 @@ export async function* streamChat(
       const status = err?.status || err?.status_code || err?.response?.status;
       lastError = err;
 
-      if (!shouldRetry(status, attempt)) {
-        throw new Error(errorMessage(status, attempt, err, maxRetries));
+      if (!shouldRetry(status, attempt, err)) {
+        throw new ApiError(errorMessage(status, attempt, err, maxRetries), status);
       }
 
       const message = errorMessage(status, attempt, err, maxRetries);
       if (attempt === maxRetries) {
-        throw new Error(message);
+        throw new ApiError(message, status);
       }
 
       // Exponential backoff with jitter: 1-2s, 2-4s, 4-8s
@@ -698,5 +788,5 @@ export async function* streamChat(
     }
   }
 
-  throw lastError || new Error("Unknown error");
+  throw lastError || new ApiError("Unknown error");
 }
