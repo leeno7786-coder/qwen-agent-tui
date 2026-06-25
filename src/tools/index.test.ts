@@ -274,4 +274,86 @@ describe("tools", () => {
     expect(out.content).toContain("    1| alpha");
     expect(out.content).toContain("    2| beta");
   });
+
+  // --- edit_file tests ---
+
+  it("edit_file replaces exact text successfully", () => {
+    writeFileSync(join(ws, "edit.txt"), "hello world\nfoo bar", "utf-8");
+    const editFile = tools.find((t) => t.name === "edit_file")!;
+    const out = JSON.parse(editFile.execute({ path: "edit.txt", old_text: "foo bar", new_text: "baz qux" }, ws));
+    expect(out.ok).toBe(true);
+    expect(out.action).toBe("update");
+    expect(out.replacements).toBe(1);
+    expect(readFileSync(join(ws, "edit.txt"), "utf-8")).toBe("hello world\nbaz qux");
+  });
+
+  it("edit_file returns helpful error for missing file", () => {
+    const editFile = tools.find((t) => t.name === "edit_file")!;
+    const out = JSON.parse(editFile.execute({ path: "nonexistent.txt", old_text: "foo", new_text: "bar" }, ws));
+    expect(out.ok).toBe(false);
+    expect(out.error).toContain("File not found");
+  });
+
+  it("edit_file returns helpful error for missing file with similar name hint", () => {
+    writeFileSync(join(ws, "config.json"), "{}", "utf-8");
+    const editFile = tools.find((t) => t.name === "edit_file")!;
+    const out = JSON.parse(editFile.execute({ path: "config.txt", old_text: "foo", new_text: "bar" }, ws));
+    expect(out.ok).toBe(false);
+    expect(out.error).toContain("File not found");
+    expect(out.error).toContain("config.json");
+  });
+
+  it("edit_file fuzzy matches when model sends trimmed multi-line block", () => {
+    writeFileSync(join(ws, "fuzzy.txt"), "line1\n  foo bar\n  baz qux\nline4", "utf-8");
+    const editFile = tools.find((t) => t.name === "edit_file")!;
+    // Model sends trimmed text (no indentation) but file has indentation
+    const out = JSON.parse(editFile.execute({ path: "fuzzy.txt", old_text: "foo bar\nbaz qux", new_text: "replaced" }, ws));
+    expect(out.ok).toBe(true);
+    expect(out.fuzzy_match).toBe(true);
+    expect(readFileSync(join(ws, "fuzzy.txt"), "utf-8")).toBe("line1\nreplaced\nline4");
+  });
+
+  it("edit_file replace_all replaces all occurrences", () => {
+    writeFileSync(join(ws, "multi.txt"), "foo bar\nfoo bar\nbaz", "utf-8");
+    const editFile = tools.find((t) => t.name === "edit_file")!;
+    const out = JSON.parse(editFile.execute({ path: "multi.txt", old_text: "foo bar", new_text: "qux", replace_all: true }, ws));
+    expect(out.ok).toBe(true);
+    expect(out.replacements).toBe(2);
+    expect(readFileSync(join(ws, "multi.txt"), "utf-8")).toBe("qux\nqux\nbaz");
+  });
+
+  it("edit_file returns error for empty old_text", () => {
+    writeFileSync(join(ws, "empty.txt"), "content", "utf-8");
+    const editFile = tools.find((t) => t.name === "edit_file")!;
+    const out = JSON.parse(editFile.execute({ path: "empty.txt", old_text: "", new_text: "bar" }, ws));
+    expect(out.ok).toBe(false);
+    expect(out.error).toContain("old_text cannot be empty");
+  });
+
+  // --- edit_file_lines tests ---
+
+  it("edit_file_lines replaces line range successfully", () => {
+    writeFileSync(join(ws, "lines.txt"), "line1\nline2\nline3\nline4", "utf-8");
+    const editLines = tools.find((t) => t.name === "edit_file_lines")!;
+    const out = JSON.parse(editLines.execute({ path: "lines.txt", start_line: 2, end_line: 3, new_text: "replaced" }, ws));
+    expect(out.ok).toBe(true);
+    expect(out.lines_removed).toBe(2);
+    expect(out.lines_added).toBe(1);
+    expect(readFileSync(join(ws, "lines.txt"), "utf-8")).toBe("line1\nreplaced\nline4");
+  });
+
+  it("edit_file_lines returns helpful error for missing file", () => {
+    const editLines = tools.find((t) => t.name === "edit_file_lines")!;
+    const out = JSON.parse(editLines.execute({ path: "nonexistent.txt", start_line: 1, end_line: 2, new_text: "bar" }, ws));
+    expect(out.ok).toBe(false);
+    expect(out.error).toContain("File not found");
+  });
+
+  it("edit_file_lines rejects invalid line range", () => {
+    writeFileSync(join(ws, "range.txt"), "a\nb\nc", "utf-8");
+    const editLines = tools.find((t) => t.name === "edit_file_lines")!;
+    const out = JSON.parse(editLines.execute({ path: "range.txt", start_line: 3, end_line: 1, new_text: "x" }, ws));
+    expect(out.ok).toBe(false);
+    expect(out.error).toContain("invalid line range");
+  });
 });

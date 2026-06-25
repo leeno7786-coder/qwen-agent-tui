@@ -150,16 +150,42 @@ function resolveShell(): { usePowerShell: boolean; shell: string | undefined } {
 }
 
 function translateToPowerShell(cmd: string): string {
-  return cmd
-    .replace(/\bags\b/g, 'Select-String')
-    .replace(/\bls\s+(-[a-zA-Z]+)?\s*(.*)/g, 'Get-ChildItem -Name $2')
-    .replace(/\bll\s+(.*)/g, 'Get-ChildItem -Force $1')
-    .replace(/\bls\b/g, 'Get-ChildItem')
-    .replace(/\bpwd\b/g, '(Get-Location).Path')
-    .replace(/\bps\b/g, 'Get-Process')
-    .replace(/\bcat\s+(.*)/g, 'Get-Content $1')
-    .replace(/\bhead\s+(-\d+)\s+(.*)/g, (_, num, file) => `Get-Content ${file} | Select-Object -First ${Math.abs(parseInt(num))}`)
-    .replace(/^echo\s+(.*)/gm, 'Write-Output $1');
+  // Don't translate multi-line commands or commands with pipes/semicolons —
+  // the regex replacements below are line-scoped and can break compound commands.
+  const isSimpleCommand = !cmd.includes("\n") && !cmd.includes("|") && !cmd.includes(";") && !cmd.includes("&&") && !cmd.includes("||");
+  
+  if (!isSimpleCommand) return cmd;
+  
+  let result = cmd;
+  
+  // grep → Select-String (PowerShell equivalent)
+  result = result.replace(/\bgrep\s+(.*)/g, 'Select-String $1');
+  
+  // ls with flags → Get-ChildItem with -Force for hidden files
+  result = result.replace(/\bls\s+(-[a-zA-Z]*a[a-zA-Z]*)\s+(.*)/g, 'Get-ChildItem -Force $2');
+  result = result.replace(/\bls\s+(-[a-zA-Z]+)?\s*(.*)/g, 'Get-ChildItem $2');
+  result = result.replace(/\bls\b/g, 'Get-ChildItem');
+  
+  // ll → Get-ChildItem -Force (show hidden/system files)
+  result = result.replace(/\bll\s+(.*)/g, 'Get-ChildItem -Force $1');
+  result = result.replace(/\bll\b/g, 'Get-ChildItem -Force');
+  
+  // pwd → (Get-Location).Path
+  result = result.replace(/\bpwd\b/g, '(Get-Location).Path');
+  
+  // ps → Get-Process
+  result = result.replace(/\bps\b/g, 'Get-Process');
+  
+  // cat → Get-Content
+  result = result.replace(/\bcat\s+(.*)/g, 'Get-Content $1');
+  
+  // head -N file → Get-Content file | Select-Object -First N
+  result = result.replace(/\bhead\s+(-\d+)\s+(.*)/g, (_, num, file) => `Get-Content ${file} | Select-Object -First ${Math.abs(parseInt(num))}`);
+  
+  // echo "text" → Write-Output "text" (only simple echo, not echo with redirection)
+  result = result.replace(/^echo\s+([^>].*)$/m, 'Write-Output $1');
+  
+  return result;
 }
 
 function formatExecResult(ok: boolean, out: string, err?: string, code?: number | null): string {
@@ -177,15 +203,26 @@ function formatExecResult(ok: boolean, out: string, err?: string, code?: number 
 function execCmd(cmd: string, ws: string, timeoutSeconds = 60): string {
   try {
     const { usePowerShell, shell } = resolveShell();
-    const finalCmd = usePowerShell ? translateToPowerShell(cmd) : cmd;
-    const out = execSync(finalCmd, {
+    let finalCmd = usePowerShell ? translateToPowerShell(cmd) : cmd;
+    
+    // On Windows with PowerShell, use -Command flag for reliable execution
+    const execOptions: any = {
       cwd: ws,
       encoding: "utf-8",
       timeout: timeoutSeconds * 1000,
       maxBuffer: 10 * 1024 * 1024,
       stdio: ["pipe", "pipe", "pipe"],
-      shell,
-    });
+    };
+    
+    if (usePowerShell && shell) {
+      execOptions.shell = shell;
+      // Pass command via -Command flag for proper parsing
+      execOptions.env = { ...process.env, PYTHONIOENCODING: "utf-8" };
+    } else {
+      execOptions.shell = shell;
+    }
+    
+    const out = execSync(finalCmd, execOptions);
     return formatExecResult(true, out);
   } catch (e: any) {
     return formatExecResult(false, e.stdout?.toString?.() || "", e.stderr?.toString?.() || e.message, e.status ?? null);
@@ -476,15 +513,78 @@ export const tools: Tool[] = [
         }
       const oldText = String(args.old_text ?? "");
       if (!oldText) return JSON.stringify({ ok: false, error: "old_text cannot be empty" });
-      const text = readFileSync(p, "utf-8");
-      if (!text.includes(oldText)) return JSON.stringify({ ok: false, error: "old_text not found" });
-      const next = args.replace_all ? text.split(oldText).join(String(args.new_text ?? "")) : text.replace(oldText, String(args.new_text ?? ""));
-      writeFileSync(p, next, "utf-8");
+      
+    // Check file exists before reading
+    if (!existsSync(p)) {
       const relPath = rel(p, ws);
-      const { added, removed, diff } = fileChangeDiff(relPath, text, next);
-      return JSON.stringify({ ok: true, path: relPath, action: "update", added, removed, diff, replacements: args.replace_all ? text.split(oldText).length - 1 : 1 });
-    } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
-  },
+      let hint = "";
+      try {
+        const dir = dirname(p);
+        if (existsSync(dir)) {
+          const dirFiles = readdirSync(dir).filter(f => {
+            try { return statSync(resolve(dir, f)).isFile(); } catch { return false; }
+          });
+          const fname = basename(p);
+          const stem = fname.replace(/\.[^/.]+$/, '');
+          const similar = dirFiles.filter(f => f.includes(stem) || stem.includes(f.replace(/\.[^/.]+$/, '')));
+          if (similar.length > 0) {
+            hint = ` Did you mean one of these? ${similar.map(f => rel(resolve(dir, f), ws)).join(', ')}`;
+          } else if (dirFiles.length > 0) {
+            hint = ` Files in ${rel(dir, ws)}: ${dirFiles.slice(0, 20).join(', ')}`;
+          }
+        }
+      } catch { /* ignore hint errors */ }
+      return JSON.stringify({ ok: false, error: `File not found: ${relPath}.${hint}` });
+    }
+      
+    const text = readFileSync(p, "utf-8");
+    if (!text.includes(oldText)) {
+      // Fuzzy fallback: try matching with trimmed lines
+      const oldLines = oldText.split(/\r?\n/);
+      const fileLines = text.split(/\r?\n/);
+      let matchStart = -1;
+      let matchEnd = -1;
+        
+      // Try to find a contiguous block where trimmed lines match
+      for (let i = 0; i <= fileLines.length - oldLines.length; i++) {
+        let allMatch = true;
+        for (let j = 0; j < oldLines.length; j++) {
+          if (fileLines[i + j].trim() !== oldLines[j].trim()) {
+            allMatch = false;
+            break;
+          }
+        }
+        if (allMatch) {
+          matchStart = i;
+          matchEnd = i + oldLines.length;
+          break;
+        }
+      }
+        
+      if (matchStart >= 0) {
+        // Found a fuzzy match — use the actual file text for replacement
+        const newTextValue = String(args.new_text ?? "");
+        const before = fileLines.slice(0, matchStart);
+        const after = fileLines.slice(matchEnd);
+        const next = [...before, newTextValue, ...after].join("\n");
+        writeFileSync(p, next, "utf-8");
+        const relPath = rel(p, ws);
+        const { added, removed, diff } = fileChangeDiff(relPath, text, next);
+        return JSON.stringify({ ok: true, path: relPath, action: "update", added, removed, diff, replacements: 1, fuzzy_match: true });
+      }
+        
+      // Provide helpful error with context
+      const snippet = text.length > 500 ? text.substring(0, 500) + "..." : text;
+      return JSON.stringify({ ok: false, error: `old_text not found in ${rel(p, ws)}. File has ${fileLines.length} lines. First 500 chars:\n${snippet}` });
+    }
+      
+    const next = args.replace_all ? text.split(oldText).join(String(args.new_text ?? "")) : text.replace(oldText, String(args.new_text ?? ""));
+    writeFileSync(p, next, "utf-8");
+    const relPath = rel(p, ws);
+    const { added, removed, diff } = fileChangeDiff(relPath, text, next);
+    return JSON.stringify({ ok: true, path: relPath, action: "update", added, removed, diff, replacements: args.replace_all ? text.split(oldText).length - 1 : 1 });
+  } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
+},
 },
   {
     name: "edit_file_lines",
@@ -509,32 +609,54 @@ export const tools: Tool[] = [
       if (startLine < 1 || endLine < startLine) {
         return JSON.stringify({ ok: false, error: "invalid line range: start_line must be >= 1 and end_line >= start_line" });
       }
-      const text = readFileSync(p, "utf-8");
-      const lines = text.split(/\r?\n/);
-      if (startLine > lines.length) {
-        return JSON.stringify({ ok: false, error: `start_line ${startLine} exceeds file length (${lines.length} lines)` });
-      }
-      const newText = String(args.new_text ?? "");
-      const before = lines.slice(0, startLine - 1);
-      const after = lines.slice(Math.min(endLine, lines.length));
-      const next = [...before, newText, ...after].join("\n");
-      writeFileSync(p, next, "utf-8");
+      
+    // Check file exists before reading
+    if (!existsSync(p)) {
       const relPath = rel(p, ws);
-      const { added, removed, diff } = fileChangeDiff(relPath, text, next);
-      return JSON.stringify({
-        ok: true,
-        path: relPath,
-        action: "update",
-        added,
-        removed,
-        diff,
-        start_line: startLine,
-        end_line: Math.min(endLine, lines.length),
-        lines_removed: Math.min(endLine, lines.length) - startLine + 1,
-        lines_added: newText ? newText.split("\n").length : 0,
-      });
-    } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
-  },
+      let hint = "";
+      try {
+        const dir = dirname(p);
+        if (existsSync(dir)) {
+          const dirFiles = readdirSync(dir).filter(f => {
+            try { return statSync(resolve(dir, f)).isFile(); } catch { return false; }
+          });
+          const fname = basename(p);
+          const stem = fname.replace(/\.[^/.]+$/, '');
+          const similar = dirFiles.filter(f => f.includes(stem) || stem.includes(f.replace(/\.[^/.]+$/, '')));
+          if (similar.length > 0) {
+            hint = ` Did you mean one of these? ${similar.map(f => rel(resolve(dir, f), ws)).join(', ')}`;
+          }
+        }
+      } catch { /* ignore hint errors */ }
+      return JSON.stringify({ ok: false, error: `File not found: ${relPath}.${hint}` });
+    }
+      
+    const text = readFileSync(p, "utf-8");
+    const lines = text.split(/\r?\n/);
+    if (startLine > lines.length) {
+      return JSON.stringify({ ok: false, error: `start_line ${startLine} exceeds file length (${lines.length} lines)` });
+    }
+    const newText = String(args.new_text ?? "");
+    const before = lines.slice(0, startLine - 1);
+    const after = lines.slice(Math.min(endLine, lines.length));
+    const next = [...before, newText, ...after].join("\n");
+    writeFileSync(p, next, "utf-8");
+    const relPath = rel(p, ws);
+    const { added, removed, diff } = fileChangeDiff(relPath, text, next);
+    return JSON.stringify({
+      ok: true,
+      path: relPath,
+      action: "update",
+      added,
+      removed,
+      diff,
+      start_line: startLine,
+      end_line: Math.min(endLine, lines.length),
+      lines_removed: Math.min(endLine, lines.length) - startLine + 1,
+      lines_added: newText ? newText.split("\n").length : 0,
+    });
+  } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
+},
 },
 
 // Directory and Project Structure Tools
