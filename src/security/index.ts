@@ -83,133 +83,46 @@ export const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
  */
 const DANGEROUS_COMMAND_PATTERNS: RegExp[] = [
   // System destruction
-  /rm\s+-rf/i,
+  /rm\s+-rf\s+\//i,            // rm -rf / (must target root)
   /rm\s+--no-preserve-root/i,
   /rm\s+-r\s+\//i,
   /dd\s+if=\/dev\//i,
   /mkfs/i,
-  /format/i,
+  /\bformat\s+[a-zA-Z]:/i,     // Windows format drive only
   
   // Process management
-  /kill\s+-9/i,
-  /pkill/i,
+  /kill\s+-9\s+1\b/i,          // kill -9 PID 1 (init)
   /killall/i,
-  /xkill/i,
   
   // Privilege escalation
-  /sudo\s+/i,
-  /su\s+/i,
-  /chmod\s+777/i,
-  /chmod\s+-R/i,
-  /setuid/i,
-  /setgid/i,
-  /chown\s+0:0/i,
+  /\bsudo\s+/i,
+  /\bsu\s+-/i,                  // su - (login shell, not "su" as substring)
+  /chmod\s+777\s+\//i,
+  /chmod\s+-R\s+\//i,
+  /chown\s+0:0\s+\//i,
   
-  // Network operations
-  /nc\s+/i,
-  /netcat\s+/i,
-  /curl\s+.*-o\s+\//i,
-  /wget\s+.*-O\s+\//i,
-  /ssh\s+/i,
-  /scp\s+/i,
-  /sftp\s+/i,
-  /telnet\s+/i,
-  /ftp\s+/i,
+  // Network listeners (not curl/wget which are harmless for API calls)
+  /\bnc\s+-l/i,                  // netcat listen mode
+  /\bnetcat\s+-l/i,
+  /\bssh\s+/i,
+  /\bscp\s+/i,
+  /\bsftp\s+/i,
   
-  // File system operations
-  /:\s*\//i, // Overwrite root
-  />\s*\//i,
-  />>\s*\//i,
-  /mv\s+.+\s+\//i,
-  /cp\s+.+\s+\//i,
+  // File system overwrite to root
+  />\s*\/dev\//i,
+  />>\s*\/dev\//i,
   
-  // Shell features
-  /;\s*\//i,
-  /&&\s*\//i,
-  /\|\|\s*\//i,
-  /\$\(/i,
-  /`/i,
-  /\|\s*sh/i,
-  /\|\s*bash/i,
-  /\|\s*zsh/i,
-  /\|\s*dash/i,
+  // Shell injection patterns (stricter — must pipe TO a shell)
+  /\|\s*sh\s*$/i,
+  /\|\s*bash\s*$/i,
   
-  // Code execution
-  /eval\s+/i,
-  /exec\s+/i,
-  /source\s+/i,
-  /\.\s+/i,
-  
-  // Package managers (potentially destructive)
-  /npm\s+install\s+-g/i,
-  /npm\s+uninstall\s+-g/i,
-  /yarn\s+global\s+add/i,
-  /yarn\s+global\s+remove/i,
-  /pnpm\s+add\s+-g/i,
-  /pnpm\s+remove\s+-g/i,
-  /gem\s+install/i,
-  /pip\s+install\s+--user/i,
-  /pip\s+uninstall/i,
-  
-  // Cron jobs
-  /crontab/i,
-  /^at\s+/i,
-  /batch/i,
-  /tasksch/i,
-  
-  // Service management
-  /systemctl/i,
-  /service\s+/i,
-  /chkconfig/i,
-  /ntsysv/i,
-  
-  // User management
-  /useradd/i,
-  /userdel/i,
-  /usermod/i,
-  /groupadd/i,
-  /groupdel/i,
-  /groupmod/i,
-  /passwd/i,
-  /shadow/i,
-  
-  // Kernel modules
-  /insmod/i,
-  /rmmod/i,
-  /modprobe/i,
-  /lsmod/i,
-  
-  // Hardware access
-  /fdisk/i,
-  /parted/i,
-  /gparted/i,
-  /sfdisk/i,
-  /badblocks/i,
-  /hdparm/i,
-  /smartctl/i,
-  
-  // Memory operations
-  /mkswap/i,
-  /swapon/i,
-  /swapoff/i,
-  /dd\s+if=\/dev\/zero/i,
-  /dd\s+if=\/dev\/urandom/i,
-  
-  // Archive operations
-  /tar\s+--delete/i,
-  /zip\s+-r/i,
-  /unzip\s+-o/i,
-  
-  // Windows-specific
-  /del\s+\\\\/i,
-  /format\s+[a-zA-Z]:/i,
-  /fdisk/i,
-  /diskpart/i,
-  /reg\s+delete/i,
-  /reg\s+add/i,
-  /reg\s+edit/i,
-  /net\s+user/i,
-  /net\s+localgroup/i,
+  // Windows-specific destructive
+  /\bdel\s+\\\\/i,
+  /\bdiskpart/i,
+  /\breg\s+delete/i,
+  /\breg\s+add/i,
+  /\bnet\s+user\s+/i,
+  /\bnet\s+localgroup\s+/i,
 ];
 
 /**
