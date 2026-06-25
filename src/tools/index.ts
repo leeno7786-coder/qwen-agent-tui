@@ -1417,6 +1417,8 @@ const SMALL_MODEL_EXCLUDED = new Set([
   "map_project_tree",
   "batch_read_files",
   "grep_search",
+  "explore_subagent",
+  "dispatch_subagents",
 ]);
 
 // Tools that can be executed in parallel (read-only, non-blocking)

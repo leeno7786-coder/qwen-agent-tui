@@ -227,7 +227,7 @@ export class AgentCore {
           : "";
       system += `\n\n## Runtime\n${ctxK}k context loaded${param}.`;
     }
-    if (subAgentAvailable(this.cfg)) {
+    if (subAgentAvailable(this.cfg) && !this._smallModel) {
       const subBase = this.cfg.subAgentBaseURL ?? this.cfg.baseURL;
       const providerName = subBase.toLowerCase().includes("mistral.ai")
         ? "Mistral"

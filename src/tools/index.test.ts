@@ -228,7 +228,7 @@ describe("tools", () => {
   it("toOpenAI includes explore_subagent when sub-agent is configured", () => {
     const cfg = {
       baseURL: "http://127.0.0.1:1234/v1",
-      model: "main-8b",
+      model: "qwen3-72b",
       subAgentModel: "qwen3.5:0.8b",
       apiKey: "",
       maxIterations: 10,
@@ -253,6 +253,8 @@ describe("tools", () => {
     const names = openai.map((t) => t.function.name);
     expect(names).not.toContain("grep_search");
     expect(names).not.toContain("map_project_tree");
+    expect(names).not.toContain("explore_subagent");
+    expect(names).not.toContain("dispatch_subagents");
     const read = openai.find((t) => t.function.name === "read_file");
     expect(read?.function.description).toContain("numbered");
   });

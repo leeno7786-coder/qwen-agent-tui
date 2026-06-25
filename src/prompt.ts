@@ -122,7 +122,8 @@ export function buildLargeModelPrompt(
  */
 export function appendPromptExtras(
   base: string,
-  ctx: PromptContext
+  ctx: PromptContext,
+  smallModel = false
 ): string {
   let system = base;
 
@@ -132,10 +133,13 @@ export function appendPromptExtras(
   if (ctx.branch) {
     system += `\nGit branch: ${ctx.branch}`;
   }
-  if (ctx.skillInfos?.length) {
-    system += `\n\n## Skills\nType /skill:name to load one. Skills also auto-load when you mention related keywords.\n${ctx.skillInfos.map(s => `- /skill:${s.name} — ${s.desc}`).join("\n")}`;
-  } else if (ctx.skillNames?.length) {
-    system += `\n\n## Skills\nType /skill:name to load one. Skills also auto-load when you mention related keywords.\nAvailable: ${ctx.skillNames.join(", ")}`;
+  if (!smallModel) {
+    // Skills section is too verbose for small models — they don't use skills well
+    if (ctx.skillInfos?.length) {
+      system += `\n\n## Skills\nType /skill:name to load one. Skills also auto-load when you mention related keywords.\n${ctx.skillInfos.map(s => `- /skill:${s.name} — ${s.desc}`).join("\n")}`;
+    } else if (ctx.skillNames?.length) {
+      system += `\n\n## Skills\nType /skill:name to load one. Skills also auto-load when you mention related keywords.\nAvailable: ${ctx.skillNames.join(", ")}`;
+    }
   }
   if (ctx.platformNote) {
     system += `\n\n${ctx.platformNote}`;
@@ -163,5 +167,5 @@ export function buildSystemPrompt(cfg: Config, ctx: PromptContext): string {
       ? "Platform: Windows — shell commands run in PowerShell."
       : undefined;
 
-  return appendPromptExtras(base, { ...ctx, platformNote });
+  return appendPromptExtras(base, { ...ctx, platformNote }, small);
 }
