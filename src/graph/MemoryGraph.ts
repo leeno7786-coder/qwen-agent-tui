@@ -13,7 +13,7 @@
  * - Incremental updates
  */
 
-import { GraphNode, GraphEdge, GraphQuery, GraphQueryResult, GraphBuildOptions } from './types';
+import { GraphNode, GraphEdge, GraphQuery, GraphQueryResult, GraphBuildOptions, GraphCommunity, GodNode, GraphAnalysis } from './types';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -144,9 +144,24 @@ export class MemoryGraph {
       const savedHashes = JSON.parse(readFileSync(hashFile, 'utf-8'));
       const currentHashes = await this.computeFileHashes();
 
+      const savedKeys = Object.keys(savedHashes);
+      const currentKeys = Object.keys(currentHashes);
+
+      // Different number of files means something was added or removed
+      if (savedKeys.length !== currentKeys.length) {
+        return false;
+      }
+
       // Check if any tracked file has changed
       for (const [path, hash] of Object.entries(currentHashes)) {
         if (savedHashes[path] !== hash) {
+          return false;
+        }
+      }
+
+      // Check if any previously-tracked file was deleted
+      for (const key of savedKeys) {
+        if (!(key in currentHashes)) {
           return false;
         }
       }
@@ -178,32 +193,50 @@ export class MemoryGraph {
   }
 
   /**
-   * Find all files to index
+   * Find all files to index.
+   * Uses OS-agnostic path comparison (normalizes backslashes to forward slashes).
    */
   private findFiles(directory: string): string[] {
     const files: string[] = [];
-    
+
     try {
       for (const item of readdirSync(directory)) {
         const fullPath = join(directory, item);
-        const stat = statSync(fullPath);
+        // Normalize to forward slashes for consistent matching on Windows and Unix
+        const normPath = fullPath.replace(/\\/g, '/');
+
+        let stat: ReturnType<typeof statSync>;
+        try {
+          stat = statSync(fullPath);
+        } catch {
+          continue; // Skip unreadable entries
+        }
 
         if (stat.isDirectory()) {
-          // Skip excluded directories
-          if (this.options.excludedPaths?.some(p => item === p || fullPath.includes(`/${p}/`))) {
+          // Skip excluded directories (match name exactly or as a path segment)
+          if (this.options.excludedPaths?.some(p =>
+            item === p || normPath.includes(`/${p}/`) || normPath.endsWith(`/${p}`)
+          )) {
             continue;
           }
-          
-          // Recurse into included directories or all directories if no includes specified
-          if (!this.options.includedPaths || this.options.includedPaths.some(p => fullPath.includes(`/${p}/`))) {
+
+          if (!this.options.includedPaths) {
+            // No include filter — recurse into everything not excluded
             files.push(...this.findFiles(fullPath));
+          } else {
+            // Only recurse if this directory is (or is under) an included path
+            if (this.options.includedPaths.some(p =>
+              item === p || normPath.includes(`/${p}/`) || normPath.endsWith(`/${p}`)
+            )) {
+              files.push(...this.findFiles(fullPath));
+            }
           }
         } else if (stat.isFile()) {
           // Skip excluded files
           if (this.options.excludedPaths?.some(p => item === p || item.endsWith(p))) {
             continue;
           }
-          
+
           // Check file size
           if (stat.size <= (this.options.maxFileSize || Infinity)) {
             files.push(fullPath);
@@ -834,6 +867,9 @@ export class MemoryGraph {
    * Add an edge to the graph
    */
   addEdge(edge: GraphEdge): void {
+    if (!edge.extraction) {
+      edge.extraction = 'ast';
+    }
     if (this.edges.has(edge.id)) {
       // Update existing edge
       const existing = this.edges.get(edge.id)!;
@@ -963,17 +999,27 @@ export class MemoryGraph {
         let matches = true;
 
         for (const [key, value] of Object.entries(criteria)) {
+          if (key === 'limit') continue; // Skip non-filter keys
           if (key === 'type' && node.type !== value) {
             matches = false;
             break;
           }
-          if (key === 'name' && node.name !== value) {
-            matches = false;
-            break;
+          if (key === 'name' && typeof value === 'string') {
+            // Substring match for name searches
+            if (!node.name.toLowerCase().includes(value.toLowerCase())) {
+              matches = false;
+              break;
+            }
           }
-          if (key === 'path' && node.path !== value) {
-            matches = false;
-            break;
+          if (key === 'path' && typeof value === 'string') {
+            // Substring match for path searches (OS-agnostic)
+            const nodePath = node.path || '';
+            const normNodePath = nodePath.replace(/\\/g, '/');
+            const normValue = value.replace(/\\/g, '/');
+            if (!normNodePath.toLowerCase().includes(normValue.toLowerCase())) {
+              matches = false;
+              break;
+            }
           }
           if (key === 'language' && node.language !== value) {
             matches = false;
@@ -1226,5 +1272,325 @@ export class MemoryGraph {
     }
 
     this.buildIndexes();
+  }
+
+  /**
+   * Build adjacency list from edges for community detection
+   */
+  private buildAdjacency(): Map<string, Map<string, number>> {
+    const adj = new Map<string, Map<string, number>>();
+    for (const [, edge] of this.edges) {
+      if (!adj.has(edge.source)) adj.set(edge.source, new Map());
+      if (!adj.has(edge.target)) adj.set(edge.target, new Map());
+      adj.get(edge.source)!.set(edge.target, (adj.get(edge.source)!.get(edge.target) || 0) + 1);
+      adj.get(edge.target)!.set(edge.source, (adj.get(edge.target)!.get(edge.source) || 0) + 1);
+    }
+    return adj;
+  }
+
+  /**
+   * Detect communities using the Louvain method (modularity maximization).
+   * Stores community id in each node's metadata.
+   */
+  detectCommunities(): { communities: Map<string, number>; modularity: number } {
+    const adj = this.buildAdjacency();
+    const nodeIds = Array.from(this.nodes.keys());
+    const m = this.edges.size;
+    const result = new Map<string, number>();
+
+    if (nodeIds.length === 0 || m === 0) {
+      for (const id of nodeIds) result.set(id, 0);
+      return { communities: result, modularity: 0 };
+    }
+
+    // Initialize: each node in its own community
+    const community = new Map<string, number>();
+    nodeIds.forEach((id, i) => { community.set(id, i); });
+
+    // Precompute degrees
+    const degree = new Map<string, number>();
+    for (const id of nodeIds) {
+      degree.set(id, adj.get(id)?.size || 0);
+    }
+
+    // Sum of degrees per community
+    const sumTot = new Map<number, number>();
+    for (const id of nodeIds) {
+      const c = community.get(id)!;
+      sumTot.set(c, (sumTot.get(c) || 0) + degree.get(id)!);
+    }
+
+    let improved = true;
+    let pass = 0;
+
+    while (improved && pass < 20) {
+      improved = false;
+      pass++;
+
+      for (const nodeId of nodeIds) {
+        const nodeComm = community.get(nodeId)!;
+        const k_i = degree.get(nodeId) || 0;
+        if (k_i === 0) continue;
+
+        const neighbors = adj.get(nodeId);
+        if (!neighbors || neighbors.size === 0) continue;
+
+        const commWeight = new Map<number, number>();
+        for (const [neighbor, weight] of neighbors) {
+          const nc = community.get(neighbor)!;
+          commWeight.set(nc, (commWeight.get(nc) || 0) + weight);
+        }
+
+        const k_i_in_old = commWeight.get(nodeComm) || 0;
+        const sumTot_old = sumTot.get(nodeComm) || 0;
+
+        const gainRemove = -(k_i_in_old / m) + ((sumTot_old - k_i) * k_i) / (2 * m * m);
+
+        let bestComm = nodeComm;
+        let bestGain = 0;
+
+        for (const [nc, k_i_in_new] of commWeight) {
+          if (nc === nodeComm) continue;
+          const sumTot_new = sumTot.get(nc) || 0;
+          const gainAdd = (k_i_in_new / m) - (sumTot_new * k_i) / (2 * m * m);
+          const totalGain = gainRemove + gainAdd;
+
+          if (totalGain > bestGain) {
+            bestGain = totalGain;
+            bestComm = nc;
+          }
+        }
+
+        if (bestComm !== nodeComm) {
+          community.set(nodeId, bestComm);
+          sumTot.set(nodeComm, (sumTot.get(nodeComm) || 0) - k_i);
+          sumTot.set(bestComm, (sumTot.get(bestComm) || 0) + k_i);
+          improved = true;
+        }
+      }
+    }
+
+    // Re-number communities sequentially
+    const commMap = new Map<number, number>();
+    let nextId = 0;
+    const orderedComms: number[] = [];
+    for (const [, c] of community) {
+      if (!commMap.has(c)) {
+        commMap.set(c, nextId++);
+        orderedComms.push(c);
+      }
+    }
+
+    for (const [id, c] of community) {
+      const newId = commMap.get(c)!;
+      result.set(id, newId);
+      const node = this.nodes.get(id);
+      if (node) {
+        node.metadata = { ...node.metadata, community: newId };
+      }
+    }
+
+    // Compute modularity
+    let Q = 0;
+    const m2 = 2 * m;
+    for (const [, edge] of this.edges) {
+      const ci = result.get(edge.source) ?? -1;
+      const cj = result.get(edge.target) ?? -1;
+      if (ci === cj && ci >= 0) {
+        const ki = degree.get(edge.source) || 0;
+        const kj = degree.get(edge.target) || 0;
+        Q += 1 - (ki * kj) / m2;
+      }
+    }
+    Q /= m2;
+
+    return { communities: result, modularity: Q };
+  }
+
+  /**
+   * Get communities with full metadata
+   */
+  getCommunities(): GraphCommunity[] {
+    this.detectCommunities();
+
+    const commNodes = new Map<number, string[]>();
+    for (const [id, node] of this.nodes) {
+      const c = node.metadata?.community;
+      if (c !== undefined) {
+        if (!commNodes.has(c)) commNodes.set(c, []);
+        commNodes.get(c)!.push(id);
+      }
+    }
+
+    const communities: GraphCommunity[] = [];
+    for (const [commId, nodeIds] of commNodes) {
+      const nodes = nodeIds.map(id => this.nodes.get(id)!).filter(Boolean);
+      let internalEdges = 0;
+      let externalEdges = 0;
+      for (const [, edge] of this.edges) {
+        const sComm = this.nodes.get(edge.source)?.metadata?.community;
+        const tComm = this.nodes.get(edge.target)?.metadata?.community;
+        if (sComm === commId && tComm === commId) internalEdges++;
+        else if (sComm === commId || tComm === commId) externalEdges++;
+      }
+
+      const community: GraphCommunity = {
+        id: commId,
+        size: nodeIds.length,
+        nodes,
+        internalEdges,
+        externalEdges,
+        density: nodeIds.length > 1 ? (2 * internalEdges) / (nodeIds.length * (nodeIds.length - 1)) : 0,
+        topNodeIds: nodeIds.slice(0, 10),
+        nodeIds
+      };
+      communities.push(community);
+    }
+
+    communities.sort((a, b) => b.size - a.size);
+    return communities;
+  }
+
+  /**
+   * Get god nodes (most connected / highest degree)
+   */
+  getGodNodes(n: number = 10): GodNode[] {
+    const degreeMap = new Map<string, { in: number; out: number; total: number }>();
+
+    for (const [, edge] of this.edges) {
+      if (!degreeMap.has(edge.source)) degreeMap.set(edge.source, { in: 0, out: 0, total: 0 });
+      if (!degreeMap.has(edge.target)) degreeMap.set(edge.target, { in: 0, out: 0, total: 0 });
+      degreeMap.get(edge.source)!.out++;
+      degreeMap.get(edge.source)!.total++;
+      degreeMap.get(edge.target)!.in++;
+      degreeMap.get(edge.target)!.total++;
+    }
+
+    const godNodes: GodNode[] = [];
+    for (const [id, deg] of degreeMap) {
+      const node = this.nodes.get(id);
+      if (node) {
+        godNodes.push({ node, degree: deg.total, inDegree: deg.in, outDegree: deg.out });
+      }
+    }
+
+    godNodes.sort((a, b) => b.degree - a.degree);
+    return godNodes.slice(0, n);
+  }
+
+  /**
+   * Get surprising connections: edges that connect different communities
+   */
+  getSurprisingConnections(limit: number = 20): Array<{ edge: GraphEdge; sourceCommunity: number; targetCommunity: number }> {
+    this.detectCommunities();
+    const results: Array<{ edge: GraphEdge; sourceCommunity: number; targetCommunity: number }> = [];
+
+    for (const [, edge] of this.edges) {
+      const sNode = this.nodes.get(edge.source);
+      const tNode = this.nodes.get(edge.target);
+      if (!sNode || !tNode) continue;
+
+      const sComm = sNode.metadata?.community;
+      const tComm = tNode.metadata?.community;
+      if (sComm !== undefined && tComm !== undefined && sComm !== tComm) {
+        results.push({ edge, sourceCommunity: sComm, targetCommunity: tComm });
+      }
+    }
+
+    // Sort by edge type interestingness
+    results.sort((a, b) => {
+      const rank: Record<string, number> = { calls: 5, imports: 4, extends: 3, implements: 2, part_of: 1, uses: 1 };
+      return (rank[b.edge.type] || 0) - (rank[a.edge.type] || 0);
+    });
+
+    return results.slice(0, limit);
+  }
+
+  /**
+   * Generate a full analysis report in markdown
+   */
+  generateAnalysisReport(): string {
+    const stats = this.getStats();
+    const communities = this.getCommunities();
+    const godNodes = this.getGodNodes(15);
+    const surprising = this.getSurprisingConnections(15);
+
+    const lines: string[] = [];
+    lines.push('# Memory Graph Analysis Report');
+    lines.push('');
+    lines.push('## Overview');
+    lines.push('');
+    lines.push(`- **Nodes**: ${stats.nodeCount}`);
+    lines.push(`- **Edges**: ${stats.edgeCount}`);
+    lines.push(`- **Communities**: ${communities.length}`);
+    lines.push(`- **Graph Density**: ${stats.nodeCount > 1 ? ((2 * stats.edgeCount) / (stats.nodeCount * (stats.nodeCount - 1)) * 100).toFixed(2) : 0}%`);
+    lines.push('');
+
+    lines.push('## Nodes by Type');
+    lines.push('');
+    lines.push('| Type | Count |');
+    lines.push('|------|-------|');
+    for (const [type, count] of Object.entries(stats.nodesByType).sort((a, b) => b[1] - a[1])) {
+      lines.push(`| ${type} | ${count} |`);
+    }
+    lines.push('');
+
+    lines.push('## Nodes by Language');
+    lines.push('');
+    lines.push('| Language | Count |');
+    lines.push('|----------|-------|');
+    for (const [lang, count] of Object.entries(stats.nodesByLanguage).sort((a, b) => b[1] - a[1])) {
+      lines.push(`| ${lang} | ${count} |`);
+    }
+    lines.push('');
+
+    lines.push('## God Nodes (Highest Degree)');
+    lines.push('');
+    lines.push('| Rank | Node | Type | Degree | In | Out |');
+    lines.push('|------|------|------|--------|----|-----|');
+    godNodes.forEach((gn, i) => {
+      lines.push(`| ${i + 1} | ${gn.node.name} | ${gn.node.type} | ${gn.degree} | ${gn.inDegree} | ${gn.outDegree} |`);
+    });
+    lines.push('');
+
+    lines.push('## Communities');
+    lines.push('');
+    communities.forEach((comm, i) => {
+      lines.push(`### Community ${comm.id} (${comm.size} nodes)`);
+      lines.push('');
+      lines.push(`- **Size**: ${comm.size} nodes`);
+      lines.push(`- **Internal Edges**: ${comm.internalEdges}`);
+      lines.push(`- **External Edges**: ${comm.externalEdges}`);
+      lines.push(`- **Density**: ${(comm.density * 100).toFixed(1)}%`);
+      lines.push('');
+      if (comm.topNodeIds.length > 0) {
+        lines.push('Top nodes:');
+        comm.topNodeIds.slice(0, 8).forEach(id => {
+          const node = this.nodes.get(id);
+          if (node) {
+            lines.push(`- \`${node.name}\` (${node.type})`);
+          }
+        });
+        lines.push('');
+      }
+    });
+
+    if (surprising.length > 0) {
+      lines.push('## Surprising Connections (Cross-Community Edges)');
+      lines.push('');
+      lines.push('| Source | Target | Type | Communities |');
+      lines.push('|--------|--------|------|-------------|');
+      surprising.forEach(sc => {
+        const sName = this.nodes.get(sc.edge.source)?.name || sc.edge.source;
+        const tName = this.nodes.get(sc.edge.target)?.name || sc.edge.target;
+        lines.push(`| ${sName} | ${tName} | ${sc.edge.type} | ${sc.sourceCommunity} → ${sc.targetCommunity} |`);
+      });
+      lines.push('');
+    }
+
+    lines.push('---');
+    lines.push(`*Report generated at ${new Date().toISOString()}*`);
+
+    return lines.join('\n');
   }
 }

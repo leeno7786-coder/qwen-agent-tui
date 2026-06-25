@@ -582,7 +582,7 @@ export async function chat(
                    arguments: func.function.arguments || "{}",
                  },
                };
-             }).filter(Boolean),
+             }).filter((x): x is NonNullable<typeof x> => x !== null),
            },
            usage: completion.usage
              ? {

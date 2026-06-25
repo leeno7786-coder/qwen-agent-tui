@@ -5,7 +5,7 @@
  */
 
 import { MemoryGraph } from './MemoryGraph';
-import type { GraphNode, GraphEdge, GraphQuery, GraphQueryResult } from './types';
+import type { GraphNode, GraphEdge, GraphQuery, GraphQueryResult, GraphCommunity, GodNode, GraphAnalysis } from './types';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -13,23 +13,44 @@ import { join } from 'node:path';
 const graphCache: Map<string, MemoryGraph> = new Map();
 
 /**
- * Get or create a memory graph for a workspace
+ * Get or create a memory graph for a workspace.
+ * Always checks staleness; rebuilds automatically when the graph is outdated.
  */
-export async function getMemoryGraph(workspace: string): Promise<MemoryGraph> {
-  // Check cache first
-  if (graphCache.has(workspace)) {
-    return graphCache.get(workspace)!;
+export async function getMemoryGraph(workspace: string, autoRebuild = true): Promise<MemoryGraph> {
+  const cached = graphCache.get(workspace);
+
+  // Check if cached graph is still usable
+  if (cached) {
+    const upToDate = await cached.isUpToDate().catch(() => false);
+    if (upToDate) {
+      return cached;
+    }
+    // Stale — fall through to load/rebuild
   }
 
-  // Try to load existing graph
+  // Try to load existing graph from disk
   const existingGraph = await MemoryGraph.load(workspace);
-  if (existingGraph && await existingGraph.isUpToDate()) {
+  if (existingGraph) {
+    const upToDate = await existingGraph.isUpToDate().catch(() => false);
+    if (upToDate) {
+      graphCache.set(workspace, existingGraph);
+      return existingGraph;
+    }
+    // Loaded but stale — rebuild if auto-rebuild is enabled
+    if (autoRebuild) {
+      await existingGraph.build();
+      graphCache.set(workspace, existingGraph);
+      return existingGraph;
+    }
     graphCache.set(workspace, existingGraph);
     return existingGraph;
   }
 
-  // Create new graph
+  // No existing graph — create and build
   const graph = new MemoryGraph(workspace);
+  if (autoRebuild) {
+    await graph.build();
+  }
   graphCache.set(workspace, graph);
   return graph;
 }
@@ -423,6 +444,72 @@ export async function get_graph(workspace: string): Promise<MemoryGraph | null> 
     return await getMemoryGraph(workspace);
   } catch (error) {
     return null;
+  }
+}
+
+/**
+ * Get communities from the memory graph
+ */
+export async function get_communities(args: {
+  workspace?: string;
+}): Promise<{ ok: boolean; communities: GraphCommunity[]; error?: string }> {
+  const workspace = args.workspace || process.cwd();
+  try {
+    const graph = await getMemoryGraph(workspace);
+    const communities = graph.getCommunities();
+    return { ok: true, communities };
+  } catch (e: any) {
+    return { ok: false, communities: [], error: e.message };
+  }
+}
+
+/**
+ * Get god nodes (most connected nodes) from the memory graph
+ */
+export async function get_god_nodes(args: {
+  workspace?: string;
+  limit?: number;
+}): Promise<{ ok: boolean; godNodes: GodNode[]; error?: string }> {
+  const workspace = args.workspace || process.cwd();
+  try {
+    const graph = await getMemoryGraph(workspace);
+    const godNodes = graph.getGodNodes(args.limit || 10);
+    return { ok: true, godNodes };
+  } catch (e: any) {
+    return { ok: false, godNodes: [], error: e.message };
+  }
+}
+
+/**
+ * Get surprising connections (cross-community edges) from the memory graph
+ */
+export async function get_surprising_connections(args: {
+  workspace?: string;
+  limit?: number;
+}): Promise<{ ok: boolean; connections: Array<{ edge: GraphEdge; sourceCommunity: number; targetCommunity: number }>; error?: string }> {
+  const workspace = args.workspace || process.cwd();
+  try {
+    const graph = await getMemoryGraph(workspace);
+    const connections = graph.getSurprisingConnections(args.limit || 20);
+    return { ok: true, connections };
+  } catch (e: any) {
+    return { ok: false, connections: [], error: e.message };
+  }
+}
+
+/**
+ * Generate a full analysis report from the memory graph
+ */
+export async function get_analysis_report(args: {
+  workspace?: string;
+}): Promise<{ ok: boolean; report?: string; error?: string }> {
+  const workspace = args.workspace || process.cwd();
+  try {
+    const graph = await getMemoryGraph(workspace);
+    const report = graph.generateAnalysisReport();
+    return { ok: true, report };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
   }
 }
 
