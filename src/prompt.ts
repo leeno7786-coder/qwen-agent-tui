@@ -1,6 +1,7 @@
 import type { Config } from "./types";
 import { isSmallModelFromConfig } from "./model-runtime";
 import { subAgentAvailable } from "./tools";
+import { openRouterDispatchLimit } from "./subagent";
 
 export interface PromptContext {
   workspace: string;
@@ -73,15 +74,43 @@ export function buildLargeModelPrompt(
   ];
 
   if (cfg && subAgentAvailable(cfg)) {
+    const subBase = cfg.subAgentBaseURL ?? cfg.baseURL;
+    const isMistral = subBase.toLowerCase().includes("mistral.ai");
+    const isOpenRouter = subBase.toLowerCase().includes("openrouter.ai");
+
     lines.push(
       "",
-      "## Sub-agents",
-      "- On OpenRouter, sub-agents use `openrouter/free` by default (random free tool-capable model). Current: `" +
-        `${cfg.subAgentModel}\`. Override via \`subAgentModel\` in config.`,
-      "- **dispatch_subagents** — pass `agents: [{ name, prompt, focus_path? }]`. You craft each prompt; they run one at a time.",
-      "- On OpenRouter free tier, dispatch **at most 2 agents** per call; use **explore_subagent** for additional lenses.",
+      "## Sub-agents"
+    );
+
+    if (isMistral) {
+      lines.push(
+        `- Sub-agents use Mistral API with model \`${cfg.subAgentModel}\`.`
+      );
+    } else if (isOpenRouter) {
+      lines.push(
+        `- On OpenRouter, sub-agents use \`openrouter/free\` by default (random free tool-capable model). Current: \`${cfg.subAgentModel}\`. Override via \`subAgentModel\` in config.`
+      );
+    } else {
+      lines.push(
+        `- Sub-agents use model \`${cfg.subAgentModel}\`.`
+      );
+    }
+
+    lines.push(
+      "- **dispatch_subagents** — pass `agents: [{ name, prompt, focus_path? }]`. You craft each prompt; they run one at a time."
+    );
+
+    const limit = openRouterDispatchLimit(cfg);
+    if (limit !== null) {
+      lines.push(
+        `- On OpenRouter free tier, dispatch **at most ${limit} agents** per call; use **explore_subagent** for additional lenses.`
+      );
+    }
+
+    lines.push(
       "- **explore_subagent** — single investigation when one angle is enough.",
-      "- Sub-agents gather evidence with path:line citations; you verify and apply fixes.",
+      "- Sub-agents gather evidence with path:line citations; you verify and apply fixes."
     );
   }
 

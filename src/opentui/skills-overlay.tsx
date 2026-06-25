@@ -37,7 +37,6 @@ export const BUILTIN_COMMANDS: { name: string; description: string }[] = [
   { name: "/compact", description: "Compact conversation" },
   { name: "/auto", description: "Autonomous mode (F3)" },
   { name: "/todo", description: "Todo sidebar (F4)" },
-  { name: "/reset-rounds", description: "Reset round counter" },
   { name: "/save", description: "Save session (F5)" },
   { name: "/load", description: "Load session (F6)" },
   { name: "/cd", description: "Change tool workspace. Usage: /cd [path]" },

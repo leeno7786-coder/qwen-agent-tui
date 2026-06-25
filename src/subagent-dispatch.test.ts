@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   capSubAgentTasks,
+  cappedDispatchSkipMessage,
   DEFAULT_OPENROUTER_DISPATCH_LIMIT,
   openRouterDispatchLimit,
   type SubAgentTask,
@@ -48,6 +49,21 @@ describe("openRouterDispatchLimit", () => {
     expect(
       openRouterDispatchLimit({ ...openRouterCfg, subAgentMaxPerDispatch: 3 })
     ).toBe(3);
+  });
+});
+
+describe("cappedDispatchSkipMessage", () => {
+  it("includes agent hint when name is provided", () => {
+    const msg = cappedDispatchSkipMessage(2, "performance");
+    expect(msg).toContain("Skipped —");
+    expect(msg).toContain("max 2");
+    expect(msg).toContain('explore_subagent for "performance"');
+  });
+
+  it("omits agent hint when name is empty", () => {
+    const msg = cappedDispatchSkipMessage(2);
+    expect(msg).toContain("Skipped —");
+    expect(msg).not.toContain("explore_subagent");
   });
 });
 

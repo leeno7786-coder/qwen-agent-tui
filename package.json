@@ -10,10 +10,13 @@
     "start:opentui": "bun run src/main.ts tui",
     "agent": "bun run src/main.ts run",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts,.tsx",
+    "format": "prettier --write src",
+    "format:check": "prettier --check src",
     "test": "bun test",
     "test:security": "bun test src/security/index.test.ts",
     "self-test": "bun run scripts/self-test.ts",
-    "ci": "bun test && bun run self-test",
+    "ci": "bun run typecheck && bun run lint && bun run format:check && bun test && bun run self-test",
     "build": "bun build src/main.ts --outdir dist --minify --target node",
     "build:all": "bun build src/main.ts src/opentui/index.tsx --outdir dist --minify --target node",
     "package": "npm pack",
@@ -22,7 +25,9 @@
   "devDependencies": {
     "@types/bun": "latest",
     "@types/react": "^19",
-    "@types/react-dom": "^19"
+    "@types/react-dom": "^19",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0"
   },
   "peerDependencies": {
     "typescript": "^6.0.3"

@@ -41,7 +41,7 @@ export function HelpOverlay({ theme, onClose }: HelpOverlayProps) {
       <text fg={theme.agentFg}>  /compact       Compact conversation</text>
       <text fg={theme.agentFg}>  /auto ...      Autonomous mode</text>
       <text fg={theme.agentFg}>  /todo          Toggle todo sidebar</text>
-      <text fg={theme.agentFg}>  /reset-rounds  Reset round counter (after hitting max)</text>
+      <text fg={theme.agentFg}></text>
       <text fg={theme.agentFg}>  /todo add ...  Add a todo</text>
       <text fg={theme.agentFg}>  /skill         List loaded skills</text>
       <text fg={theme.agentFg}>  /skills        Manage skills (F8) - create, enable, disable</text>
@@ -55,8 +55,9 @@ export function HelpOverlay({ theme, onClose }: HelpOverlayProps) {
       <text fg={theme.agentFg}>  /theme [name]  Switch theme</text>
       <text fg={theme.agentFg}>  /connect       Connect a provider - browse runtimes, enter API keys, select models</text>
       <text fg={theme.agentFg}>  /doctor        Config + LM Studio health (same as CLI doctor)</text>
-      <text fg={theme.agentFg}>  /models        List models, context, load state (same as CLI models)</text>
-      <text fg={theme.agentFg}>  /cd [path]     Change the workspace for tools</text>
+  <text fg={theme.agentFg}>  /models        List models, context, load state (same as CLI models)</text>
+  <text fg={theme.agentFg}>  /graph [sub]   Memory graph — build|stats|report</text>
+  <text fg={theme.agentFg}>  /cd [path]     Change the workspace for tools</text>
       <text fg={theme.agentFg}>  /allow [path]  Approve extra tool access outside the workspace</text>
       <text fg={theme.agentFg}>  /export        Export chat to markdown</text>
       <text fg={theme.agentFg}>  /exit          Quit (auto-saves session)</text>

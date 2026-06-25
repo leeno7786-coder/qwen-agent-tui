@@ -48,11 +48,11 @@ export const MODELS: Record<string, { baseURL: string; model: string }> = {
   },
 };
 
-/** Default sub-agent model: OpenRouter free router (tool-capable free models, load-balanced). */
-export const DEFAULT_SUB_AGENT_MODEL = "openrouter/free";
+/** Default sub-agent model: Mistral Small (Latest). */
+export const DEFAULT_SUB_AGENT_MODEL = "mistral-small-latest";
 
-/** Default sub-agent API endpoint (OpenRouter). */
-export const DEFAULT_SUB_AGENT_BASE_URL = "https://openrouter.ai/api/v1";
+/** Default sub-agent API endpoint (Mistral). */
+export const DEFAULT_SUB_AGENT_BASE_URL = "https://api.mistral.ai/v1";
 
 /** Default sub-agent tool-loop depth (stronger models can go deeper). */
 export const DEFAULT_SUB_AGENT_MAX_ITERATIONS = 12;
@@ -71,6 +71,7 @@ function getDefault(): Config {
     temperature: 0.3,
     maxTokens: 4096,
     rateLimitMs: 250,
+    securityEnabled: true,
   };
 }
 
@@ -91,18 +92,22 @@ export function applySubAgentDefaults(cfg: Config): Config {
     cfg.subAgentMaxParallel = 3;
   }
   if (!cfg.subAgentBaseURL) {
-    const model = cfg.subAgentModel;
-    if (model === DEFAULT_SUB_AGENT_MODEL || model.startsWith("openrouter/") || model.includes("/")) {
-      cfg.subAgentBaseURL = DEFAULT_SUB_AGENT_BASE_URL;
-    }
+    cfg.subAgentBaseURL = DEFAULT_SUB_AGENT_BASE_URL;
   }
   const subBase = cfg.subAgentBaseURL ?? cfg.baseURL;
-  if (!cfg.subAgentApiKey && subBase.includes("openrouter.ai")) {
-    cfg.subAgentApiKey =
-      process.env.OPENROUTER_API_KEY ||
-      getApiKey("OPENROUTER_API_KEY") ||
-      (cfg.baseURL.includes("openrouter.ai") ? cfg.apiKey : "") ||
-      "";
+  if (!cfg.subAgentApiKey) {
+    if (subBase.includes("mistral.ai")) {
+      cfg.subAgentApiKey =
+        process.env.MISTRAL_API_KEY ||
+        getApiKey("MISTRAL_API_KEY") ||
+        "";
+    } else if (subBase.includes("openrouter.ai")) {
+      cfg.subAgentApiKey =
+        process.env.OPENROUTER_API_KEY ||
+        getApiKey("OPENROUTER_API_KEY") ||
+        (cfg.baseURL.includes("openrouter.ai") ? cfg.apiKey : "") ||
+        "";
+    }
   }
   if (cfg.subAgentEnabled === undefined) {
     cfg.subAgentEnabled = true;
@@ -154,8 +159,8 @@ export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
     if (existsSync(p)) {
       try {
         Object.assign(cfg, JSON.parse(readFileSync(p, "utf-8")));
-      } catch {
-        /* ignore malformed JSON */
+      } catch (err) {
+        console.warn(`Warning: failed to parse config file ${p}:`, err instanceof Error ? err.message : String(err));
       }
       break;
     }
@@ -364,9 +369,19 @@ export function validateConfig(cfg: Config): {
     !subIsLocal &&
     (!cfg.subAgentApiKey || cfg.subAgentApiKey.trim() === "")
   ) {
-    warnings.push(
-      "subAgentApiKey is empty — set OPENROUTER_API_KEY for sub-agents (OpenRouter)"
-    );
+    if (subBase.includes("mistral.ai")) {
+      warnings.push(
+        "subAgentApiKey is empty — set MISTRAL_API_KEY for sub-agents (Mistral)"
+      );
+    } else if (subBase.includes("openrouter.ai")) {
+      warnings.push(
+        "subAgentApiKey is empty — set OPENROUTER_API_KEY for sub-agents (OpenRouter)"
+      );
+    } else {
+      warnings.push(
+        "subAgentApiKey is empty — set API key for sub-agents"
+      );
+    }
   }
 
   if (!isLocal && cfg.apiKey && cfg.apiKey.trim().length < 8) {
@@ -565,6 +580,9 @@ export function saveApiKeyToEnv(
     
     // Reload environment variables
     dotenvConfig({ path: resolve(targetPath) });
+    // dotenv does not override existing env vars, so force-set it so
+    // getApiKey() returns the latest value within the same session.
+    process.env[envVarName] = apiKey;
     
     return true;
   } catch (error) {
@@ -679,8 +697,8 @@ export function loadSkillConfig(): SkillConfig {
   
   try {
     return JSON.parse(readFileSync(configPath, "utf-8"));
-  } catch {
-    // Ignore malformed JSON
+  } catch (err) {
+    console.warn(`Warning: failed to parse skill config ${configPath}:`, err instanceof Error ? err.message : String(err));
     return {};
   }
 }

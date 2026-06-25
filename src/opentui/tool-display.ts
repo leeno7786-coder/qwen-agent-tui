@@ -23,6 +23,8 @@ function statusGlyph(status: SubAgentDispatchAgentRow["status"]): string {
       return "✓";
     case "failed":
       return "✗";
+    case "skipped":
+      return "−";
     default:
       return "·";
   }
@@ -31,7 +33,8 @@ function statusGlyph(status: SubAgentDispatchAgentRow["status"]): string {
 export function formatSubAgentMonitorLine(agent: SubAgentDispatchAgentRow): string {
   const tools = `${agent.tools_used} tool${agent.tools_used === 1 ? "" : "s"}`;
   const tok = `${agent.input_tokens}↑ ${agent.output_tokens}↓`;
-  return `${statusGlyph(agent.status)} ${agent.name}: ${tools} · ${tok}`;
+  const error = agent.error ? ` · ${agent.error}` : "";
+  return `${statusGlyph(agent.status)} ${agent.name}: ${tools} · ${tok}${error}`;
 }
 
 export function subAgentLinesFromProgress(
@@ -48,14 +51,22 @@ export function subAgentLinesFromDispatchResult(result: any): string[] | undefin
     const tools = Array.isArray(r?.tools_used) ? r.tools_used.length : 0;
     const inp = r?.usage?.input_tokens ?? 0;
     const out = r?.usage?.output_tokens ?? 0;
-    const status = r?.ok ? "done" : "failed";
+    const error = r?.error ?? "";
+    let status: SubAgentDispatchAgentRow["status"];
+    if (r?.ok) {
+      status = "done";
+    } else if (error.startsWith("Skipped —")) {
+      status = "skipped";
+    } else {
+      status = "failed";
+    }
     return formatSubAgentMonitorLine({
       name,
       status,
       tools_used: tools,
       input_tokens: inp,
       output_tokens: out,
-      error: r?.error,
+      error: error || undefined,
     });
   });
 }
@@ -181,12 +192,19 @@ function dispatchSummary(result: any): string | undefined {
   if (!Array.isArray(result?.results)) return undefined;
   const okN = result.ok_count ?? result.results.filter((r: any) => r?.ok).length;
   const total = result.count ?? result.results.length;
+  const skipped = result.skipped_count ?? 0;
   const errLine =
     (Array.isArray(result.errors) && result.errors[0] && String(result.errors[0])) ||
     (typeof result.error === "string" && result.error) ||
     "";
-  if (okN === 0 && errLine) {
+  if (okN === 0 && skipped === 0 && errLine) {
     return `${okN}/${total} failed · ${errLine.length > 120 ? errLine.slice(0, 119) + "…" : errLine}`;
+  }
+  if (skipped > 0 && okN === 0) {
+    return `0/${total} ran · ${skipped} capped (limit ${result.dispatch_limit ?? "?"})`;
+  }
+  if (skipped > 0) {
+    return `${okN}/${total} ran · ${skipped} capped (limit ${result.dispatch_limit ?? "?"})`;
   }
   if (result.auto_fallback) {
     return `${okN}/${total} sub-agents · sequential (auto ${result.auto_fallback})`;

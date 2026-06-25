@@ -91,6 +91,8 @@ export interface Config {
   securityBlockedPaths?: string[];
   /** Security manager instance for runtime security checks. */
   securityManager?: any;
+  /** Default timeout for shell commands in seconds (default: 30). */
+  commandTimeoutSeconds?: number;
 }
 
 /** Possible states of the agent lifecycle. */

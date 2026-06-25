@@ -166,39 +166,52 @@ describe("config.ts", () => {
   });
 
   describe("Sub-agent defaults", () => {
-    it("defaults sub-agents to OpenRouter free router", () => {
+    it("defaults sub-agents to Mistral Small on Mistral", () => {
       const cfg = loadConfig({
         baseURL: "http://127.0.0.1:1234/v1",
         model: "main-8b",
         apiKey: "lm-studio",
       });
 
-      expect(cfg.subAgentModel).toBe("openrouter/free");
-      expect(cfg.subAgentBaseURL).toBe("https://openrouter.ai/api/v1");
+      expect(cfg.subAgentModel).toBe("mistral-small-latest");
+      expect(cfg.subAgentBaseURL).toBe("https://api.mistral.ai/v1");
       expect(cfg.subAgentEnabled).toBe(true);
       expect(cfg.subAgentMaxIterations).toBe(12);
       expect(cfg.subAgentMaxTokens).toBe(4096);
     });
 
-    it("uses OPENROUTER_API_KEY for sub-agents", () => {
-      process.env.OPENROUTER_API_KEY = "or-test-key-1234567890";
+    it("uses MISTRAL_API_KEY for Mistral sub-agents", () => {
+      process.env.MISTRAL_API_KEY = "mistral-test-key-1234567890";
+      delete process.env.OPENROUTER_API_KEY;
 
       const cfg = loadConfig({
         baseURL: "http://127.0.0.1:1234/v1",
         model: "main-8b",
       });
 
-      expect(cfg.subAgentApiKey).toBe("or-test-key-1234567890");
+      expect(cfg.subAgentApiKey).toBe("mistral-test-key-1234567890");
     });
 
-    it("inherits main OpenRouter apiKey for sub-agents", () => {
+    it("inherits main OpenRouter apiKey when sub-agent is explicitly OpenRouter", () => {
+      const cfg = loadConfig({
+        baseURL: "https://openrouter.ai/api/v1",
+        model: "anthropic/claude-sonnet-4",
+        apiKey: "or-main-key-1234567890",
+        subAgentBaseURL: "https://openrouter.ai/api/v1",
+      });
+
+      expect(cfg.subAgentApiKey).toBe("or-main-key-1234567890");
+    });
+
+    it("uses Mistral API by default when main agent is on OpenRouter", () => {
       const cfg = loadConfig({
         baseURL: "https://openrouter.ai/api/v1",
         model: "anthropic/claude-sonnet-4",
         apiKey: "or-main-key-1234567890",
       });
 
-      expect(cfg.subAgentApiKey).toBe("or-main-key-1234567890");
+      expect(cfg.subAgentModel).toBe("mistral-small-latest");
+      expect(cfg.subAgentBaseURL).toBe("https://api.mistral.ai/v1");
     });
   });
 });

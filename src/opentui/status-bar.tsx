@@ -19,8 +19,6 @@ interface StatusBarProps {
   lastUsage?: { input_tokens: number; output_tokens: number };
   totalUsage?: { input_tokens: number; output_tokens: number };
   elapsedMs?: number;
-  roundCounter?: number;
-  maxRounds?: number;
   theme: Theme;
   mouseEnabled?: boolean;
 }
@@ -44,8 +42,6 @@ export function StatusBar({
   lastUsage,
   totalUsage,
   elapsedMs,
-  roundCounter,
-  maxRounds,
   theme,
   mouseEnabled = true,
 }: StatusBarProps) {
@@ -88,11 +84,6 @@ export function StatusBar({
       ? spinnerFrame(elapsedMs || 0) + " "
       : "";
   
-  // Round counter display
-  const roundDisplay = (roundCounter !== undefined && maxRounds !== undefined)
-    ? ` · ${roundCounter}/${maxRounds} rounds`
-    : "";
-
   return (
     <box flexDirection="column" height={2} flexShrink={0} backgroundColor={theme.bgPanel}>
       <box flexDirection="row" paddingX={1} height={1}>
@@ -108,7 +99,6 @@ export function StatusBar({
         {todoCount > 0 && (
           <text fg={theme.mutedFg}> · {todoCount}</text>
         )}
-        <text fg={theme.mutedFg}>{roundDisplay}</text>
       </box>
       <box flexDirection="row" paddingX={1} height={1}>
         <text fg={theme.mutedFg}>

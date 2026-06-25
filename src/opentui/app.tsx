@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useKeyboard } from "@opentui/react";
 import type { CliRenderer } from "@opentui/core";
 import { existsSync, statSync } from "fs";
@@ -38,6 +38,7 @@ import {
   getDoctorReport,
   getModelsList,
 } from "../cli/reports";
+import { build_memory_graph, get_graph_stats, get_analysis_report } from "../graph/tools";
 
 /**
  * Simple token estimation function.
@@ -107,11 +108,63 @@ function estimateMessageOverhead(m: Message): number {
 }
 
 /**
+ * Calculate the total estimated token count for a conversation.
+ */
+function totalConversationTokens(messages: Message[]): number {
+  return calculateConversationTokenCount(messages) + messages.reduce((t, m) => t + estimateMessageOverhead(m), 0);
+}
+
+/**
+ * Generate a summary string from removed messages for compact display.
+ */
+function summarizeRemovedMessages(removed: Message[]): string {
+  const toolCalls = removed.filter(m => m.toolCalls && m.toolCalls.length > 0);
+  const userMessages = removed.filter(m => m.role === "user");
+  const assistantMessages = removed.filter(m => m.role === "assistant" && m.content);
+
+  const parts: string[] = [];
+
+  if (toolCalls.length > 0) {
+    const toolNames = new Set<string>();
+    toolCalls.forEach(tc => tc.toolCalls?.forEach(t => toolNames.add(t.name || "unknown")));
+    parts.push(`Tools used: ${Array.from(toolNames).join(", ")}`);
+  }
+
+  if (userMessages.length > 0) {
+    const keyRequests = userMessages.slice(-3).map(m => m.content.slice(0, 100)).filter(Boolean);
+    if (keyRequests.length > 0) {
+      parts.push(`Recent requests: ${keyRequests.join("; ")}`);
+    }
+  }
+
+  if (assistantMessages.length > 0) {
+    parts.push(`Completed ${assistantMessages.length} response cycles`);
+  }
+
+  return parts.length > 0 ? `Summary of ${removed.length} earlier messages: ${parts.join(". ")}.` : "";
+}
+
+/**
+ * Build a compacted message array: system messages + optional summary + kept messages.
+ */
+function buildCompactMessages(agent: AgentCore, removed: Message[], kept: Message[]): Message[] {
+  const sys = agent.messages.filter((m) => m.role === "system");
+  const summary = summarizeRemovedMessages(removed);
+  return [
+    ...sys,
+    ...(summary
+      ? [{ id: Math.random().toString(36).slice(2, 10), role: "user" as const, content: `[Compact: ${removed.length} messages summarized. ${summary}]`, timestamp: Date.now() }]
+      : []),
+    ...kept,
+  ];
+}
+
+/**
  * Check if the conversation needs auto-compaction and perform it if necessary.
  * Uses rolling window approach: keeps recent messages and summarizes older ones.
- * @param agent - The agent instance
- * @param setMessages - React state setter for messages
  */
+const MAX_MESSAGES_BEFORE_COMPACT = 200;
+
 function checkAndAutoCompact(agent: AgentCore, setMessages: React.Dispatch<React.SetStateAction<Message[]>>) {
   try {
     const settings = getModelCompactionSettings(agent.cfg.model, agent.cfg.maxTokens, {
@@ -121,80 +174,25 @@ function checkAndAutoCompact(agent: AgentCore, setMessages: React.Dispatch<React
       modelContextLength: agent.cfg.modelContextLength,
       modelMaxContextLength: agent.cfg.modelMaxContextLength,
     });
-    const { contextSize, compactThreshold, keepCount } = settings;
+    const { compactThreshold, keepCount } = settings;
     
-    // Calculate current conversation token count with message format awareness
-    const currentTokenCount = calculateConversationTokenCount(agent.messages);
-    const overhead = agent.messages.reduce((t, m) => t + estimateMessageOverhead(m), 0);
-    const totalEstimated = currentTokenCount + overhead;
+    if (totalConversationTokens(agent.messages) <= compactThreshold && agent.messages.length <= MAX_MESSAGES_BEFORE_COMPACT) return;
     
-    // If we're over the threshold, use rolling window compaction
-    if (totalEstimated > compactThreshold) {
-      const sys = agent.messages.filter((m) => m.role === "system");
-      const rest = agent.messages.filter(
-        (m) =>
-          m.role !== "system" &&
-          !(m.role === "assistant" && !m.toolCalls && m.content.trim() === "")
-      );
-      
-      // Rolling window: keep the most recent messages
-      const kept = rest.slice(-keepCount);
-      const removed = rest.slice(0, -keepCount);
-      
-      // Generate a summary of removed messages if there are any
-      let summaryContent = "";
-      if (removed.length > 0) {
-        const toolCalls = removed.filter(m => m.toolCalls && m.toolCalls.length > 0);
-        const userMessages = removed.filter(m => m.role === "user");
-        const assistantMessages = removed.filter(m => m.role === "assistant" && m.content);
-        
-        const summaryParts: string[] = [];
-        
-        if (toolCalls.length > 0) {
-          const toolNames = new Set<string>();
-          toolCalls.forEach(tc => tc.toolCalls?.forEach(t => toolNames.add(t.name || "unknown")));
-          summaryParts.push(`Tools used: ${Array.from(toolNames).join(", ")}`);
-        }
-        
-        if (userMessages.length > 0) {
-          const keyRequests = userMessages.slice(-3).map(m => m.content.slice(0, 100)).filter(Boolean);
-          if (keyRequests.length > 0) {
-            summaryParts.push(`Recent requests: ${keyRequests.join("; ")}`);
-          }
-        }
-        
-        if (assistantMessages.length > 0) {
-          summaryParts.push(`Completed ${assistantMessages.length} response cycles`);
-        }
-        
-        summaryContent = `Summary of ${removed.length} earlier messages: ${summaryParts.join(". ")}.`;
-      }
-      
-      // Build new message array with rolling window
-      agent.messages = [
-        ...sys,
-        ...(summaryContent
-          ? [
-              {
-                id: Math.random().toString(36).slice(2, 10),
-                role: "user" as const,
-                 content: `[Compact: ${removed.length} messages summarized. ${summaryContent}]`,
-                timestamp: Date.now(),
-              },
-            ]
-          : []),
-        ...kept,
-      ];
-      
-      // Update React state to trigger re-render, user sees the compact message
-      setMessages([...agent.messages]);
-      if (process.env.QWEN_DEBUG_LLM) {
-        console.error(`[auto-compact] ${removed.length} messages removed, ${kept.length} kept, est ${totalEstimated} -> ~${calculateConversationTokenCount(agent.messages)} tokens`);
-      }
+    const rest = agent.messages.filter(
+      (m) => m.role !== "system" && !(m.role === "assistant" && !m.toolCalls && m.content.trim() === "")
+    );
+    
+    const kept = rest.slice(-keepCount);
+    const removed = rest.slice(0, -keepCount);
+    
+    agent.messages = buildCompactMessages(agent, removed, kept);
+    setMessages([...agent.messages]);
+    
+    if (process.env.QWEN_DEBUG_LLM) {
+      console.error(`[auto-compact] ${removed.length} removed, ${kept.length} kept, est -> ~${calculateConversationTokenCount(agent.messages)} tokens`);
     }
   } catch (err) {
     console.error("[auto-compact] compaction failed:", err);
-    // Don't crash the UI — compaction is a best-effort optimization
   }
 }
 
@@ -235,6 +233,12 @@ export function App({ renderer }: { renderer: CliRenderer }) {
   const [selectedMessageIndex, setSelectedMessageIndex] = useState<number | null>(null);
   const [page, setPage] = useState(1);
   const [paginated, setPaginated] = useState(false);
+  const displayMessageCount = useMemo(
+    () => messages.filter(
+      (msg) => msg.role !== "system" && msg.role !== "tool" && !(msg.role === "assistant" && !msg.toolCalls?.length && msg.content.trim() === "")
+    ).length,
+    [messages]
+  );
   const [skills, setSkills] = useState<Map<string, Skill>>(new Map());
   const [skillCommands, setSkillCommands] = useState<SkillCommand[]>([]);
 
@@ -342,15 +346,21 @@ export function App({ renderer }: { renderer: CliRenderer }) {
         setElapsedMs(Date.now() - startTimeRef.current);
       }, 500);
     }
-    
-    if (!compactTimerRef.current) {
-      compactTimerRef.current = setInterval(() => {
-        if (agentRef.current) {
-          checkAndAutoCompact(agentRef.current, setMessages);
-        }
-      }, 5000);
-    }
   }, [state]);
+
+  useEffect(() => {
+    compactTimerRef.current = setInterval(() => {
+      if (agentRef.current) {
+        checkAndAutoCompact(agentRef.current, setMessages);
+      }
+    }, 10000);
+    return () => {
+      if (compactTimerRef.current) {
+        clearInterval(compactTimerRef.current);
+        compactTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // Auto-enable pagination when messages exceed threshold
   const PAGINATION_THRESHOLD = 100;
@@ -695,16 +705,6 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             }
             return;
           }
-          case "reset-rounds":
-            agent.roundCounter = 0;
-            agent.messages.push({
-              id: Math.random().toString(36).slice(2, 10),
-              role: "system",
-              content: "Round counter reset to 0.",
-              timestamp: Date.now(),
-            });
-            setMessages([...agent.messages]);
-            return;
           case "todo":
             if (args) {
               agent.addTodo(args);
@@ -1061,7 +1061,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             // Unload a skill: /unload [name]
             const unloadName = args.trim();
             if (!unloadName) {
-              const active = agent.getActiveSkillNames();
+              const active = agent.skillManager.activeNames();
               if (active.length > 0) {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
@@ -1080,7 +1080,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               setMessages([...agent.messages]);
               return;
             }
-            const unloaded = agent.unloadSkill(unloadName) || agent.unloadSkill(`skill:${unloadName}`);
+            const unloaded = agent.skillManager.unload(unloadName, agent.messages, agent.isSmallModel, undefined) || agent.skillManager.unload(`skill:${unloadName}`, agent.messages, agent.isSmallModel, undefined);
             agent.messages.push({
               id: Math.random().toString(36).slice(2, 10),
               role: "system",
@@ -1107,7 +1107,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             }
             const skill = getSkill(loadName) || skills.get(loadName);
             if (skill) {
-              const loaded = agent.loadSkill(skill);
+              const loaded = agent.skillManager.load(skill, agent.messages, agent.isSmallModel, undefined);
               if (loaded) {
                 const skillDesc = skill.description || "";
                 agent.messages.push({
@@ -1142,13 +1142,66 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             }
             process.exit(0);
             return;
+          case "graph": {
+            const sub = args.split(" ")[0].toLowerCase();
+            const ws = agent?.cfg?.workspace || process.cwd();
+            if (sub === "build") {
+              const result = await build_memory_graph({ workspace: ws });
+              agent.messages.push({
+                id: Math.random().toString(36).slice(2, 10),
+                role: "assistant",
+                content: `**Memory Graph — Build**\n\n${result.message}\n- **Nodes:** ${result.nodes ?? "—"}\n- **Edges:** ${result.edges ?? "—"}\n- **Time:** ${result.time != null ? `${result.time}ms` : "—"}`,
+                timestamp: Date.now(),
+              });
+              setMessages([...agent.messages]);
+            } else if (sub === "stats") {
+              const stats = await get_graph_stats({ workspace: ws });
+              const byType = Object.entries(stats.nodesByType).map(([k, v]) => `  ${k}: ${v}`).join("\n");
+              const byLang = Object.entries(stats.nodesByLanguage).map(([k, v]) => `  ${k}: ${v}`).join("\n");
+              agent.messages.push({
+                id: Math.random().toString(36).slice(2, 10),
+                role: "assistant",
+                content: `**Memory Graph — Stats**\n\n- **Nodes:** ${stats.nodeCount}\n- **Edges:** ${stats.edgeCount}\n\n**By Type:**\n${byType || "  —"}\n\n**By Language:**\n${byLang || "  —"}`,
+                timestamp: Date.now(),
+              });
+              setMessages([...agent.messages]);
+            } else if (sub === "report") {
+              const result = await get_analysis_report({ workspace: ws });
+              if (result.ok && result.report) {
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: "assistant",
+                  content: result.report,
+                  timestamp: Date.now(),
+                });
+                setMessages([...agent.messages]);
+              } else {
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: "system",
+                  content: `Graph report error: ${result.error || "unknown"}`,
+                  timestamp: Date.now(),
+                });
+                setMessages([...agent.messages]);
+              }
+            } else {
+              agent.messages.push({
+                id: Math.random().toString(36).slice(2, 10),
+                role: "assistant",
+                content: `**Memory Graph**\n\nUsage:\n  \`/graph build\`   — Build/rebuild the memory graph from codebase\n  \`/graph stats\`   — Show node/edge counts by type and language\n  \`/graph report\`  — Full analysis report with communities, god nodes, and surprising connections`,
+                timestamp: Date.now(),
+              });
+              setMessages([...agent.messages]);
+            }
+            return;
+          }
           default: {
             // Handle /skill:name format
             if (command.startsWith("skill:")) {
               const skillName = command.replace(/^skill:/, "");
               const skill = getSkill(skillName) || skills.get(skillName);
               if (skill) {
-                agent.loadSkill(skill);
+                agent.skillManager.load(skill, agent.messages, agent.isSmallModel, undefined);
                 const skillDesc = skill.welcomeMessage || skill.description || "";
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
@@ -1175,7 +1228,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               const skillName = args.trim().replace(/^skill:/, "");
               const skill = getSkill(skillName) || skills.get(skillName);
               if (skill) {
-                agent.loadSkill(skill);
+                agent.skillManager.load(skill, agent.messages, agent.isSmallModel, undefined);
                 const skillDesc = skill.welcomeMessage || skill.description || "";
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
@@ -1269,7 +1322,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               const agent = agentRef.current;
               
               // Load the skill into the agent's active skills
-              const loaded = agent.loadSkill(skill);
+              const loaded = agent.skillManager.load(skill, agent.messages, agent.isSmallModel, undefined);
               if (!loaded) {
                 // Skill already loaded, just show a message
                 agent.messages.push({
@@ -1386,8 +1439,6 @@ export function App({ renderer }: { renderer: CliRenderer }) {
           lastUsage={lastUsage}
           totalUsage={totalUsage}
           elapsedMs={elapsedMs}
-          roundCounter={agentRef.current?.roundCounter}
-          maxRounds={agentRef.current?.maxRounds}
           theme={theme}
           mouseEnabled={mouseEnabled}
         />
@@ -1432,7 +1483,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               onSubmit={handleSubmit}
               paginated={paginated}
               page={page}
-              totalPages={paginated ? Math.ceil(messages.length / MESSAGES_PER_PAGE) : 1}
+              totalPages={paginated ? Math.ceil(displayMessageCount / MESSAGES_PER_PAGE) : 1}
               onPageChange={setPage}
               selectedMessageIndex={selectedMessageIndex}
             />

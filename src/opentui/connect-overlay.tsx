@@ -79,6 +79,13 @@ export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps
     return !!getApiKey(envVar);
   }, [selectedProvider]);
 
+  const existingApiKey = useMemo(() => {
+    if (!selectedProvider) return "";
+    const envVar = getApiKeyEnvVar(selectedProvider.id);
+    if (!envVar) return "";
+    return getApiKey(envVar) || "";
+  }, [selectedProvider]);
+
   const handleProviderSelect = useCallback(async () => {
     if (!selectedProvider) return;
 
@@ -122,53 +129,17 @@ export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps
     }
 
     if (requiresAuth) {
-      if (hasApiKey) {
-        // Special handling for OpenRouter to fetch models dynamically
-        if (selectedProvider?.id === "openrouter") {
-          setState("fetching-models");
-          setIsCheckingRuntime(true);
-          try {
-            const envVar = getApiKeyEnvVar(selectedProvider?.id || "openrouter") || "OPENROUTER_API_KEY";
-            const apiKey = getApiKey(envVar);
-            const models = await fetchOpenRouterModels(apiKey);
-            if (models.length > 0) {
-              // Set the models for this provider and update the provider definition
-              const updatedProvider = getProvider("openrouter");
-              if (updatedProvider) {
-                // Store models in state
-                setRuntimeModels(models);
-                setState("selecting-model");
-                setSelectedModelIndex(0);
-              } else {
-                setRuntimeError("Could not find OpenRouter provider");
-                setState("selecting-provider");
-              }
-            } else {
-              setRuntimeError("No models found from OpenRouter");
-              setState("selecting-provider");
-            }
-          } catch (error) {
-            setRuntimeError(`Error fetching OpenRouter models: ${error}`);
-            setState("selecting-provider");
-          } finally {
-            setIsCheckingRuntime(false);
-          }
-          return;
-        }
-        setState("selecting-model");
-        setSelectedModelIndex(0);
-      } else {
-        setState("entering-api-key");
-        setApiKeyInput("");
-      }
+      setState("entering-api-key");
+      setApiKeyInput(hasApiKey ? existingApiKey : "");
+      setRuntimeError(null);
     } else {
       setState("selecting-model");
       setSelectedModelIndex(0);
     }
   }, [selectedProvider, isLocal, requiresAuth, hasApiKey]);
 
-  const handleApiKeySubmit = useCallback(() => {
-    if (!selectedProvider || apiKeyInput.trim() === "") {
+  const handleApiKeySubmit = useCallback(async () => {
+    if (!selectedProvider) {
       setState("selecting-provider");
       return;
     }
@@ -179,15 +150,51 @@ export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps
       return;
     }
 
-    const saved = saveApiKeyToEnv(envVar, apiKeyInput.trim());
-    if (saved) {
-      setState("selecting-model");
-      setSelectedModelIndex(0);
-      setApiKeyInput("");
-    } else {
-      setState("selecting-provider");
+    const key = apiKeyInput.trim();
+    // If empty but has existing key, use the existing key
+    const effectiveKey = key || existingApiKey;
+    if (!effectiveKey) {
+      setRuntimeError("API key is required");
+      return;
     }
-  }, [selectedProvider, apiKeyInput]);
+
+    // Only save if the key actually changed or this is a first-time set
+    if (key && key !== existingApiKey) {
+      const saved = saveApiKeyToEnv(envVar, key);
+      if (!saved) {
+        setState("selecting-provider");
+        return;
+      }
+    }
+    setApiKeyInput("");
+
+    // For OpenRouter, fetch models after confirming key
+    if (selectedProvider?.id === "openrouter") {
+      setState("fetching-models");
+      setIsCheckingRuntime(true);
+      setRuntimeError(null);
+      try {
+        const models = await fetchOpenRouterModels(effectiveKey);
+        if (models.length > 0) {
+          setRuntimeModels(models);
+          setState("selecting-model");
+          setSelectedModelIndex(0);
+        } else {
+          setRuntimeError("No models found from OpenRouter");
+          setState("entering-api-key");
+        }
+      } catch (error) {
+        setRuntimeError(`Error fetching OpenRouter models: ${error}`);
+        setState("entering-api-key");
+      } finally {
+        setIsCheckingRuntime(false);
+      }
+      return;
+    }
+
+    setState("selecting-model");
+    setSelectedModelIndex(0);
+  }, [selectedProvider, apiKeyInput, existingApiKey]);
 
   const handleModelSelect = useCallback(async () => {
     if (!selectedProvider || !selectedModel) return;
@@ -340,6 +347,7 @@ export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps
   }, [selectedModelIndex, state]);
 
   if (state === "entering-api-key" && selectedProvider) {
+    const hasExisting = !!existingApiKey;
     return (
       <box
         flexDirection="column"
@@ -356,8 +364,11 @@ export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps
             {selectedProvider.icon} {selectedProvider.name}
           </text>
           <text fg={theme.mutedFg}>
-            Enter your API key for {getApiKeyEnvVar(selectedProvider.id)}
+            API key for {getApiKeyEnvVar(selectedProvider.id)}
           </text>
+          {hasExisting && (
+            <text fg={theme.agentFg}>Current key is set · Type to replace or Enter to keep</text>
+          )}
           <box flexDirection="row" paddingY={1}>
             <text fg={theme.inputFg}>Key: </text>
             <input
@@ -365,10 +376,13 @@ export function ConnectOverlay({ theme, onClose, onSelect }: ConnectOverlayProps
               flexGrow={0}
               value={apiKeyInput}
               onInput={setApiKeyInput}
-              placeholder="paste key here"
+              placeholder={hasExisting ? "keep existing key" : "paste key here"}
             />
           </box>
-          <text fg={theme.mutedFg}>Enter to save · Esc to cancel</text>
+          {runtimeError && <text fg={theme.errorFg}>Error: {runtimeError}</text>}
+          <text fg={theme.mutedFg}>
+            {hasExisting ? "Enter to keep current key · Type new key to change · Esc to cancel" : "Enter to save · Esc to cancel"}
+          </text>
         </box>
       </box>
     );

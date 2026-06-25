@@ -22,7 +22,6 @@ const BUILTIN_COMMANDS: Command[] = [
   { name: "/compact", description: "Compact conversation" },
   { name: "/auto", description: "Autonomous mode (F3)" },
   { name: "/todo", description: "Todo sidebar (F4)" },
-  { name: "/reset-rounds", description: "Reset round counter" },
   { name: "/save", description: "Save session (F5)" },
   { name: "/load", description: "Load session (F6)" },
   { name: "/cd", description: "Change tool workspace" },
@@ -34,10 +33,11 @@ const BUILTIN_COMMANDS: Command[] = [
   { name: "/connect", description: "Connect a runtime provider" },
   { name: "/doctor", description: "Health check (config + LM Studio)" },
   { name: "/models", description: "List local models and context" },
+  { name: "/graph", description: "Build/query memory graph — /graph build|stats|report" },
   { name: "/exit", description: "Quit (F10)" },
 ];
 
-const ARG_BEARING = new Set(["/auto", "/cd", "/allow", "/export", "/theme", "/connect"]);
+const ARG_BEARING = new Set(["/auto", "/cd", "/allow", "/export", "/theme", "/connect", "/graph"]);
 
 interface CommandDropdownProps {
   inputValue: string;

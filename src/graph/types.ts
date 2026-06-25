@@ -26,7 +26,43 @@ export interface GraphEdge {
   metadata?: Record<string, any>;
   createdAt: number;
   updatedAt?: number;
+  extraction?: 'ast' | 'inferred' | 'llm';
 }
+
+export interface GraphCommunity {
+  id: number;
+  size: number;
+  nodes: GraphNode[];
+  internalEdges: number;
+  externalEdges: number;
+  density: number;
+  topNodeIds: string[];
+  nodeIds: string[];
+}
+
+export interface GodNode {
+  node: GraphNode;
+  degree: number;
+  inDegree: number;
+  outDegree: number;
+  betweenness?: number;
+}
+
+export interface GraphAnalysis {
+  nodeCount: number;
+  edgeCount: number;
+  communityCount: number;
+  modularity: number;
+  isolatedNodes: number;
+  density: number;
+  communities: GraphCommunity[];
+  godNodes: GodNode[];
+  surprisingConnections: Array<{ edge: GraphEdge; sourceCommunity: number; targetCommunity: number }>;
+  topLanguages: Array<{ language: string; count: number }>;
+  topTypes: Array<{ type: string; count: number }>;
+}
+
+export type ExtractionQuality = 'ast' | 'inferred' | 'llm';
 
 export interface GraphData {
   version: string;
