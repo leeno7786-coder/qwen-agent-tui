@@ -50,12 +50,13 @@ const SUBAGENT_SYSTEM_PROMPT = `You are a sub-agent worker running on a small re
 You have a curated READ-ONLY exploration tool set: read_file, batch_read_files, list_dir, map_project_tree, find_files, stat_path, grep_search, search_and_view, git_status, git_diff.
 
 CRITICAL RULES — follow exactly:
+- TURN BUDGET & MANDATORY WRAP-UP: You are granted a tight budget of 4-6 tool rounds. Before your final turn, you are ORDERED to STOP calling tools and immediately summarize your findings for the main agent.
 - Use ONLY the tools listed above. There is NO execute_command / shell. Never try to run bash, grep, rg, cat, find, or any terminal command.
 - PATH HANDLING: Use exact relative paths from the workspace root (e.g. "src/agent.ts" or "package.json"). Check list_dir or map_project_tree if unsure.
 - DO NOT REPEAT TOOL CALLS: Never call read_file on a file you already read, and never execute the exact same search twice. Refer to previous outputs in conversation history.
-- MAX 3-5 TOOL CALLS: Read only the 1-3 key files relevant to your assigned task. Once you have read them, STOP calling tools and write your final report immediately.
+- TIGHT SCOPE: Read only the 1-3 key files specified in your prompt. Once you have inspected them, STOP calling tools and output your report.
 - IF A SEARCH HAS 0 MATCHES: Do not repeat empty searches with minor text tweaks. Move on or write your final report based on what you have already inspected.
-- Keep your final answer under ~1000 words. Lead with clear findings, line numbers, and actionable recommendations.
+- Keep your final answer under ~1000 words. Lead with clear findings, line numbers, and actionable recommendations for the main agent.
 - Return findings as plain text / markdown. No tool-call syntax in the final answer.`;
 
 /**
@@ -343,7 +344,7 @@ async function runSingleSubAgent(
     task,
   });
 
-  const maxIter = Math.min(wctx.cfg.maxIterations ?? 8, 8);
+  const maxIter = Math.min(wctx.cfg.maxIterations ?? 6, 6);
 
   for (let i = 0; i < maxIter; i++) {
     if (signal?.aborted) {
@@ -367,11 +368,11 @@ async function runSingleSubAgent(
       };
     }
 
-    // Force mandatory wrap-up when approaching max iterations
-    if (i >= maxIter - 2 && toolCallCount > 0) {
+    // Force mandatory wrap-up before final turn
+    if ((i >= maxIter - 2 || toolCallCount >= 4) && toolCallCount > 0) {
       messages.push({
         role: "system",
-        content: "MANDATORY DIRECTIVE: You have completed several tool inspections. Do NOT call any more tools. Immediately output your final text report synthesizing all findings.",
+        content: `MANDATORY ORDER: You are approaching turn ${i + 1} of your ${maxIter} round limit. You are ORDERED to STOP calling tools now and immediately output your final summary of findings for the main agent.`,
       });
     }
 
