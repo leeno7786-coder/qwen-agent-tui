@@ -275,10 +275,12 @@ export function ChatScreen({
          onSubmit={useCallback((v: any) => { handleSubmitLocal(v); }, [handleSubmitLocal])} 
          onPick={useCallback((cmd: string) => {
             const trimmed = inputValue.trim();
-            if (trimmed === cmd || trimmed.startsWith(cmd + " ") || !ARG_BEARING.has(cmd)) {
-              handleSubmitLocal(trimmed || cmd);
-            } else {
+            if (trimmed === cmd || trimmed.startsWith(cmd + " ")) {
+              handleSubmitLocal(trimmed);
+            } else if (ARG_BEARING.has(cmd)) {
               setInputValue(cmd + " ");
+            } else {
+              handleSubmitLocal(cmd);
             }
           }, [inputValue, handleSubmitLocal])} 
        />
