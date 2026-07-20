@@ -11,7 +11,7 @@
  * tool result it can synthesise.
  */
 
-import { createClient, chat } from "./llm";
+import { createClient, chat, streamChat } from "./llm";
 import type { ChatMessage } from "./llm";
 import { tools, toOpenAI, type Tool, type ToolExecutionHooks, type SubAgentProgressEvent } from "./tools";
 import { createSecurityManager, type SecurityManager } from "./security";
@@ -376,18 +376,51 @@ async function runSingleSubAgent(
       });
     }
 
-    const resp = await chat(
+    let accumulatedContent = "";
+    let accumulatedReasoning = "";
+    let streamedToolCalls: Array<{ id: string; name: string; arguments: string }> = [];
+
+    const stream = streamChat(
       wctx.client,
       wctx.cfg,
       messages,
       toolDefs,
-      signal,
-      // Thinking mode off for sub-agents: some local models emit tool calls
-      // inside <think> tags which breaks the streaming-free control loop.
-      { enableThinking: false }
+      signal
     );
 
-    const msg = resp.message;
+    for await (const chunk of stream) {
+      if (chunk.content) {
+        accumulatedContent += chunk.content;
+        emit({
+          type: "subagent_chunk",
+          agent: wctx.endpoint.name,
+          model: wctx.cfg.model,
+          text: chunk.content,
+        });
+      }
+      if (chunk.reasoningContent) {
+        accumulatedReasoning += chunk.reasoningContent;
+        emit({
+          type: "subagent_chunk",
+          agent: wctx.endpoint.name,
+          model: wctx.cfg.model,
+          reasoning: chunk.reasoningContent,
+        });
+      }
+      if (chunk.toolCalls && chunk.toolCalls.length > 0) {
+        streamedToolCalls = chunk.toolCalls;
+      }
+    }
+
+    const msg = {
+      role: "assistant" as const,
+      content: accumulatedContent,
+      tool_calls: streamedToolCalls.map((tc) => ({
+        id: tc.id,
+        type: "function" as const,
+        function: { name: tc.name, arguments: tc.arguments },
+      })),
+    };
     if (msg.tool_calls && msg.tool_calls.length > 0) {
       // Record assistant message with tool calls, then run them.
       messages.push({
@@ -418,6 +451,7 @@ async function runSingleSubAgent(
             tool: tc.function.name,
             toolArgs: tc.function.arguments,
             toolResult: `${tc.function.name}: duplicate blocked`,
+            toolResultRaw: dupResult,
             toolCalls: currentToolCallCount,
           });
           return { role: "tool" as const, content: dupResult, tool_call_id: tc.id };
@@ -438,6 +472,7 @@ async function runSingleSubAgent(
               tool: tc.function.name,
               toolArgs: tc.function.arguments,
               toolResult: `${tc.function.name}: re-read blocked`,
+              toolResultRaw: reReadResult,
               toolCalls: currentToolCallCount,
             });
             return { role: "tool" as const, content: reReadResult, tool_call_id: tc.id };
@@ -466,6 +501,7 @@ async function runSingleSubAgent(
           tool: tc.function.name,
           toolArgs: tc.function.arguments,
           toolResult: summarizeToolResult(tc.function.name, out),
+          toolResultRaw: out,
           toolCalls: currentToolCallCount,
         });
         return {

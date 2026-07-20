@@ -47,7 +47,7 @@ export interface ToolExecutionHooks {
 /** A streamed progress event emitted by the remote sub-agent runner. */
 export interface SubAgentProgressEvent {
   /** Event kind. */
-  type: "subagent_start" | "subagent_tool" | "subagent_tool_result" | "subagent_done";
+  type: "subagent_start" | "subagent_tool" | "subagent_tool_result" | "subagent_done" | "subagent_chunk";
   /** Sub-agent / endpoint name (e.g. "qwen-remote-1"). */
   agent: string;
   /** Model id for the sub-agent. */
@@ -60,10 +60,16 @@ export interface SubAgentProgressEvent {
   toolArgs?: string;
   /** One-line result summary for the tool (for subagent_tool_result). */
   toolResult?: string;
+  /** Raw JSON result string for the tool (for subagent_tool_result). */
+  toolResultRaw?: string;
   /** Whether the sub-agent finished successfully. */
   ok?: boolean;
   /** Final output text (for subagent_done). */
   output?: string;
+  /** Streamed text content (for subagent_chunk). */
+  text?: string;
+  /** Streamed reasoning content (for subagent_chunk). */
+  reasoning?: string;
   /** Tool-call count for the sub-agent. */
   toolCalls?: number;
 }
@@ -223,6 +229,25 @@ function checkSmallModel(cfg?: Config): boolean {
   return isSmallModelFromConfig(cfg);
 }
 
+/** Whitelist of allowed commands for security. */
+const ALLOWED_COMMANDS = new Set([
+  // Read-only commands
+  "ls", "dir", "pwd", "cat", "echo", "date", "whoami",
+  // Git operations
+  "git status", "git diff", "git log", "git show", "git branch", "git commit", "git push", "git pull",
+  // Build tools
+  "npm run", "yarn", "pnpm", "tsc", "eslint", "prettier", "jest", "test",
+  // File operations (with proper validation)
+  "read_file", "write_file", "edit_file", "edit_file_lines", "list_dir", "stat_path", "find_files", "search_and_view",
+]);
+
+/** Validate a command string against the whitelist. */
+function validateCommand(cmd: string): boolean {
+  // Trim and check if it's in the allowed list
+  const trimmed = cmd.trim();
+  return ALLOWED_COMMANDS.has(trimmed);
+}
+
 /** Shorter tool descriptions for ≤8B models (full params stay in JSON schema). */
 const SMALL_TOOL_DESCRIPTIONS: Record<string, string> = {
   read_file: "Read file; use start_line/end_line (1-indexed). Lines are numbered for edit_file_lines.",
@@ -338,6 +363,11 @@ function execCmd(cmd: string, ws: string, timeoutSeconds = 60): string {
       return JSON.stringify({ ok: false, error: "Failed to parse command" });
     }
     
+    // SECURITY: Validate command against whitelist
+    if (!validateCommand(cmd)) {
+      return JSON.stringify({ ok: false, error: "Command not allowed" });
+    }
+    
     const { command, args, useShell } = parsed;
     const timeoutMs = timeoutSeconds * 1000;
     
@@ -401,6 +431,12 @@ function execCmdAsync(cmd: string, ws: string, timeoutSeconds = 60, signal?: Abo
       return;
     }
     
+    // SECURITY: Validate command against whitelist
+    if (!validateCommand(cmd)) {
+      resolvePromise(JSON.stringify({ ok: false, error: "Command not allowed" }));
+      return;
+    }
+    
     const { command, args, useShell } = parsed;
     const timeoutMs = timeoutSeconds * 1000;
     const env = getSanitizedEnv();
@@ -438,7 +474,7 @@ function execCmdAsync(cmd: string, ws: string, timeoutSeconds = 60, signal?: Abo
       resolvePromise(formatExecResult(false, "", e.message, null));
       return;
     }
-
+    
     let stdoutBuffer = '';
     let stderrBuffer = '';
     let resolved = false;
@@ -450,14 +486,14 @@ function execCmdAsync(cmd: string, ws: string, timeoutSeconds = 60, signal?: Abo
     child.stderr?.on('data', (data) => {
       stderrBuffer += data.toString();
     });
-
+    
     child.on('error', (error) => {
       if (!resolved) {
         resolved = true;
         resolvePromise(formatExecResult(false, stdoutBuffer, stderrBuffer || error.message, null));
       }
     });
-
+    
     // Set up timeout to kill the child process explicitly
     const timeoutId = setTimeout(() => {
       if (!resolved) {
@@ -466,7 +502,7 @@ function execCmdAsync(cmd: string, ws: string, timeoutSeconds = 60, signal?: Abo
         resolvePromise(formatExecResult(false, stdoutBuffer, stderrBuffer, null));
       }
     }, timeoutMs);
-
+    
     // Clear timeout when child closes or errors
     const clearTimeoutFn = () => clearTimeout(timeoutId);
     
@@ -489,7 +525,7 @@ function execCmdAsync(cmd: string, ws: string, timeoutSeconds = 60, signal?: Abo
         resolvePromise(formatExecResult(false, stdoutBuffer, stderrBuffer || error.message, null));
       }
     });
-
+    
     if (signal) {
       if (signal.aborted) {
         child.kill();

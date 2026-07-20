@@ -357,67 +357,120 @@ function SubAgentPanel({
   theme: Theme;
   elapsedMs: number;
 }) {
-  const live = subAgents.filter((s) => s.status === RUNNING);
-  const finished = subAgents.filter((s) => s.status !== RUNNING);
-  if (live.length === 0 && finished.length === 0) return null;
+  if (!subAgents || subAgents.length === 0) return null;
 
   const spin = spinnerFrame(elapsedMs);
 
-  const renderAgent = (sa: {
-    id: string;
-    prompt: string;
-    status: "running" | "done" | "error";
-    log?: SubAgentProgressEvent[];
-    result?: SubAgentResult;
-  }): Array<{ key: string; color: string; text: string }> => {
-    const log = sa.log ?? [];
-    const turns = sa.result?.toolCalls ?? 0;
-    const toolResults = log.filter((e) => e.type === "subagent_tool_result" && e.toolResult);
-
-    const lines: Array<{ key: string; color: string; text: string }> = [];
-    lines.push({
-      key: `${sa.id}-h`,
-      color: sa.status === DONE ? theme.toolFg : theme.statusTool,
-      text:
-        (sa.status === RUNNING ? `${spin} ` : "") +
-        `Running explore agent: ${sa.prompt}`,
-    });
-    for (const e of toolResults) {
-      lines.push({
-        key: `${sa.id}-${e.tool}-${toolResults.indexOf(e)}`,
-        color: theme.mutedFg,
-        text: `  → ${e.toolResult}`,
-      });
-    }
-    if (sa.status === DONE) {
-      lines.push({
-        key: `${sa.id}-d`,
-        color: theme.mutedFg,
-        text: `  ✓ Agent completed in ${turns} turns${sa.result?.durationMs != null ? ` · ${Math.round(sa.result.durationMs)}ms` : ""}`,
-      });
-    } else if (sa.status === ERROR) {
-      lines.push({
-        key: `${sa.id}-e`,
-        color: theme.errorFg,
-        text: `  ✗ Agent failed after ${turns} turns${sa.result?.error ? `: ${sa.result.error.slice(0, 100)}` : ""}`,
-      });
-    }
-
-    return lines;
-  };
-
-  // Return flat <text> lines — no wrapping box — so the stream renders exactly
-  // like the main agent's own tool-call lines inside the chat.
-  const allLines = [...live, ...finished].flatMap(renderAgent);
-  if (allLines.length === 0) return null;
   return (
-    <>
-      {allLines.map((l) => (
-        <text key={l.key} fg={l.color}>
-          {l.text}
-        </text>
-      ))}
-    </>
+    <box flexDirection="column" marginY={1}>
+      {subAgents.map((sa) => {
+        const log = sa.log ?? [];
+        const turns = sa.result?.toolCalls ?? 0;
+        const isRunning = sa.status === RUNNING;
+
+        const elements: React.ReactNode[] = [];
+        let currentText = "";
+        let chunkIndex = 0;
+
+        const flushText = () => {
+          if (currentText.trim() !== "") {
+            const segments = parseCodeBlocks(currentText);
+            elements.push(
+              <box key={`text-${chunkIndex++}`} flexDirection="column" marginY={1} marginLeft={2}>
+                {segments.map((seg, si) => {
+                  if (seg.type === "text") {
+                    return seg.text.split("\n").map((line, li) => (
+                      <text key={`${si}-${li}`} fg={theme.mutedFg}>
+                        {line || " "}
+                      </text>
+                    ));
+                  }
+                  if (seg.lang === "diff") {
+                    return (
+                      <box key={si} flexDirection="column" marginY={1}>
+                        <diff diff={seg.code} {...DIFF_PROPS} />
+                      </box>
+                    );
+                  }
+                  return (
+                    <box key={si} flexDirection="column" marginY={1}>
+                      {seg.lang && <text fg={theme.mutedFg}>{seg.lang}</text>}
+                      <code content={seg.code} filetype={seg.lang || "text"} syntaxStyle={syntaxStyle} />
+                    </box>
+                  );
+                })}
+              </box>
+            );
+            currentText = "";
+          }
+        };
+
+        const runningToolMap = new Map<string, any>();
+
+        for (const ev of log) {
+          if (ev.type === "subagent_chunk") {
+            currentText += (ev.reasoning || ev.text || "");
+          } else if (ev.type === "subagent_tool" && ev.tool) {
+            flushText();
+            runningToolMap.set(ev.tool, {
+              key: `${sa.id}-t-${chunkIndex++}`,
+              tool: ev.tool,
+              args: ev.toolArgs,
+            });
+          } else if (ev.type === "subagent_tool_result" && ev.tool) {
+            flushText();
+            const running = runningToolMap.get(ev.tool);
+            const argsRaw = running?.args || ev.toolArgs || "{}";
+            // Use toolResultRaw if available to allow full diff generation, else fallback to a basic payload
+            const resultRaw = ev.toolResultRaw || JSON.stringify({ ok: true, summary: ev.toolResult });
+            const block = buildToolDisplayBlock(ev.tool, argsRaw, resultRaw, undefined);
+            
+            elements.push(
+              <box key={`${sa.id}-tr-${chunkIndex++}`} marginLeft={2}>
+                <ToolActivityBlock block={block} theme={theme} />
+              </box>
+            );
+            runningToolMap.delete(ev.tool);
+          }
+        }
+        flushText();
+
+        const pendingElements: React.ReactNode[] = [];
+        for (const [toolName, item] of runningToolMap.entries()) {
+          const pending = buildToolDisplayBlock(item.tool, item.args || "{}", "", undefined);
+          pendingElements.push(
+            <box key={item.key} flexDirection="column" marginLeft={2}>
+              <text fg={theme.statusTool}>
+                {`  ${spin} → running ${pending.action}(${pending.target})…`}
+              </text>
+            </box>
+          );
+        }
+
+        return (
+          <box key={sa.id} flexDirection="column" marginY={0}>
+            <text fg={sa.status === DONE ? theme.toolFg : sa.status === ERROR ? theme.errorFg : theme.statusTool}>
+              {isRunning ? `${spin} ` : sa.status === DONE ? "✓ " : "✗ "}
+              Running explore agent: {sa.prompt}
+            </text>
+
+            {elements}
+            {pendingElements}
+
+            {sa.status === DONE && (
+              <text fg={theme.mutedFg}>
+                {`  ✓ Agent completed in ${turns} turns${sa.result?.durationMs != null ? ` · ${Math.round(sa.result.durationMs)}ms` : ""}`}
+              </text>
+            )}
+            {sa.status === ERROR && (
+              <text fg={theme.errorFg}>
+                {`  ✗ Agent failed after ${turns} turns${sa.result?.error ? `: ${sa.result.error.slice(0, 100)}` : ""}`}
+              </text>
+            )}
+          </box>
+        );
+      })}
+    </box>
   );
 }
 
@@ -462,10 +515,29 @@ function MessageItem({ message, theme, toolMap, toolResultByCallId, lastUsage, s
   const displayContent = message.content || "";
   const segments = parseCodeBlocks(displayContent);
   const hasReasoning = message.reasoningContent && message.reasoningContent.trim() !== "";
+  const isThinking = message.role === "assistant" && state === "thinking";
   const toolCalls = message.toolCalls ?? [];
 
   return (
     <box flexDirection="column" marginY={1}>
+      {/* Model Reasoning Prose live token stream rendered at top of response */}
+      {(hasReasoning || isThinking) && (
+        <box flexDirection="column" marginY={0} marginBottom={1}>
+          <text fg={theme.statusThinking}>
+            {isThinking ? `${spinnerFrame(Date.now())} Thinking…` : "🧠 Thought"}
+          </text>
+          {hasReasoning && (
+            <box flexDirection="column" marginLeft={2} marginTop={0}>
+              {(message.reasoningContent || "").split("\n").map((line, idx) => (
+                <text key={idx} fg={theme.mutedFg}>
+                  {line || " "}
+                </text>
+              ))}
+            </box>
+          )}
+        </box>
+      )}
+
       {displayContent.trim() !== "" && segments.map((seg, si) => {
         if (seg.type === "text") {
           return seg.text.split("\n").map((line, li) => (
@@ -486,17 +558,6 @@ function MessageItem({ message, theme, toolMap, toolResultByCallId, lastUsage, s
           </box>
         );
       })}
-
-      {hasReasoning && (
-        <box flexDirection="column" marginY={1} borderStyle="rounded" borderColor={theme.mutedFg}>
-          <text fg={theme.mutedFg}>Reasoning:</text>
-          <box flexDirection="column" marginLeft={2}>
-            {(message.reasoningContent || "").split("\n").map((line, idx) => (
-              <text key={idx} fg={theme.mutedFg}>{line || " "}</text>
-            ))}
-          </box>
-        </box>
-      )}
 
       {/* The main agent's own explore_subagent calls are background launches — their
           live activity is shown by SubAgentPanel, so don't render the instant "ok"
