@@ -1209,49 +1209,28 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               return;
             }
             default: {
-              // Handle /skill:name format
-              if (command.startsWith("skill:")) {
-                const skillName = command.replace(/^skill:/, "");
-                const skill = getSkill(skillName) || skills.get(skillName);
-                if (skill) {
-                  agent.skillManager.load(skill, agent.messages, agent.isSmallModel, undefined);
-                  const skillDesc = skill.welcomeMessage || skill.description || "";
-                  agent.messages.push({
-                    id: Math.random().toString(36).slice(2, 10),
-                    role: "assistant",
-                    content: `**Skill Loaded: ${skill.name}**\n\n${skillDesc}\n\nWhat would you like to do with this skill?`,
-                    timestamp: Date.now(),
-                  });
-                  setMessages([...agent.messages]);
-                  return;
-                } else {
-                  agent.messages.push({
-                    id: Math.random().toString(36).slice(2, 10),
-                    role: "assistant",
-                    content: `Skill "${skillName}" not found. Use /skills to see available skills.`,
-                    timestamp: Date.now(),
-                  });
-                  setMessages([...agent.messages]);
-                  return;
-                }
-              }
+              // Handle skill loading by name: /<skill-name>, /skill:name, /skill [name], or /skills [name]
+              const cleanSkillName = command.replace(/^skill:/, "");
+              const targetSkill =
+                getSkill(cleanSkillName) ||
+                skills.get(cleanSkillName) ||
+                ((command === "skills" || command === "skill") && args
+                  ? getSkill(args.trim().replace(/^skill:/, "")) || skills.get(args.trim().replace(/^skill:/, ""))
+                  : undefined);
 
-              // Handle /skills [name] or /skill [name]
-              if ((command === "skills" || command === "skill") && args) {
-                const skillName = args.trim().replace(/^skill:/, "");
-                const skill = getSkill(skillName) || skills.get(skillName);
-                if (skill) {
-                  agent.skillManager.load(skill, agent.messages, agent.isSmallModel, undefined);
-                  const skillDesc = skill.welcomeMessage || skill.description || "";
-                  agent.messages.push({
-                    id: Math.random().toString(36).slice(2, 10),
-                    role: "assistant",
-                    content: `**Skill Loaded: ${skill.name}**\n\n${skillDesc}\n\nWhat would you like to do with this skill?`,
-                    timestamp: Date.now(),
-                  });
-                  setMessages([...agent.messages]);
-                  return;
-                }
+              if (targetSkill) {
+                const loaded = agent.skillManager.load(targetSkill, agent.messages, agent.isSmallModel, undefined);
+                const skillDesc = targetSkill.welcomeMessage || targetSkill.description || "";
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: "assistant",
+                  content: loaded
+                    ? `**Skill Loaded: ${targetSkill.name}**\n\n${skillDesc}\n\nWhat would you like to do with this skill?`
+                    : `Skill "${targetSkill.name}" is already loaded.`,
+                  timestamp: Date.now(),
+                });
+                setMessages([...agent.messages]);
+                return;
               }
 
               // Unknown command
