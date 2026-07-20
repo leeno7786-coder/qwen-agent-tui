@@ -532,6 +532,8 @@ export function formatSubAgentResults(results: SubAgentResult[]): string {
   return JSON.stringify({
     ok: true,
     summary,
+    batch_status: "COMPLETED",
+    directive: "All sub-agents have finished execution. Do NOT wait for any agents. Synthesize the findings above immediately.",
     agents: results.length,
     successful: results.filter((r) => r.ok).length,
     results: blocks.join("\n\n---\n\n"),
