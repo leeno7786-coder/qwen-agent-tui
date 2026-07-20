@@ -37,7 +37,24 @@ const BUILTIN_COMMANDS: Command[] = [
   { name: "/exit", description: "Quit (F10)" },
 ];
 
-const ARG_BEARING = new Set(["/auto", "/cd", "/allow", "/export", "/theme", "/connect", "/graph"]);
+const ARG_BEARING = new Set([
+  "/auto",
+  "/cd",
+  "/allow",
+  "/export",
+  "/theme",
+  "/connect",
+  "/graph",
+  "/resume",
+  "/delete-session",
+  "/rename",
+  "/copy",
+  "/todo",
+  "/unload",
+  "/skill-load",
+  "/skill",
+  "/skills",
+]);
 
 interface CommandDropdownProps {
   inputValue: string;
@@ -132,7 +149,11 @@ export function CommandDropdown({
     if (scrollRef.current && displayItems.length > 0) {
       const actualIndex = getActualIndex(selected);
       if (actualIndex >= 0) {
-        scrollRef.current.scrollChildIntoView(itemId(actualIndex));
+        try {
+          scrollRef.current.scrollChildIntoView(itemId(actualIndex));
+        } catch {
+          // Ignore if node is not yet mounted in the OpenTUI layout tree
+        }
       }
     }
   }, [selected, displayItems, getActualIndex]);

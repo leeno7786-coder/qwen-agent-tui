@@ -608,8 +608,13 @@ async function discoverQwen2BEndpoints(
 export async function resolveSubAgentPool(
   base: Config
 ): Promise<SubAgentPoolConfig | undefined> {
-  if (base.subagents?.enabled && base.subagents.endpoints.length > 0) {
-    return base.subagents;
+  if (base.subagents) {
+    if (base.subagents.enabled && base.subagents.endpoints.length > 0) {
+      return base.subagents;
+    }
+    if (base.subagents.enabled === false) {
+      return undefined;
+    }
   }
 
   const candidates = [

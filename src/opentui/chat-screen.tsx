@@ -65,7 +65,24 @@ function parseCodeBlocks(content: string): Array<{ type: "text"; text: string } 
 }
 
 const syntaxStyle = getSyntaxStyle();
-const ARG_BEARING = new Set(["/auto", "/cd", "/allow", "/export", "/theme"]);
+const ARG_BEARING = new Set([
+  "/auto",
+  "/cd",
+  "/allow",
+  "/export",
+  "/theme",
+  "/connect",
+  "/graph",
+  "/resume",
+  "/delete-session",
+  "/rename",
+  "/copy",
+  "/todo",
+  "/unload",
+  "/skill-load",
+  "/skill",
+  "/skills",
+]);
 const MESSAGES_PER_PAGE = 50;
 const DIFF_PROPS = {
   view: "unified" as const,
@@ -170,7 +187,10 @@ export function ChatScreen({
     () =>
       messages.filter(
         (msg) =>
-          msg.role !== "system" &&
+          (msg.role !== "system" ||
+            (msg.content &&
+              !msg.content.includes("WORKSPACE ROOT") &&
+              !msg.content.startsWith("Current todo list"))) &&
           msg.role !== "tool" &&
           !(msg.role === "assistant" && !msg.toolCalls?.length && msg.content.trim() === "")
       ),

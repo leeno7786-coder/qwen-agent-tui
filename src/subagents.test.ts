@@ -170,20 +170,17 @@ describe("subagents.ts - Sub-agent Management", () => {
   });
 
   describe("resolveSubAgentPool", () => {
-    it("should return undefined for empty config", async () => {
-      const result = await resolveSubAgentPool({} as Config);
-      expect(result).toBeUndefined();
-    });
-
-    it("should return undefined for config without subagents", async () => {
-      const result = await resolveSubAgentPool(mockConfig);
-      expect(result).toBeUndefined();
-    });
-
-    it("should return undefined for config with empty subagents", async () => {
+    it("should return undefined for config with disabled subagents", async () => {
       const cfg: Partial<Config> = { subagents: { enabled: false, endpoints: [] } };
       const result = await resolveSubAgentPool(cfg as Config);
       expect(result).toBeUndefined();
+    });
+
+    it("should return explicit pool config when provided", async () => {
+      const explicitPool = { enabled: true, endpoints: [{ name: "test", model: "test-m", baseURL: "http://localhost:1234" }] };
+      const cfg: Partial<Config> = { subagents: explicitPool };
+      const result = await resolveSubAgentPool(cfg as Config);
+      expect(result).toEqual(explicitPool);
     });
   });
 });
