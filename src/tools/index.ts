@@ -1512,16 +1512,6 @@ export const tools: Tool[] = [
       // sub-agent knows the real path and isn't dispatched blind. This is done
       // inside spawnBackgroundSubAgent so the live TUI stream shows only the
       // original prompt, not the injected context block.
-      // Launch as a DETACHED background task: returns immediately so the
-      // main agent can call the next sub-agent (up to 3 concurrent) or
-      // continue its own reasoning. Progress streams via hooks.
-      if (hooks?.launchBackgroundSubAgent) {
-        return hooks.launchBackgroundSubAgent(task, args.focus_path);
-      }
-      // Fallback (no agent hook): run inline and await. When the main agent
-      // emits several explore_subagent calls in one message, the agent loop
-      // runs them concurrently (see PARALLEL_SAFE_TOOLS), so this awaits a
-      // single worker while others run alongside it.
       const { resolveSubAgentPool, exploreWithSubAgent, formatSubAgentResults, enrichTaskWithContext } = await import("../subagents");
       const pool = await resolveSubAgentPool(cfg!);
       if (!pool) {

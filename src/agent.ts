@@ -688,13 +688,7 @@ export class AgentCore {
         for (const tc of sequential) {
           await this.executeToolSequential(tc, signal);
         }
-
-        // If any background sub-agents were launched this turn, block until
-        // they all finish, then collect their results before synthesising.
-        if (this.backgroundSubAgents.size > 0) {
-          await this.awaitAllBackgroundSubAgents(signal);
-        }
-    }
+      }
 
     this.addAssistantMessage("Max iterations reached without completion.");
     this.setState("error");
@@ -950,8 +944,6 @@ export class AgentCore {
         const subHooks: ToolExecutionHooks | undefined =
           tc.name === "explore_subagent"
             ? {
-                launchBackgroundSubAgent: (prompt, focusPath) =>
-                  this.spawnBackgroundSubAgent(prompt, focusPath),
                 onSubAgentProgress: (progress) => {
                   this.currentTool = {
                     name: tc.name,
@@ -1062,8 +1054,6 @@ export class AgentCore {
           const subHooks: ToolExecutionHooks | undefined =
             tc.name === "explore_subagent"
               ? {
-                  launchBackgroundSubAgent: (prompt, focusPath) =>
-                    this.spawnBackgroundSubAgent(prompt, focusPath),
                   onSubAgentProgress: (progress) => {
                     this.currentTool = {
                       name: tc.name,
