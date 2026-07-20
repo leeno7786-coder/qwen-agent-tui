@@ -274,17 +274,13 @@ export function ChatScreen({
          theme={theme} 
          onSubmit={useCallback((v: any) => { handleSubmitLocal(v); }, [handleSubmitLocal])} 
          onPick={useCallback((cmd: string) => {
-          if (ARG_BEARING.has(cmd)) {
-            const rest = inputValue.slice(cmd.length).trim();
-            if (rest) {
-              handleSubmitLocal(inputValue.trim());
+            const trimmed = inputValue.trim();
+            if (trimmed === cmd || trimmed.startsWith(cmd + " ") || !ARG_BEARING.has(cmd)) {
+              handleSubmitLocal(trimmed || cmd);
             } else {
               setInputValue(cmd + " ");
             }
-          } else {
-            handleSubmitLocal(cmd);
-          }
-        }, [inputValue, handleSubmitLocal])} 
+          }, [inputValue, handleSubmitLocal])} 
        />
 
       <box flexDirection="row" paddingX={2} paddingY={0} borderStyle="single" borderColor={theme.borderColor} height={3} flexShrink={0} backgroundColor={theme.bgPanel}>
