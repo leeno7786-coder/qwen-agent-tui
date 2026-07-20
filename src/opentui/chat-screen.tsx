@@ -176,7 +176,7 @@ export function ChatScreen({
   const handleSubmitLocal = useCallback((value: string) => {
     const v = value.trim();
     if (!v) return;
-    setInputValue("");
+    setTimeout(() => setInputValue(""), 0);
     onSubmit(v);
   }, [onSubmit]);
 
@@ -207,7 +207,11 @@ export function ChatScreen({
 
   useEffect(() => {
     if (selectedMessageIndex !== null && scrollRef.current) {
-      scrollRef.current.scrollChildIntoView(`msg-${selectedMessageIndex}`);
+      try {
+        scrollRef.current.scrollChildIntoView(`msg-${selectedMessageIndex}`);
+      } catch {
+        // Ignore if unmounted
+      }
     }
   }, [selectedMessageIndex]);
 
@@ -271,18 +275,17 @@ export function ChatScreen({
        <CommandDropdown 
          inputValue={inputValue} 
          theme={theme} 
-         onSubmit={useCallback((v: any) => { setInputValue(""); handleSubmitLocal(v); }, [handleSubmitLocal])} 
+         onSubmit={useCallback((v: any) => { handleSubmitLocal(v); }, [handleSubmitLocal])} 
          onPick={useCallback((cmd: string) => {
           if (ARG_BEARING.has(cmd)) {
             const rest = inputValue.slice(cmd.length).trim();
             if (rest) {
-              setInputValue("");
               handleSubmitLocal(inputValue.trim());
             } else {
               setInputValue(cmd + " ");
             }
           } else {
-            setInputValue(""); handleSubmitLocal(cmd);
+            handleSubmitLocal(cmd);
           }
         }, [inputValue, handleSubmitLocal])} 
        />
@@ -294,7 +297,7 @@ export function ChatScreen({
           placeholder={busy ? "Working…" : "Type a message or / for commands…"} 
           value={inputValue} 
           onInput={setInputValue} 
-          onSubmit={useCallback((v: any) => { if (!dropdownOpen && typeof v === "string") handleSubmitLocal(v); }, [dropdownOpen, handleSubmitLocal])} 
+          onSubmit={useCallback((v: any) => { if (!dropdownOpen && typeof v === "string" && v.trim()) handleSubmitLocal(v); }, [dropdownOpen, handleSubmitLocal])} 
           focused 
         />
       </box>
@@ -448,7 +451,16 @@ function MessageItem({ message, theme, toolMap, toolResultByCallId, lastUsage, s
   };
   highlighted?: boolean;
 }) {
-  if (message.role === "system") return null;
+  if (message.role === "system") {
+    if (!message.content || message.content.includes("WORKSPACE ROOT") || message.content.startsWith("Current todo list")) {
+      return null;
+    }
+    return (
+      <box flexDirection="column" marginY={1}>
+        <text fg={theme.statusTool}>ℹ {message.content}</text>
+      </box>
+    );
+  }
 
   if (message.role === "user") {
     return (
