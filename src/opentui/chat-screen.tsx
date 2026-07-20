@@ -187,10 +187,7 @@ export function ChatScreen({
     () =>
       messages.filter(
         (msg) =>
-          (msg.role !== "system" ||
-            (msg.content &&
-              !msg.content.includes("WORKSPACE ROOT") &&
-              !msg.content.startsWith("Current todo list"))) &&
+          msg.role !== "system" &&
           msg.role !== "tool" &&
           !(msg.role === "assistant" && !msg.toolCalls?.length && msg.content.trim() === "")
       ),
@@ -451,16 +448,7 @@ function MessageItem({ message, theme, toolMap, toolResultByCallId, lastUsage, s
   };
   highlighted?: boolean;
 }) {
-  if (message.role === "system") {
-    if (!message.content || message.content.includes("WORKSPACE ROOT") || message.content.startsWith("Current todo list")) {
-      return null;
-    }
-    return (
-      <box flexDirection="column" marginY={1}>
-        <text fg={theme.statusTool}>ℹ {message.content}</text>
-      </box>
-    );
-  }
+  if (message.role === "system") return null;
 
   if (message.role === "user") {
     return (

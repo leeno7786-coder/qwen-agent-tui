@@ -653,7 +653,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             if (compacted > 0) {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: `Manually compacted: ${compacted} messages removed.`,
                 timestamp: Date.now(),
               });
@@ -661,7 +661,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             } else {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: "Compact: no compaction needed — conversation is within context budget.",
                 timestamp: Date.now(),
               });
@@ -676,7 +676,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             const report = await getDoctorReport(agent.cfg);
             agent.messages.push({
               id: Math.random().toString(36).slice(2, 10),
-              role: "system",
+              role: "assistant",
               content: formatDoctorReport(report),
               timestamp: Date.now(),
             });
@@ -687,7 +687,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             const models = await getModelsList(undefined, agent.cfg);
             agent.messages.push({
               id: Math.random().toString(36).slice(2, 10),
-              role: "system",
+              role: "assistant",
               content: formatModelsList(models),
               timestamp: Date.now(),
             });
@@ -699,7 +699,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             if (task) {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: "Autonomous mode enabled. You may iterate tools freely to complete the task.",
                 timestamp: Date.now(),
               });
@@ -709,7 +709,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             } else {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: "Usage: /auto [task description] — runs the agent in autonomous mode.",
                 timestamp: Date.now(),
               });
@@ -732,7 +732,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
                 : "No skills loaded.";
             agent.messages.push({
               id: Math.random().toString(36).slice(2, 10),
-              role: "system",
+              role: "assistant",
               content,
               timestamp: Date.now(),
             });
@@ -754,7 +754,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             if (!target) {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: `Current workspace: ${agent.cfg.workspace}`,
                 timestamp: Date.now(),
               });
@@ -768,7 +768,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             if (!changeWorkspaceTool) {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: `change_workspace tool not found`,
                 timestamp: Date.now(),
               });
@@ -787,7 +787,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
                 setTodos([]);
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "system",
+                  role: "assistant",
                   content: `Workspace changed to ${result.workspace}`,
                   timestamp: Date.now(),
                 });
@@ -796,7 +796,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               } else {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "system",
+                  role: "assistant",
                   content: `Failed to change workspace: ${result.error || 'Unknown error'}`,
                   timestamp: Date.now(),
                 });
@@ -806,7 +806,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             } catch (parseError) {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: `Failed to parse workspace change result: ${toolResult}`,
                 timestamp: Date.now(),
               });
@@ -822,7 +822,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               setTheme(next);
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: `Theme set to ${next.name}.`,
                 timestamp: Date.now(),
               });
@@ -830,7 +830,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               const names = Object.keys(THEMES).join(", ");
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: `Available themes: ${names}`,
                 timestamp: Date.now(),
               });
@@ -844,7 +844,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               const filePath = exportToMarkdown(agent.messages, args || undefined);
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: `Chat exported to ${filePath}`,
                 timestamp: Date.now(),
               });
@@ -852,7 +852,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             } catch (err) {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: `Failed to export chat: ${err}`,
                 timestamp: Date.now(),
               });
@@ -873,7 +873,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               : "";
             agent.messages.push({
               id: Math.random().toString(36).slice(2, 10),
-              role: "system",
+              role: "assistant",
               content:
                 `Reloaded config, skills, and LM Studio metadata.\n` +
                 `model: ${agent.cfg.model}${ctxNote} · small_model_mode: ${agent.cfg.smallModelMode ?? false}\n` +
@@ -892,7 +892,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
                 .join("\n");
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: `Available sessions:\n${list}\n\nTo resume: /resume [id]`,
                 timestamp: Date.now(),
               });
@@ -900,7 +900,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             } else {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: "No saved sessions found. Your current session will be auto-saved on exit.",
                 timestamp: Date.now(),
               });
@@ -916,7 +916,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             setTodos([]);
             agent.messages.push({
               id: Math.random().toString(36).slice(2, 10),
-              role: "system",
+              role: "assistant",
               content: "Started a new session. Previous conversation cleared.",
               timestamp: Date.now(),
             });
@@ -929,7 +929,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             if (!id) {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: "Usage: /delete-session [id]. List sessions with /sessions.",
                 timestamp: Date.now(),
               });
@@ -943,7 +943,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               setSessions(loadSessions());
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: `Session '${id}' deleted.`,
                 timestamp: Date.now(),
               });
@@ -951,7 +951,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             } else {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: `Session '${id}' not found. Use /sessions to list available sessions.`,
                 timestamp: Date.now(),
               });
@@ -971,7 +971,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               agent.onUpdate?.();
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: `Resumed session: ${session.id} (${session.messages.length} messages)`,
                 timestamp: Date.now(),
               });
@@ -979,7 +979,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             } else {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: args?.trim() ? `Session '${args.trim()}' not found.` : "No sessions to resume.",
                 timestamp: Date.now(),
               });
@@ -997,7 +997,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             if (!targetId) {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: "Usage: /copy [message-id]. Use /copy with a message ID to copy its content to clipboard.",
                 timestamp: Date.now(),
               });
@@ -1014,7 +1014,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               const success = copyToClipboard(message.content);
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: success
                   ? `Copied message ${message.id.slice(0, 8)} to clipboard.`
                   : `Failed to copy to clipboard. Content:\n${message.content.slice(0, 500)}${message.content.length > 500 ? "..." : ""}`,
@@ -1024,7 +1024,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             } else {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: `Message with ID '${targetId}' not found. Use the full message ID or a unique partial match.`,
                 timestamp: Date.now(),
               });
@@ -1040,7 +1040,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
                 .join("\n");
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: `Current Todos:\n${todoList}\n\nUse /todo [text] to add, /clear-todos to remove all.`,
                 timestamp: Date.now(),
               });
@@ -1048,7 +1048,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             } else {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: "No todos. Add one with /todo [description].",
                 timestamp: Date.now(),
               });
@@ -1062,7 +1062,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             setTodos([]);
             agent.messages.push({
               id: Math.random().toString(36).slice(2, 10),
-              role: "system",
+              role: "assistant",
               content: "All todos cleared.",
               timestamp: Date.now(),
             });
@@ -1077,14 +1077,14 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               if (active.length > 0) {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "system",
+                  role: "assistant",
                   content: `Active skills: ${active.join(", ")}\nUsage: /unload [skill-name]`,
                   timestamp: Date.now(),
                 });
               } else {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "system",
+                  role: "assistant",
                   content: "No active skills to unload.",
                   timestamp: Date.now(),
                 });
@@ -1095,7 +1095,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             const unloaded = agent.skillManager.unload(unloadName, agent.messages, agent.isSmallModel, undefined) || agent.skillManager.unload(`skill:${unloadName}`, agent.messages, agent.isSmallModel, undefined);
             agent.messages.push({
               id: Math.random().toString(36).slice(2, 10),
-              role: "system",
+              role: "assistant",
               content: unloaded
                 ? `Skill "${unloadName}" unloaded.`
                 : `Skill "${unloadName}" not found in active skills.`,
@@ -1110,7 +1110,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             if (!loadName) {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: "Usage: /skill-load [skill-name]. Use /skills to see available skills.",
                 timestamp: Date.now(),
               });
@@ -1131,7 +1131,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               } else {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "system",
+                  role: "assistant",
                   content: `Skill "${loadName}" is already loaded.`,
                   timestamp: Date.now(),
                 });
@@ -1139,7 +1139,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             } else {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: "assistant",
                 content: `Skill "${loadName}" not found. Use /skills to see available skills.`,
                 timestamp: Date.now(),
               });
@@ -1256,7 +1256,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             // Unknown command
             agent.messages.push({
               id: Math.random().toString(36).slice(2, 10),
-              role: "system",
+              role: "assistant",
               content: `Unknown command: /${command}. Type /help for available commands.`,
               timestamp: Date.now(),
             });
