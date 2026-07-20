@@ -1294,31 +1294,6 @@ export function App({ renderer }: { renderer: CliRenderer }) {
 
   const closeOverlay = useCallback(() => setOverlay(null), []);
 
-  if (overlay === "help") {
-    return (
-      <ErrorBoundary theme={theme}>
-        <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
-          <HelpOverlay theme={theme} onClose={closeOverlay} />
-        </box>
-      </ErrorBoundary>
-    );
-  }
-  if (overlay === "history") {
-    return (
-      <ErrorBoundary theme={theme}>
-        <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
-          <HistoryOverlay
-            theme={theme}
-            sessions={sessions}
-            onLoad={handleLoad}
-            onDelete={handleDeleteSession}
-            onClose={closeOverlay}
-          />
-        </box>
-      </ErrorBoundary>
-    );
-  }
-
   const handleSkillsChange = useCallback(() => {
     setSkills(loadSkills());
     setSkillCommands(getSkillCommands(loadSkills()));
@@ -1338,22 +1313,6 @@ export function App({ renderer }: { renderer: CliRenderer }) {
       agentRef.current.run(`/skill-load ${skill.name}`).catch(console.error);
     }
   }, []);
-
-  if (overlay === "skills") {
-    return (
-      <ErrorBoundary theme={theme}>
-        <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
-          <SkillsOverlay
-            theme={theme}
-            skills={skills}
-            onSkillsChange={handleSkillsChange}
-            onClose={handleSkillsClose}
-            onSkillSelect={handleSkillSelect}
-          />
-        </box>
-      </ErrorBoundary>
-    );
-  }
 
   const handleConnectSelect = useCallback(async (provider: any, model: any, apiKey?: string) => {
     const agent = agentRef.current;
@@ -1380,27 +1339,13 @@ export function App({ renderer }: { renderer: CliRenderer }) {
           : "";
       agent.messages.push({
         id: Math.random().toString(36).slice(2, 10),
-        role: "system",
+        role: "assistant",
         content: `Connected to ${provider.name}: ${model.name} (${model.id})${provider.isLocal ? " [Local]" : ""}${ctxNote}${paramNote}`,
         timestamp: Date.now(),
       });
       setMessages([...agent.messages]);
     }
   }, []);
-
-  if (overlay === "connect") {
-    return (
-      <ErrorBoundary theme={theme}>
-        <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
-          <ConnectOverlay
-          theme={theme}
-          onClose={closeOverlay}
-          onSelect={handleConnectSelect}
-        />
-        </box>
-      </ErrorBoundary>
-    );
-  }
 
   const handleTodoToggle = useCallback((id: string) => {
     const agent = agentRef.current;
@@ -1413,6 +1358,59 @@ export function App({ renderer }: { renderer: CliRenderer }) {
   }, []);
 
   const handleCloseTodos = useCallback(() => setShowTodos(false), []);
+
+  if (overlay === "help") {
+    return (
+      <ErrorBoundary theme={theme}>
+        <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+          <HelpOverlay theme={theme} onClose={closeOverlay} />
+        </box>
+      </ErrorBoundary>
+    );
+  }
+  if (overlay === "history") {
+    return (
+      <ErrorBoundary theme={theme}>
+        <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+          <HistoryOverlay
+            theme={theme}
+            sessions={sessions}
+            onLoad={handleLoad}
+            onDelete={handleDeleteSession}
+            onClose={closeOverlay}
+          />
+        </box>
+      </ErrorBoundary>
+    );
+  }
+  if (overlay === "skills") {
+    return (
+      <ErrorBoundary theme={theme}>
+        <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+          <SkillsOverlay
+            theme={theme}
+            skills={skills}
+            onSkillsChange={handleSkillsChange}
+            onClose={handleSkillsClose}
+            onSkillSelect={handleSkillSelect}
+          />
+        </box>
+      </ErrorBoundary>
+    );
+  }
+  if (overlay === "connect") {
+    return (
+      <ErrorBoundary theme={theme}>
+        <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+          <ConnectOverlay
+            theme={theme}
+            onClose={closeOverlay}
+            onSelect={handleConnectSelect}
+          />
+        </box>
+      </ErrorBoundary>
+    );
+  }
 
   return (
     <ErrorBoundary theme={theme}>
