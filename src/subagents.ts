@@ -46,17 +46,17 @@ export interface SubAgentResult {
   toolCalls: number;
 }
 
-const SUBAGENT_SYSTEM_PROMPT = `You are a sub-agent worker running on a small remote model, assisting the main coding agent.
+const SUBAGENT_SYSTEM_PROMPT = `You are a sub-agent worker running on a small remote model with a 256k context window, assisting the main coding agent.
 You have a curated READ-ONLY exploration tool set: read_file, batch_read_files, list_dir, map_project_tree, find_files, stat_path, grep_search, search_and_view, git_status, git_diff.
 
 CRITICAL RULES — follow exactly:
-- TURN BUDGET & MANDATORY WRAP-UP: You are granted a tight budget of 4-6 tool rounds. Before your final turn, you are ORDERED to STOP calling tools and immediately summarize your findings for the main agent.
+- 12-ROUND BUDGET & MANDATORY WRAP-UP: You are granted up to 12 tool rounds per task and a 256k context window to ingest relevant files. Before your final turn (turn 11-12), you are ORDERED to STOP calling tools and immediately summarize your findings for the main agent.
 - Use ONLY the tools listed above. There is NO execute_command / shell. Never try to run bash, grep, rg, cat, find, or any terminal command.
 - PATH HANDLING: Use exact relative paths from the workspace root (e.g. "src/agent.ts" or "package.json"). Check list_dir or map_project_tree if unsure.
 - DO NOT REPEAT TOOL CALLS: Never call read_file on a file you already read, and never execute the exact same search twice. Refer to previous outputs in conversation history.
-- TIGHT SCOPE: Read only the 1-3 key files specified in your prompt. Once you have inspected them, STOP calling tools and output your report.
+- FILE INGESTION: Read the relevant files assigned in your prompt. Ingest enough context to give an accurate report, then output your summary before turn 12.
 - IF A SEARCH HAS 0 MATCHES: Do not repeat empty searches with minor text tweaks. Move on or write your final report based on what you have already inspected.
-- Keep your final answer under ~1000 words. Lead with clear findings, line numbers, and actionable recommendations for the main agent.
+- Keep your final answer detailed and structured under ~1500 words. Lead with clear findings, line numbers, and actionable recommendations for the main agent.
 - Return findings as plain text / markdown. No tool-call syntax in the final answer.`;
 
 /**
@@ -295,13 +295,13 @@ async function runWorkerTool(
     }
 
     const sanitized = wctx.security.sanitizeOutput(out);
-    // Sub-agent file read truncation: keep outputs under ~7000 chars so small models don't get overwhelmed
-    if ((tc.name === "read_file" || tc.name === "batch_read_files") && sanitized.length > 7000) {
+    // Sub-agent file read truncation: 256k context models can ingest full files (up to ~80k chars / ~2000 lines)
+    if ((tc.name === "read_file" || tc.name === "batch_read_files") && sanitized.length > 80000) {
       const lines = sanitized.split("\n");
-      if (lines.length > 200) {
-        const head = lines.slice(0, 150).join("\n");
-        const tail = lines.slice(-40).join("\n");
-        return `${head}\n\n... [${lines.length - 190} middle lines omitted for sub-agent context budget. Use line ranges start_line/end_line to inspect specific sections] ...\n\n${tail}`;
+      if (lines.length > 2000) {
+        const head = lines.slice(0, 1500).join("\n");
+        const tail = lines.slice(-200).join("\n");
+        return `${head}\n\n... [${lines.length - 1700} middle lines omitted for sub-agent context budget] ...\n\n${tail}`;
       }
     }
     return sanitized;
@@ -344,7 +344,7 @@ async function runSingleSubAgent(
     task,
   });
 
-  const maxIter = Math.min(wctx.cfg.maxIterations ?? 6, 6);
+  const maxIter = Math.min(wctx.cfg.maxIterations ?? 12, 12);
 
   for (let i = 0; i < maxIter; i++) {
     if (signal?.aborted) {
@@ -368,11 +368,11 @@ async function runSingleSubAgent(
       };
     }
 
-    // Force mandatory wrap-up before final turn
-    if ((i >= maxIter - 2 || toolCallCount >= 4) && toolCallCount > 0) {
+    // Force mandatory wrap-up before final turn (turn 11/12)
+    if (i >= maxIter - 2 && toolCallCount > 0) {
       messages.push({
         role: "system",
-        content: `MANDATORY ORDER: You are approaching turn ${i + 1} of your ${maxIter} round limit. You are ORDERED to STOP calling tools now and immediately output your final summary of findings for the main agent.`,
+        content: `MANDATORY ORDER: You are on turn ${i + 1} of your ${maxIter} round limit. You are ORDERED to STOP calling tools now and immediately output your final summary of findings for the main agent.`,
       });
     }
 
