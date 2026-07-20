@@ -371,7 +371,7 @@ async function runSingleSubAgent(
     // Force mandatory wrap-up before final turn (turn 11/12)
     if (i >= maxIter - 2 && toolCallCount > 0) {
       messages.push({
-        role: "system",
+        role: "user",
         content: `MANDATORY ORDER: You are on turn ${i + 1} of your ${maxIter} round limit. You are ORDERED to STOP calling tools now and immediately output your final summary of findings for the main agent.`,
       });
     }
