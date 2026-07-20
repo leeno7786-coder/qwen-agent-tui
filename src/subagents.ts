@@ -334,6 +334,7 @@ async function runSingleSubAgent(
     wctx.cfg
   );
   let toolCallCount = 0;
+  let duplicateStrikes = 0;
   const seenSignatures = new Set<string>();
   const readPaths = new Set<string>();
 
@@ -441,6 +442,7 @@ async function runSingleSubAgent(
 
         // Intercept duplicate tool call loops
         if (seenSignatures.has(sig)) {
+          duplicateStrikes++;
           const dupResult = JSON.stringify({
             ok: false,
             error: `Duplicate call blocked. You already ran ${tc.function.name} with these exact inputs. Do not repeat tool calls. Output your final report now.`,
@@ -462,6 +464,7 @@ async function runSingleSubAgent(
         // Intercept re-reading the exact same file
         if (tc.function.name === "read_file" && typeof filePath === "string") {
           if (readPaths.has(filePath)) {
+            duplicateStrikes++;
             const reReadResult = JSON.stringify({
               ok: false,
               error: `File '${filePath}' was already read in a previous turn. Refer to its contents in your conversation history and output your final report.`,
@@ -514,6 +517,29 @@ async function runSingleSubAgent(
       
       toolCallCount += msg.tool_calls.length;
       messages.push(...results);
+      
+      if (duplicateStrikes >= 3) {
+        const errStr = "Aborted: Subagent got stuck repeating duplicate tool calls.";
+        emit({
+          type: "subagent_done",
+          agent: wctx.endpoint.name,
+          model: wctx.cfg.model,
+          ok: false,
+          output: "",
+          toolCalls: toolCallCount,
+        });
+        return {
+          name: wctx.endpoint.name,
+          model: wctx.cfg.model,
+          baseURL: wctx.cfg.baseURL,
+          ok: false,
+          output: "",
+          durationMs: Math.round(performance.now() - start),
+          error: errStr,
+          toolCalls: toolCallCount,
+        };
+      }
+      
       continue;
     }
 
