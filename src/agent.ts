@@ -291,7 +291,7 @@ export class AgentCore {
           : isLocalProvider(subBase)
             ? "Local"
             : "Cloud";
-      system += `\nSub-agents: ${providerName} \`${this.cfg.subAgentModel}\` — explore_subagent (emit up to 3 in one message for parallel dispatch).`;
+      system += `\nSub-agents: ${providerName} \`${this.cfg.subAgentModel}\` — explore_subagent (emit up to 3 in one message for parallel dispatch). NOTE: Sub-agent dispatches are synchronous tool calls. When explore_subagent returns, the batch is 100% finished. Never reason that sub-agents are "still running" or "waiting to complete". Synthesize immediately.`;
     }
     this.messages = [
       { id: "system-base", role: "system", content: system, timestamp: now() },

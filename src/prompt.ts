@@ -115,7 +115,8 @@ export function appendPromptExtras(
     "  - BEFORE dispatching, GATHER CONTEXT YOURSELF: run map_project_tree / list_dir / grep_search on the main workspace to learn the real structure, then weave the relevant findings into each sub-agent's prompt so it is NOT sent out blind. The workspace root is auto-injected, but richer leads make them far more effective.\n" +
     "  - Give each sub-agent a focused research task with an explicit 12-round budget. Sub-agents have a 256k context window and can ingest full files. Explicitly instruct them: 'You have up to 12 rounds for this task. Before your 12th final turn, you are ORDERED to STOP calling tools and summarize your findings for the main agent.'\n" +
     "  - To run all 3 at once, emit ALL `explore_subagent` calls in a SINGLE message. They then execute in PARALLEL on 3 different models and run simultaneously — each making its own tool calls, all visible on screen. Up to 3 concurrent.\n" +
-    "  - After explore_subagent returns, SYNTHESIZE their findings immediately. Sub-agents run synchronously inside the tool call — when it returns, ALL sub-agents have finished execution. Do NOT wait for sub-agents or expect background updates. Never narrate 'waiting for sub-agents' — synthesize the returned results right away.\n";
+    "  - After explore_subagent returns, SYNTHESIZE their findings immediately. Sub-agents run synchronously inside the tool call — when it returns, ALL sub-agents have finished execution.\n" +
+    "  - BANNED REASONING PHRASES: NEVER write reasoning thoughts like 'waiting for sub-agents to complete', 'sub-agent is still running', or 'I will continue waiting'. Sub-agents NEVER run asynchronously outside tool calls. Synthesize the returned results right away.\n";
 
   return system;
 }

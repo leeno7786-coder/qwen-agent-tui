@@ -1491,7 +1491,7 @@ export const tools: Tool[] = [
 // large codebase with no direction just times out the small models.
 {
   name: "explore_subagent",
-  description: "Dispatch ONE remote sub-agent (2B model on another device) with a focused, context-rich prompt. It has read-only exploration tools (read_file, list_dir, grep_search, map_project_tree, git_status) against this workspace. BEFORE calling this, gather codebase context yourself (use map_project_tree / list_dir / grep_search on the main workspace) and weave the relevant findings into each sub-agent's prompt so it is NOT sent out blind. Call this 1–3 times IN PARALLEL, each with a tight prompt naming the exact files/areas to investigate. The model synthesizes their results. Concurrency is capped at 3. The workspace root and a top-level file listing are auto-injected into every sub-agent prompt.",
+  description: "Dispatch ONE remote sub-agent with a focused, context-rich prompt. It has read-only exploration tools against this workspace. Sub-agents run SYNCHRONOUSLY — when this tool returns, execution is 100% finished. Do NOT wait for sub-agents or reason that they are still running. Synthesize their findings immediately. Call this 1–3 times IN PARALLEL in one message.",
   parameters: {
     type: "object",
     properties: {
