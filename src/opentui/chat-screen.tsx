@@ -372,53 +372,18 @@ function SubAgentPanel({
         let currentText = "";
         let chunkIndex = 0;
 
-        const flushText = () => {
-          if (currentText.trim() !== "") {
-            const segments = parseCodeBlocks(currentText);
-            elements.push(
-              <box key={`text-${chunkIndex++}`} flexDirection="column" marginY={1} marginLeft={2}>
-                {segments.map((seg, si) => {
-                  if (seg.type === "text") {
-                    return seg.text.split("\n").map((line, li) => (
-                      <text key={`${si}-${li}`} fg={theme.mutedFg}>
-                        {line || " "}
-                      </text>
-                    ));
-                  }
-                  if (seg.lang === "diff") {
-                    return (
-                      <box key={si} flexDirection="column" marginY={1}>
-                        <diff diff={seg.code} {...DIFF_PROPS} />
-                      </box>
-                    );
-                  }
-                  return (
-                    <box key={si} flexDirection="column" marginY={1}>
-                      {seg.lang && <text fg={theme.mutedFg}>{seg.lang}</text>}
-                      <code content={seg.code} filetype={seg.lang || "text"} syntaxStyle={syntaxStyle} />
-                    </box>
-                  );
-                })}
-              </box>
-            );
-            currentText = "";
-          }
-        };
-
         const runningToolMap = new Map<string, any>();
 
         for (const ev of log) {
           if (ev.type === "subagent_chunk") {
             currentText += (ev.reasoning || ev.text || "");
           } else if (ev.type === "subagent_tool" && ev.tool) {
-            flushText();
             runningToolMap.set(ev.tool, {
               key: `${sa.id}-t-${chunkIndex++}`,
               tool: ev.tool,
               args: ev.toolArgs,
             });
           } else if (ev.type === "subagent_tool_result" && ev.tool) {
-            flushText();
             const running = runningToolMap.get(ev.tool);
             const argsRaw = running?.args || ev.toolArgs || "{}";
             // Use toolResultRaw if available to allow full diff generation, else fallback to a basic payload
@@ -433,7 +398,6 @@ function SubAgentPanel({
             runningToolMap.delete(ev.tool);
           }
         }
-        flushText();
 
         const pendingElements: React.ReactNode[] = [];
         for (const [toolName, item] of runningToolMap.entries()) {
@@ -455,6 +419,17 @@ function SubAgentPanel({
             </text>
 
             {elements}
+            
+            {isRunning && currentText.trim() !== "" && (
+              <box flexDirection="column" marginLeft={2}>
+                {currentText.trim().split("\n").slice(-3).map((line, i) => (
+                  <text key={i} fg={theme.mutedFg}>
+                    {"  "}{line.slice(0, 120) || " "}
+                  </text>
+                ))}
+              </box>
+            )}
+
             {pendingElements}
 
             {sa.status === DONE && (

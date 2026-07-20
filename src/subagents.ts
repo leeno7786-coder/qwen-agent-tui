@@ -385,7 +385,8 @@ async function runSingleSubAgent(
       wctx.cfg,
       messages,
       toolDefs,
-      signal
+      signal,
+      { enableThinking: false }
     );
 
     for await (const chunk of stream) {
