@@ -22,6 +22,8 @@ import {
   saveInputHistory,
 } from "../store";
 import type { Message, AgentState, Todo, ToolResult, Session, Skill, SkillCommand, Config } from "../types";
+import type { SubAgentProgressEvent } from "../tools";
+import type { SubAgentResult } from "../subagents";
 import { ChatScreen } from "./chat-screen";
 import { ErrorBoundary } from "./error-boundary";
 import { HelpOverlay, HistoryOverlay } from "./overlays";
@@ -218,7 +220,6 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     {
       name: string;
       args: string;
-      subAgentProgress?: import("../subagent").SubAgentDispatchProgress;
     } | undefined
   >();
   const [lastUsage, setLastUsage] = useState<
@@ -228,6 +229,16 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     input_tokens: 0,
     output_tokens: 0,
   });
+  const [subAgents, setSubAgents] = useState<
+    Array<{
+      id: string;
+      prompt: string;
+      focusPath?: string;
+      status: "running" | "done" | "error";
+      log?: SubAgentProgressEvent[];
+      result?: SubAgentResult;
+    }>
+  >([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [selectedMessageIndex, setSelectedMessageIndex] = useState<number | null>(null);
@@ -263,6 +274,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
       setCurrentTool(agent.currentTool);
       setLastUsage(agent.lastUsage);
       setTotalUsage({ ...agent.totalUsage });
+      setSubAgents(agent.getSubAgentSnapshot());
     };
     agent.onToolResult = (r) => {
       setToolResults((prev) => [...prev.slice(-99), r]);
@@ -1272,11 +1284,13 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     [state, handleSave]
   );
 
+  const closeOverlay = useCallback(() => setOverlay(null), []);
+
   if (overlay === "help") {
     return (
       <ErrorBoundary theme={theme}>
         <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
-          <HelpOverlay theme={theme} onClose={() => setOverlay(null)} />
+          <HelpOverlay theme={theme} onClose={closeOverlay} />
         </box>
       </ErrorBoundary>
     );
@@ -1290,12 +1304,32 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             sessions={sessions}
             onLoad={handleLoad}
             onDelete={handleDeleteSession}
-            onClose={() => setOverlay(null)}
+            onClose={closeOverlay}
           />
         </box>
       </ErrorBoundary>
     );
   }
+
+  const handleSkillsChange = useCallback(() => {
+    setSkills(loadSkills());
+    setSkillCommands(getSkillCommands(loadSkills()));
+  }, []);
+
+  const handleSkillsClose = useCallback(() => {
+    setOverlay(null);
+    setSkills(loadSkills());
+    setSkillCommands(getSkillCommands(loadSkills()));
+  }, []);
+
+  const handleSkillSelect = useCallback((skillName: string) => {
+    setOverlay(null);
+    const skill = getSkill(skillName);
+    if (skill && agentRef.current) {
+      // Dispatch the load command to the agent so it triggers the LLM logic
+      agentRef.current.run(`/skill-load ${skill.name}`).catch(console.error);
+    }
+  }, []);
 
   if (overlay === "skills") {
     return (
@@ -1304,83 +1338,47 @@ export function App({ renderer }: { renderer: CliRenderer }) {
           <SkillsOverlay
             theme={theme}
             skills={skills}
-            onSkillsChange={() => {
-              setSkills(loadSkills());
-              setSkillCommands(getSkillCommands(loadSkills()));
-            }}
-            onClose={() => {
-              setOverlay(null);
-              // Refresh skills after closing
-              setSkills(loadSkills());
-              setSkillCommands(getSkillCommands(loadSkills()));
-            }}
-            onSkillSelect={(skillName) => {
-            setOverlay(null);
-            // Handle skill selection - load skill into agent context
-            const skill = getSkill(skillName);
-            if (skill && agentRef.current) {
-              const agent = agentRef.current;
-              
-              // Load the skill into the agent's active skills
-              const loaded = agent.skillManager.load(skill, agent.messages, agent.isSmallModel, undefined);
-              if (!loaded) {
-                // Skill already loaded, just show a message
-                agent.messages.push({
-                  id: Math.random().toString(36).slice(2, 10),
-                  role: "system",
-                  content: `Skill "${skill.name}" is already active.`,
-                  timestamp: Date.now(),
-                });
-                setMessages([...agent.messages]);
-                return;
-              }
-              
-              // Inject skill prompt into agent context
-              agent.messages.push({
-                id: Math.random().toString(36).slice(2, 10),
-                role: "system",
-                content: `Skill activated: ${skill.name}\n${skill.prompt}`,
-                timestamp: Date.now(),
-              });
-              
-              // Build welcome message with options
-              let welcomeText = `**Skill Loaded: ${skill.name}**\n\n`;
-              
-              if (skill.welcomeMessage) {
-                welcomeText += `${skill.welcomeMessage}\n\n`;
-              } else {
-                welcomeText += `${skill.description}\n\n`;
-              }
-              
-              if (skill.options && skill.options.length > 0) {
-                welcomeText += "**Available Options:**\n";
-                skill.options.forEach((opt, idx) => {
-                  welcomeText += `${idx + 1}. **${opt.label}**`;
-                  if (opt.description) {
-                    welcomeText += ` - ${opt.description}`;
-                  }
-                  welcomeText += `\n`;
-                });
-                welcomeText += `\nType the number or describe what you'd like to do:`;
-              } else {
-                welcomeText += `What would you like to do with this skill?`;
-              }
-              
-              agent.messages.push({
-                id: Math.random().toString(36).slice(2, 10),
-                role: "assistant",
-                content: welcomeText,
-                timestamp: Date.now(),
-              });
-              
-              setMessages([...agent.messages]);
-            }
-          }}
-        />
+            onSkillsChange={handleSkillsChange}
+            onClose={handleSkillsClose}
+            onSkillSelect={handleSkillSelect}
+          />
         </box>
       </ErrorBoundary>
     );
   }
+
+  const handleConnectSelect = useCallback(async (provider: any, model: any, apiKey?: string) => {
+    const agent = agentRef.current;
+    if (agent) {
+      const newConfig: Partial<Config> = {
+        baseURL: getProviderBaseURL(provider) || agent.cfg.baseURL,
+        model: model.id,
+        modelContextLength: model.contextLength,
+        modelMaxContextLength: model.maxContextLength,
+        modelParamBillions: model.paramBillions,
+      };
+      if (apiKey) {
+        newConfig.apiKey = apiKey;
+      } else if (provider.isLocal) {
+        newConfig.apiKey = "lm-studio";
+      }
+      await agent.reconfigure(newConfig);
+      const ctxNote = agent.cfg.modelContextLength
+        ? ` · ${Math.round(agent.cfg.modelContextLength / 1000)}k ctx`
+        : "";
+      const paramNote =
+        agent.cfg.modelParamBillions !== undefined
+          ? ` · ~${agent.cfg.modelParamBillions}B`
+          : "";
+      agent.messages.push({
+        id: Math.random().toString(36).slice(2, 10),
+        role: "system",
+        content: `Connected to ${provider.name}: ${model.name} (${model.id})${provider.isLocal ? " [Local]" : ""}${ctxNote}${paramNote}`,
+        timestamp: Date.now(),
+      });
+      setMessages([...agent.messages]);
+    }
+  }, []);
 
   if (overlay === "connect") {
     return (
@@ -1388,44 +1386,25 @@ export function App({ renderer }: { renderer: CliRenderer }) {
         <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
           <ConnectOverlay
           theme={theme}
-          onClose={() => setOverlay(null)}
-          onSelect={async (provider, model, apiKey) => {
-            const agent = agentRef.current;
-            if (agent) {
-              const newConfig: Partial<Config> = {
-                baseURL: getProviderBaseURL(provider) || agent.cfg.baseURL,
-                model: model.id,
-                modelContextLength: model.contextLength,
-                modelMaxContextLength: model.maxContextLength,
-                modelParamBillions: model.paramBillions,
-              };
-              if (apiKey) {
-                newConfig.apiKey = apiKey;
-              } else if (provider.isLocal) {
-                newConfig.apiKey = "lm-studio";
-              }
-              await agent.reconfigure(newConfig);
-              const ctxNote = agent.cfg.modelContextLength
-                ? ` · ${Math.round(agent.cfg.modelContextLength / 1000)}k ctx`
-                : "";
-              const paramNote =
-                agent.cfg.modelParamBillions !== undefined
-                  ? ` · ~${agent.cfg.modelParamBillions}B`
-                  : "";
-              agent.messages.push({
-                id: Math.random().toString(36).slice(2, 10),
-                role: "system",
-                content: `Connected to ${provider.name}: ${model.name} (${model.id})${provider.isLocal ? " [Local]" : ""}${ctxNote}${paramNote}`,
-                timestamp: Date.now(),
-              });
-              setMessages([...agent.messages]);
-            }
-          }}
+          onClose={closeOverlay}
+          onSelect={handleConnectSelect}
         />
         </box>
       </ErrorBoundary>
     );
   }
+
+  const handleTodoToggle = useCallback((id: string) => {
+    const agent = agentRef.current;
+    if (agent) agent.toggleTodo(id);
+  }, []);
+
+  const handleTodoDelete = useCallback((id: string) => {
+    const agent = agentRef.current;
+    if (agent) agent.removeTodo(id);
+  }, []);
+
+  const handleCloseTodos = useCallback(() => setShowTodos(false), []);
 
   return (
     <ErrorBoundary theme={theme}>
@@ -1448,15 +1427,9 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             <TodoSidebar
               theme={theme}
               todos={todos}
-              onToggle={(id) => {
-                const agent = agentRef.current;
-                if (agent) agent.toggleTodo(id);
-              }}
-              onDelete={(id) => {
-                const agent = agentRef.current;
-                if (agent) agent.removeTodo(id);
-              }}
-              onClose={() => setShowTodos(false)}
+              onToggle={handleTodoToggle}
+              onDelete={handleTodoDelete}
+              onClose={handleCloseTodos}
             />
           )}
 
@@ -1480,6 +1453,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               currentTool={currentTool}
               lastUsage={lastUsage}
               totalUsage={totalUsage}
+              subAgents={subAgents}
               onSubmit={handleSubmit}
               paginated={paginated}
               page={page}

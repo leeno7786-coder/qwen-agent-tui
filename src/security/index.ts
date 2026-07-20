@@ -150,32 +150,19 @@ const SAFE_COMMAND_PATTERNS: RegExp[] = [
   /^git\s+reset\s+--/i,
   
   // File operations
-  /^ls$/i,
-  /^ls\s+--/i,
-  /^dir$/i,
-  /^dir\s+\//i,
+  /^ls(?:\s+.*)?$/i,
+  /^dir(?:\s+.*)?$/i,
   /^pwd$/i,
-  /^cd$/i,
-  /^cd\s+\S+/i,
-  /^cat$/i,
-  /^cat\s+\S+/i,
-  /^type$/i,
-  /^type\s+\S+/i,
-  /^more$/i,
-  /^more\s+\S+/i,
-  /^less$/i,
-  /^less\s+\S+/i,
-  /^head$/i,
-  /^head\s+--/i,
-  /^tail$/i,
-  /^tail\s+--/i,
-  /^wc$/i,
-  /^wc\s+--/i,
-  /^find$/i,
-  /^find\s+\S+/i,
-  /^grep$/i,
-  /^grep\s+--/i,
-  /^grep\s+\S+/i,
+  /^cd(?:\s+.*)?$/i,
+  /^cat(?:\s+.*)?$/i,
+  /^type(?:\s+.*)?$/i,
+  /^more(?:\s+.*)?$/i,
+  /^less(?:\s+.*)?$/i,
+  /^head(?:\s+.*)?$/i,
+  /^tail(?:\s+.*)?$/i,
+  /^wc(?:\s+.*)?$/i,
+  /^find(?:\s+.*)?$/i,
+  /^grep(?:\s+.*)?$/i,
   /^sort$/i,
   /^uniq$/i,
   /^awk$/i,
@@ -288,8 +275,8 @@ export class SecurityManager {
     }
 
     // If we get here, the command wasn't explicitly allowed or blocked
-    // For now, allow it but this could be made stricter
-    return { ok: true, command };
+    // Strict mode: deny by default
+    return { ok: false, error: `Command not in allowed safe list` };
   }
 
   /**
@@ -315,22 +302,32 @@ export class SecurityManager {
       return { ok: false, error: `Access denied: path escapes workspace` };
     }
 
+    // Convert to relative path for pattern matching
+    const workspacePath = this.workspace ? resolve(this.workspace) : '';
+    let relPath = resolved;
+    if (workspacePath && resolved.startsWith(workspacePath)) {
+      relPath = relative(workspacePath, resolved);
+      if (relPath === '') relPath = '.';
+    }
+    // Convert to unix slashes for glob matching
+    relPath = relPath.replace(/\\/g, '/');
+
     // Check against allowed paths first (if any are specified)
     // Allowed paths take precedence over blocked paths
-    // Use the original (non-resolved) path for pattern matching so user-provided
-    // Unix-style patterns work correctly regardless of OS drive letter resolution.
+    let isExplicitlyAllowed = false;
     if (this.config.allowedPaths.length > 0) {
-      const isAllowed = this.config.allowedPaths.some(pattern =>
-        this.pathMatchesPattern(path, pattern)
+      isExplicitlyAllowed = this.config.allowedPaths.some(pattern =>
+        this.pathMatchesPattern(relPath, pattern)
       );
-      if (!isAllowed) {
+      if (!isExplicitlyAllowed) {
         return { ok: false, error: `Access denied: path not in allowed paths` };
       }
-      // If path is in allowed paths, skip blocked paths check
-    } else {
-      // Check against blocked paths
+    }
+
+    // Check against blocked paths (unless explicitly allowed)
+    if (!isExplicitlyAllowed) {
       for (const pattern of this.config.blockedPaths) {
-        if (this.pathMatchesPattern(path, pattern)) {
+        if (this.pathMatchesPattern(relPath, pattern)) {
           return { ok: false, error: `Access denied: path matches blocked pattern (${pattern})` };
         }
       }

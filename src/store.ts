@@ -1,8 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { createRequire } from "module";
 import type { Todo, Session, Message } from "./types";
 
+const requireOptional = createRequire(import.meta.url);
 const DATA_DIR = join(homedir(), ".qwen-agent-tui");
 const SESSION_DIR = join(DATA_DIR, "sessions");
 const HISTORY_FILE = join(DATA_DIR, "input-history.json");
@@ -150,7 +152,7 @@ export function resumeSession(id?: string): Session | null {
 export function copyToClipboard(text: string): boolean {
   try {
     // Use clipboardy if available (recommended for cross-platform clipboard)
-    const clipboardy: any = require("clipboardy");
+    const clipboardy: any = requireOptional("clipboardy");
     if (clipboardy?.writeSync) {
       clipboardy.writeSync(text);
       return true;

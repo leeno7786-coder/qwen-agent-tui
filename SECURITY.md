@@ -294,7 +294,7 @@ const result = globalSecurityManager.validateCommand('rm -rf /');
 
 ## Security for Sub-Agents
 
-Sub-agents (created via `dispatch_subagents` or `explore_subagent`) **automatically inherit** the security configuration from the main agent. This ensures that:
+Sub-agents (created via `explore_subagent`) **automatically inherit** the security configuration from the main agent. This ensures that:
 
 - Sub-agents cannot execute dangerous commands
 - Sub-agents cannot access blocked paths

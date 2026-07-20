@@ -6,6 +6,35 @@ import type { Config, SkillConfig } from "./types";
 import { isSmallModel } from "./llm";
 
 /**
+ * Derive sub-agent availability and defaults from the resolved config.
+ *
+ * Sub-agents are enabled when either an explicit `subagents` pool is configured
+ * or a `REMOTE_LMSTUDIO_URL` / local LM Studio is reachable with Qwen3.5-2B
+ * models. We cannot probe async here, so we mark enabled optimistically based
+ * on explicit config and seed `subAgentModel` / `subAgentBaseURL` from the
+ * configured pool so the system prompt can name the provider. The actual pool
+ * is resolved lazily at dispatch time in src/subagents.ts.
+ */
+export function applySubAgentDefaults(cfg: Config): void {
+  const pool = cfg.subagents;
+  if (pool?.enabled && pool.endpoints.length > 0) {
+    cfg.subAgentEnabled = true;
+    const ep = pool.endpoints[0];
+    cfg.subAgentModel = cfg.subAgentModel ?? ep.model;
+    cfg.subAgentBaseURL = cfg.subAgentBaseURL ?? ep.baseURL;
+    cfg.subAgentApiKey = cfg.subAgentApiKey ?? ep.apiKey;
+    return;
+  }
+  if (process.env.REMOTE_LMSTUDIO_URL) {
+    cfg.subAgentEnabled = true;
+    cfg.subAgentBaseURL = cfg.subAgentBaseURL ?? process.env.REMOTE_LMSTUDIO_URL;
+    return;
+  }
+  // Local LM Studio auto-discovery happens lazily at dispatch time.
+  cfg.subAgentEnabled = cfg.subAgentEnabled ?? false;
+}
+
+/**
  * Sanitize a URL to remove any embedded API keys.
  */
 function sanitizeBaseURL(url: string): string {
@@ -35,30 +64,19 @@ function sanitizeBaseURL(url: string): string {
  */
 export const MODELS: Record<string, { baseURL: string; model: string }> = {
   "qwen3-coder-flash": {
-    baseURL: "https://api.openai.com/v1",
+    baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     model: "qwen3-coder-flash",
   },
   "qwen-plus": {
-    baseURL: "https://api.openai.com/v1",
+    baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     model: "qwen-plus",
   },
   "qwen-max": {
-    baseURL: "https://api.openai.com/v1",
+    baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     model: "qwen-max",
   },
 };
 
-/** Default sub-agent model: Mistral Small (Latest). */
-export const DEFAULT_SUB_AGENT_MODEL = "mistral-small-latest";
-
-/** Default sub-agent API endpoint (Mistral). */
-export const DEFAULT_SUB_AGENT_BASE_URL = "https://api.mistral.ai/v1";
-
-/** Default sub-agent tool-loop depth (stronger models can go deeper). */
-export const DEFAULT_SUB_AGENT_MAX_ITERATIONS = 12;
-
-/** Default sub-agent output budget per LLM call. */
-export const DEFAULT_SUB_AGENT_MAX_TOKENS = 4096;
 
 function getDefault(): Config {
   return {
@@ -75,45 +93,6 @@ function getDefault(): Config {
   };
 }
 
-/** Apply OpenRouter sub-agent defaults unless explicitly disabled. */
-export function applySubAgentDefaults(cfg: Config): Config {
-  if (cfg.subAgentEnabled === false) return cfg;
-
-  if (!cfg.subAgentModel) {
-    cfg.subAgentModel = DEFAULT_SUB_AGENT_MODEL;
-  }
-  if (cfg.subAgentMaxIterations === undefined) {
-    cfg.subAgentMaxIterations = DEFAULT_SUB_AGENT_MAX_ITERATIONS;
-  }
-  if (cfg.subAgentMaxTokens === undefined) {
-    cfg.subAgentMaxTokens = DEFAULT_SUB_AGENT_MAX_TOKENS;
-  }
-  if (cfg.subAgentMaxParallel === undefined) {
-    cfg.subAgentMaxParallel = 3;
-  }
-  if (!cfg.subAgentBaseURL) {
-    cfg.subAgentBaseURL = DEFAULT_SUB_AGENT_BASE_URL;
-  }
-  const subBase = cfg.subAgentBaseURL ?? cfg.baseURL;
-  if (!cfg.subAgentApiKey) {
-    if (subBase.includes("mistral.ai")) {
-      cfg.subAgentApiKey =
-        process.env.MISTRAL_API_KEY ||
-        getApiKey("MISTRAL_API_KEY") ||
-        "";
-    } else if (subBase.includes("openrouter.ai")) {
-      cfg.subAgentApiKey =
-        process.env.OPENROUTER_API_KEY ||
-        getApiKey("OPENROUTER_API_KEY") ||
-        (cfg.baseURL.includes("openrouter.ai") ? cfg.apiKey : "") ||
-        "";
-    }
-  }
-  if (cfg.subAgentEnabled === undefined) {
-    cfg.subAgentEnabled = true;
-  }
-  return cfg;
-}
 
 /**
  * Load `.env` files from the current directory and the workspace.
@@ -142,7 +121,10 @@ export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
 
   // If a partial config object is passed, merge it with defaults
   if (pathOrConfig && typeof pathOrConfig === 'object') {
-    Object.assign(cfg, pathOrConfig);
+    const filteredConfig = Object.fromEntries(
+      Object.entries(pathOrConfig).filter(([_, v]) => v !== undefined)
+    );
+    Object.assign(cfg, filteredConfig);
   }
 
   // Load .env early so process.env is populated before we read it
@@ -235,15 +217,6 @@ export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
     const n = parseInt(process.env.QWEN_RATE_LIMIT_MS, 10);
     if (!Number.isNaN(n) && n >= 0 && n <= 10000) cfg.rateLimitMs = n;
   }
-  if (process.env.QWEN_SUB_AGENT_MODEL) {
-    cfg.subAgentModel = process.env.QWEN_SUB_AGENT_MODEL;
-  }
-  if (process.env.QWEN_SUB_AGENT_BASE_URL) {
-    cfg.subAgentBaseURL = sanitizeBaseURL(process.env.QWEN_SUB_AGENT_BASE_URL);
-  }
-  if (process.env.QWEN_SUB_AGENT_ENABLED === "0" || process.env.QWEN_SUB_AGENT_ENABLED === "false") {
-    cfg.subAgentEnabled = false;
-  }
 
   // Tool cache configuration
   if (process.env.QWEN_TOOL_CACHE_ENABLED === "0" || process.env.QWEN_TOOL_CACHE_ENABLED === "false") {
@@ -307,7 +280,6 @@ export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
     cfg.securityBlockedPaths = process.env.QWEN_SECURITY_BLOCKED_PATHS.split(',').map(p => p.trim());
   }
 
-  applySubAgentDefaults(cfg);
 
   // Auto-detect small model mode (≤8B) — does not shrink context; that comes from the model id.
   // When smallModelMode is undefined (default), isSmallModel checks the model ID.
@@ -360,28 +332,6 @@ export function validateConfig(cfg: Config): {
   const isLocal = /localhost|127\.0\.0\.1|lm-studio|ollama/i.test(cfg.baseURL);
   if (!isLocal && (!cfg.apiKey || cfg.apiKey.trim() === "")) {
     warnings.push("apiKey is empty — set OPENAI_API_KEY or DASHSCOPE_API_KEY");
-  }
-
-  const subBase = cfg.subAgentBaseURL || DEFAULT_SUB_AGENT_BASE_URL;
-  const subIsLocal = /localhost|127\.0\.0\.1|lm-studio|ollama/i.test(subBase);
-  if (
-    cfg.subAgentEnabled !== false &&
-    !subIsLocal &&
-    (!cfg.subAgentApiKey || cfg.subAgentApiKey.trim() === "")
-  ) {
-    if (subBase.includes("mistral.ai")) {
-      warnings.push(
-        "subAgentApiKey is empty — set MISTRAL_API_KEY for sub-agents (Mistral)"
-      );
-    } else if (subBase.includes("openrouter.ai")) {
-      warnings.push(
-        "subAgentApiKey is empty — set OPENROUTER_API_KEY for sub-agents (OpenRouter)"
-      );
-    } else {
-      warnings.push(
-        "subAgentApiKey is empty — set API key for sub-agents"
-      );
-    }
   }
 
   if (!isLocal && cfg.apiKey && cfg.apiKey.trim().length < 8) {
@@ -493,6 +443,27 @@ export function validateConfig(cfg: Config): {
     }
   }
 
+  // P1: Validate securityAllowedPaths are within workspace
+  if (cfg.securityAllowedPaths && cfg.securityAllowedPaths.length > 0) {
+    const workspace = cfg.workspace;
+    for (const path of cfg.securityAllowedPaths) {
+      if (path && workspace) {
+        // Ensure allowed paths are within workspace or are absolute paths
+        // This is a basic check - more thorough validation happens in the safe() function
+        if (!path.startsWith(workspace) && !path.startsWith("/") && !path.match(/^[a-zA-Z]:/)) {
+          warnings.push(`securityAllowedPaths entry "${path}" may not be accessible from workspace: ${workspace}`);
+        }
+      }
+    }
+  }
+
+  // P1: Validate subAgentMaxParallel has reasonable limits
+  if (cfg.maxBackgroundSubAgents !== undefined) {
+    if (cfg.maxBackgroundSubAgents < 1 || cfg.maxBackgroundSubAgents > 10) {
+      warnings.push(`maxBackgroundSubAgents should be between 1 and 10 for stability, got ${cfg.maxBackgroundSubAgents}`);
+    }
+  }
+
   return {
     valid: errors.length === 0,
     warnings,
@@ -511,8 +482,8 @@ function ensureEnvFile(): string {
   if (!existsSync(envDir)) {
     try {
       mkdirSync(envDir, { recursive: true });
-    } catch {
-      // Ignore errors
+    } catch (err) {
+      console.warn("Warning: failed to create env directory:", err);
     }
   }
   
@@ -520,8 +491,8 @@ function ensureEnvFile(): string {
   if (!existsSync(envPath)) {
     try {
       writeFileSync(envPath, "# Qwen Agent TUI Environment Variables\n", "utf-8");
-    } catch {
-      // Ignore errors
+    } catch (err) {
+      console.warn("Warning: failed to create .env file:", err);
     }
   }
   
@@ -675,8 +646,8 @@ function ensureSkillConfigDir(): string {
   if (!existsSync(skillConfigDir)) {
     try {
       mkdirSync(skillConfigDir, { recursive: true });
-    } catch {
-      // Ignore errors
+    } catch (err) {
+      console.warn("Warning: failed to create skill config directory:", err);
     }
   }
   

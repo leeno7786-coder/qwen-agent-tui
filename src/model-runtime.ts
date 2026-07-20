@@ -63,11 +63,7 @@ export function modelIdsMatch(a: string, b: string): boolean {
   return baseA === baseB || na.endsWith(nb) || nb.endsWith(na);
 }
 
-/** LM Studio needs two loaded models; cloud APIs can reuse the same model id. */
-export function requiresDistinctSubAgentModels(cfg: Pick<Config, "baseURL" | "subAgentBaseURL">): boolean {
-  const subBase = cfg.subAgentBaseURL ?? cfg.baseURL;
-  return isLocalProvider(cfg.baseURL) && isLocalProvider(subBase);
-}
+
 
 type LMStudioRaw = {
   id?: string;
@@ -282,14 +278,7 @@ export async function enrichConfigWithRuntime(cfg: Config): Promise<Config> {
       smallModelMode,
     };
 
-    if (next.subAgentEnabled !== false && !next.subAgentModel && !next.subAgentBaseURL) {
-      const models = await fetchLMStudioModels(cfg.baseURL);
-      const sub = pickSubAgentModel(models, next.model);
-      if (sub) {
-        next.subAgentModel = sub.id;
-        next.subAgentEnabled = true;
-      }
-    }
+
 
     return next;
   }

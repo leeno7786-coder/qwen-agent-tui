@@ -1,3 +1,5 @@
+import type { SecurityManager } from "./security";
+
 /**
  * Application configuration shape.
  */
@@ -38,24 +40,7 @@ export interface Config {
   modelParamBillions?: number;
   /** How modelContextLength / modelParamBillions were obtained. */
   modelRuntimeSource?: "lmstudio" | "heuristic";
-  /** Second model for read-only sub-agents (default: Qwen3 Next 80B on OpenRouter). */
-  subAgentModel?: string;
-  /** OpenAI-compatible API base URL for sub-agents (default: OpenRouter). */
-  subAgentBaseURL?: string;
-  /** API key for sub-agent provider (default: OPENROUTER_API_KEY). */
-  subAgentApiKey?: string;
-  /** Use explore_subagent / dispatch_subagents (default true when sub-agent is configured). */
-  subAgentEnabled?: boolean;
-  /** Max tool loops for one explore_subagent call (default 12). */
-  subAgentMaxIterations?: number;
-  /** Max output tokens per sub-agent LLM call (default 4096). */
-  subAgentMaxTokens?: number;
-  subAgentTemperature?: number;
-  /** Max concurrent sub-agent runs (legacy; dispatch runs sequentially). */
-  subAgentMaxParallel?: number;
-  /** Max agents per dispatch_subagents call on OpenRouter (default 2). */
-  subAgentMaxPerDispatch?: number;
-  /** Minimum delay (ms) between LLM API calls to avoid rate limiting. 0 = disabled. */
+
   rateLimitMs?: number;
   /** Enable tool execution caching (default: true). */
   toolCacheEnabled?: boolean;
@@ -90,9 +75,53 @@ export interface Config {
   /** Blocked paths for file access (glob patterns). */
   securityBlockedPaths?: string[];
   /** Security manager instance for runtime security checks. */
-  securityManager?: any;
+  securityManager?: SecurityManager;
   /** Default timeout for shell commands in seconds (default: 30). */
   commandTimeoutSeconds?: number;
+  /** Remote sub-agent pool config (e.g. another device's LM Studio). */
+  subagents?: SubAgentPoolConfig;
+  /** Whether remote sub-agents are available (derived at init). */
+  subAgentEnabled?: boolean;
+  /** Model id used for remote sub-agents. */
+  subAgentModel?: string;
+  /** Base URL for the remote sub-agent provider. */
+  subAgentBaseURL?: string;
+  /** API key for the remote sub-agent provider. */
+  subAgentApiKey?: string;
+  /** Maximum number of concurrent background sub-agents (default: 3). */
+  maxBackgroundSubAgents?: number;
+}
+
+/**
+ * A single remote model endpoint used as a parallel sub-agent worker.
+ */
+export interface SubAgentEndpoint {
+  /** Human-readable name shown in tool output (e.g. "qwen-remote-1"). */
+  name: string;
+  /** Base URL of the OpenAI-compatible server (e.g. http://192.168.1.50:1234/v1). */
+  baseURL: string;
+  /** Model id loaded on that endpoint. */
+  model: string;
+  /** Optional API key (usually empty for local LM Studio). */
+  apiKey?: string;
+}
+
+/**
+ * Configuration for a pool of remote sub-agents the main agent can fan out to.
+ */
+export interface SubAgentPoolConfig {
+  /** Whether the remote sub-agent pool is enabled. */
+  enabled: boolean;
+  /** Remote endpoints (each becomes one parallel worker). */
+  endpoints: SubAgentEndpoint[];
+  /** Per-subagent max output tokens (defaults to main cfg.maxTokens). */
+  maxTokens?: number;
+  /** Per-subagent temperature (defaults to main cfg.temperature). */
+  temperature?: number;
+  /** Max tool-call iterations per subagent turn (default: 20). */
+  maxIterations?: number;
+  /** Per-request timeout in ms for subagent calls (default: 900000 = 15min). */
+  timeoutMs?: number;
 }
 
 /** Possible states of the agent lifecycle. */
@@ -146,10 +175,6 @@ export interface ToolResult {
   cached?: boolean;
 }
 
-// Add SecurityManager to Config for tool access
-export interface ConfigWithSecurity extends Config {
-  securityManager?: any;
-}
 
 /** A user-managed todo item. */
 export interface Todo {

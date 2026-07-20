@@ -4,7 +4,7 @@
  */
 
 import { createHash } from 'crypto';
-import { watch, type FSWatcher, existsSync, statSync } from 'fs';
+import { watch, type FSWatcher, existsSync, statSync, readdirSync } from 'fs';
 import { relative, resolve, dirname } from 'path';
 import type { Config } from '../types';
 
@@ -12,6 +12,8 @@ import type { Config } from '../types';
  * Cache entry for a tool execution result.
  */
 export interface ToolCacheEntry {
+  /** The name of the tool executed */
+  toolName: string;
   /** The cached result */
   result: string;
   /** Timestamp when the entry was created */
@@ -58,7 +60,6 @@ export const DEFAULT_CACHE_CONFIG: ToolCacheConfig = {
     'run_command',
     'typecheck',
     'explore_subagent',
-    'dispatch_subagents',
     'manage_todos',
     'change_workspace',
   ]),
@@ -74,14 +75,13 @@ export function extractDependencies(
   workspace: string
 ): Set<string> {
   const dependencies = new Set<string>();
-  const fs = require('fs');
 
   try {
     switch (toolName) {
       case 'read_file':
         if (args.path) {
           const path = resolve(workspace, String(args.path));
-          if (fs.existsSync(path)) {
+          if (existsSync(path)) {
             dependencies.add(path);
           }
         }
@@ -90,11 +90,11 @@ export function extractDependencies(
       case 'list_dir':
         if (args.path) {
           const path = resolve(workspace, String(args.path));
-          if (fs.existsSync(path)) {
+          if (existsSync(path)) {
             dependencies.add(path);
             // Also track all files in the directory
             try {
-              const entries = fs.readdirSync(path);
+              const entries = readdirSync(path);
               for (const entry of entries) {
                 const entryPath = resolve(path, entry);
                 dependencies.add(entryPath);
@@ -112,7 +112,7 @@ export function extractDependencies(
       case 'stat_path':
         if (args.path) {
           const path = resolve(workspace, String(args.path));
-          if (fs.existsSync(path)) {
+          if (existsSync(path)) {
             dependencies.add(path);
           }
         }
@@ -121,7 +121,7 @@ export function extractDependencies(
       case 'find_files':
         if (args.path) {
           const path = resolve(workspace, String(args.path));
-          if (fs.existsSync(path)) {
+          if (existsSync(path)) {
             dependencies.add(path);
           }
         }
@@ -130,7 +130,7 @@ export function extractDependencies(
       case 'grep_search':
         if (args.path) {
           const path = resolve(workspace, String(args.path));
-          if (fs.existsSync(path)) {
+          if (existsSync(path)) {
             dependencies.add(path);
           }
         }
@@ -139,7 +139,7 @@ export function extractDependencies(
       case 'search_and_view':
         if (args.path) {
           const path = resolve(workspace, String(args.path));
-          if (fs.existsSync(path)) {
+          if (existsSync(path)) {
             dependencies.add(path);
           }
         }
@@ -149,7 +149,7 @@ export function extractDependencies(
         if (args.paths && Array.isArray(args.paths)) {
           for (const path of args.paths) {
             const absPath = resolve(workspace, String(path));
-            if (fs.existsSync(absPath)) {
+            if (existsSync(absPath)) {
               dependencies.add(absPath);
             }
           }
@@ -159,7 +159,7 @@ export function extractDependencies(
       case 'map_project_tree':
         if (args.path) {
           const path = resolve(workspace, String(args.path));
-          if (fs.existsSync(path)) {
+          if (existsSync(path)) {
             dependencies.add(path);
           }
         }
@@ -171,7 +171,7 @@ export function extractDependencies(
         for (const field of pathFields) {
           if (args[field]) {
             const path = resolve(workspace, String(args[field]));
-            if (fs.existsSync(path)) {
+            if (existsSync(path)) {
               dependencies.add(path);
             }
           }
@@ -265,8 +265,7 @@ export class ToolCacheManager {
    */
   private hasFileChanged(filePath: string, sinceTimestamp: number): boolean {
     try {
-      const fs = require('fs');
-      const stats = fs.statSync(filePath);
+      const stats = statSync(filePath);
       return stats.mtimeMs > sinceTimestamp;
     } catch {
       return true; // If we can't stat the file, assume it changed
@@ -295,19 +294,10 @@ export class ToolCacheManager {
       ? new Set(dependencies)
       : extractDependencies(toolName, args, workspace);
 
-    // Evict oldest entries if cache is full
+    // Evict oldest entries if cache is full (Map preserves insertion order)
     while (this.cache.size >= this.config.maxSize) {
-      let oldestKey: string | undefined;
-      let oldestTime = Infinity;
-
-      for (const [k, entry] of this.cache) {
-        if (entry.timestamp < oldestTime) {
-          oldestTime = entry.timestamp;
-          oldestKey = k;
-        }
-      }
-
-      if (oldestKey) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey !== undefined) {
         this.cache.delete(oldestKey);
       } else {
         break;
@@ -315,6 +305,7 @@ export class ToolCacheManager {
     }
 
     this.cache.set(key, {
+      toolName,
       result,
       timestamp: Date.now(),
       duration,
@@ -338,9 +329,15 @@ export class ToolCacheManager {
     let count = 0;
     const keysToDelete: string[] = [];
 
-    for (const [key] of this.cache) {
-      // Since we hash the key, we need to track tool names separately
-      // This is a limitation of the current implementation
+    for (const [key, entry] of this.cache) {
+      if (entry.toolName === toolName) {
+        keysToDelete.push(key);
+      }
+    }
+
+    for (const key of keysToDelete) {
+      this.cache.delete(key);
+      count++;
     }
 
     return count;
@@ -353,8 +350,15 @@ export class ToolCacheManager {
     let count = 0;
     const keysToDelete: string[] = [];
 
-    for (const [key] of this.cache) {
-      // Similar limitation as above
+    for (const [key, entry] of this.cache) {
+      if (entry.workspace === workspace) {
+        keysToDelete.push(key);
+      }
+    }
+
+    for (const key of keysToDelete) {
+      this.cache.delete(key);
+      count++;
     }
 
     return count;

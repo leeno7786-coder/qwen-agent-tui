@@ -186,7 +186,7 @@ describe('SecurityManager', () => {
 
     it('should respect custom allowed paths', () => {
       const customManager = createSecurityManager({
-        allowedPaths: ['/test/workspace/config/**'],
+        allowedPaths: ['config/**'],
       }, '/test/workspace');
       
       const result = customManager.validateFileAccess('/test/workspace/config/app.json', 'read');
@@ -195,7 +195,7 @@ describe('SecurityManager', () => {
 
     it('should respect custom blocked paths', () => {
       const customManager = createSecurityManager({
-        blockedPaths: ['/test/workspace/secrets/**'],
+        blockedPaths: ['secrets/**'],
       }, '/test/workspace');
       
       const result = customManager.validateFileAccess('/test/workspace/secrets/api.key', 'read');

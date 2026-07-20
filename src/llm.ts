@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageFunctionToolCall } from "openai/resources/chat/completions";
-import type { Config } from "./types";
+import { createRequire } from "module";
+import type { Config, Message } from "./types";
 import type { StreamChunk } from "./streaming";
 
 /**
@@ -44,6 +45,7 @@ export interface ChatResponse {
     reasoning_content?: string;
   };
   usage?: { input_tokens: number; output_tokens: number };
+  finishReason?: string;
 }
 
 export function normalizeContent(v: any): string {
@@ -110,20 +112,26 @@ export function isSmallModel(
  * @param modelId - The model identifier
  * @returns Estimated context size in tokens
  */
-let _tkEncoder: any = null;
+const _tkEncoders = new Map<string, any>();
 function getTKEncoder(modelId?: string) {
-  if (_tkEncoder) return _tkEncoder;
+  const cacheKey = modelId || "default";
+  if (_tkEncoders.has(cacheKey)) return _tkEncoders.get(cacheKey);
+  let encoder = null;
   try {
-    const tk = require("tiktoken");
+    const requireOptional = createRequire(import.meta.url);
+    const tk = requireOptional("tiktoken");
     // Use encoding_for_model if a model name is provided, otherwise fall back to cl100k_base
     if (modelId) {
-      try { _tkEncoder = tk.encoding_for_model(modelId); return _tkEncoder; } catch {}
+      try { encoder = tk.encoding_for_model(modelId); } catch {}
     }
-    _tkEncoder = tk.get_encoding("cl100k_base");
+    if (!encoder) {
+      encoder = tk.get_encoding("cl100k_base");
+    }
   } catch {
-    _tkEncoder = null;
+    encoder = null;
   }
-  return _tkEncoder;
+  _tkEncoders.set(cacheKey, encoder);
+  return encoder;
 }
 
 /**
@@ -362,7 +370,8 @@ export function extractDeltaText(delta: any): {
     normalizeContent(delta.content) ||
     normalizeContent(delta.text) ||
     normalizeContent(delta.response) ||
-    normalizeContent(delta.message?.content);
+    normalizeContent(delta.message?.content) ||
+    "";
 
   const reasoningContent =
     normalizeContent(delta.reasoning_content) ||
@@ -532,21 +541,25 @@ export async function chat(
           model: cfg.model,
           messages: messages.map((m) => {
             if (m.role === "tool") {
+              // ChatMessage uses snake_case; Message uses camelCase
+              // Access both and use whatever is available
+              const toolCallId = (m as any).tool_call_id ?? (m as any).toolCallId;
               return {
                 role: "tool" as const,
                 content: m.content,
-                tool_call_id: m.tool_call_id!,
+                tool_call_id: toolCallId ?? `fallback-${(m as any).id}`,
               };
             }
-            if (m.role === "assistant" && m.tool_calls) {
+            if (m.role === "assistant" && ((m as any).tool_calls ?? (m as any).toolCalls)) {
+              const toolCalls = (m as any).tool_calls ?? (m as any).toolCalls;
               return {
                 role: "assistant" as const,
                 content: m.content,
-                tool_calls: m.tool_calls,
+                tool_calls: toolCalls,
               };
             }
             return { role: m.role, content: m.content };
-          }) as any,
+          }),
           temperature: cfg.temperature ?? 0.2,
       max_tokens: getMaxOutputTokens(cfg.model, cfg.maxTokens),
       tools: tools?.length ? tools : undefined,
@@ -588,9 +601,10 @@ export async function chat(
              ? {
                input_tokens: completion.usage.prompt_tokens,
                output_tokens: completion.usage.completion_tokens,
-             }
-             : undefined,
-         };
+              }
+              : undefined,
+            finishReason: choice?.finish_reason || undefined,
+          };
     } catch (err: any) {
       if (err.name === 'AbortError' || signal?.aborted) {
         throw err;
@@ -642,21 +656,23 @@ export async function* streamChat(
           model: cfg.model,
           messages: messages.map((m) => {
             if (m.role === "tool") {
+              const toolCallId = (m as any).tool_call_id ?? (m as any).toolCallId;
               return {
                 role: "tool" as const,
                 content: m.content,
-                tool_call_id: m.tool_call_id!,
+                tool_call_id: toolCallId ?? `fallback-${(m as any).id}`,
               };
             }
-            if (m.role === "assistant" && m.tool_calls) {
+            if (m.role === "assistant" && ((m as any).tool_calls ?? (m as any).toolCalls)) {
+              const toolCalls = (m as any).tool_calls ?? (m as any).toolCalls;
               return {
                 role: "assistant" as const,
                 content: m.content,
-                tool_calls: m.tool_calls,
+                tool_calls: toolCalls,
               };
             }
             return { role: m.role, content: m.content };
-          }) as any,
+          }),
           temperature: cfg.temperature ?? 0.2,
           max_tokens: getMaxOutputTokens(cfg.model, cfg.maxTokens),
           tools: tools?.length ? tools : undefined,

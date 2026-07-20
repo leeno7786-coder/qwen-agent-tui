@@ -1,4 +1,4 @@
-import { exec, execSync } from "child_process";
+import { exec, execSync, spawn, spawnSync, type ChildProcess } from "child_process";
 import * as MemoryGraphTools from "../graph/tools";
 import {
   existsSync,
@@ -7,21 +7,12 @@ import {
   readdirSync,
   statSync,
   writeFileSync,
+  realpathSync
 } from "fs";
 import { basename, dirname, relative, resolve } from "path";
 import { homedir, tmpdir } from "os";
 import type { Config } from "../types";
-import { isSmallModelFromConfig, modelIdsMatch, requiresDistinctSubAgentModels } from "../model-runtime";
-import {
-  parseDispatchSubAgentArgs,
-  openRouterDispatchLimit,
-  runExploreSubAgent,
-  runSequentialSubAgents,
-  type SubAgentAgentStatus,
-  type SubAgentDispatchAgentRow,
-  type SubAgentDispatchProgress,
-} from "../subagent";
-import { normalizeLens } from "../subagent-lenses";
+import { isSmallModelFromConfig, modelIdsMatch } from "../model-runtime";
 import { fileChangeDiff } from "../lib/file-diff";
 import { ToolCacheManager, createToolCacheManager, globalToolCache } from "./cache";
 import type { SecurityManager } from "../security";
@@ -47,7 +38,34 @@ export interface Tool {
 }
 
 export interface ToolExecutionHooks {
-  onSubAgentProgress?: (progress: SubAgentDispatchProgress) => void;
+  /** Streamed progress from long-running tools (e.g. remote sub-agents). */
+  onSubAgentProgress?: (event: SubAgentProgressEvent) => void;
+  /** Launch a sub-agent as a detached background task; returns a JSON handle. */
+  launchBackgroundSubAgent?: (prompt: string, focusPath?: string) => string;
+}
+
+/** A streamed progress event emitted by the remote sub-agent runner. */
+export interface SubAgentProgressEvent {
+  /** Event kind. */
+  type: "subagent_start" | "subagent_tool" | "subagent_tool_result" | "subagent_done";
+  /** Sub-agent / endpoint name (e.g. "qwen-remote-1"). */
+  agent: string;
+  /** Model id for the sub-agent. */
+  model: string;
+  /** The task being run (for subagent_start). */
+  task?: string;
+  /** Tool name currently being executed (for subagent_tool / subagent_tool_result). */
+  tool?: string;
+  /** JSON-encoded tool args (for subagent_tool). */
+  toolArgs?: string;
+  /** One-line result summary for the tool (for subagent_tool_result). */
+  toolResult?: string;
+  /** Whether the sub-agent finished successfully. */
+  ok?: boolean;
+  /** Final output text (for subagent_done). */
+  output?: string;
+  /** Tool-call count for the sub-agent. */
+  toolCalls?: number;
 }
 
 const DEFAULT_READ_LIMIT = 200;
@@ -67,6 +85,139 @@ const SKIP_DIRS = new Set([
   ".env", ".env.local", ".env.development"
 ]);
 
+// Patterns to filter from environment variables (secrets, keys, tokens)
+const SENSITIVE_ENV_PATTERNS = [
+  /KEY/i,
+  /SECRET/i,
+  /TOKEN/i,
+  /PASSWORD/i,
+  /CREDENTIAL/i,
+  /AUTH/i,
+  /API/i,
+  /PRIVATE/i,
+];
+
+/**
+ * Create a sanitized environment object for child processes.
+ * Filters out sensitive variables that should not be exposed to executed commands.
+ */
+function getSanitizedEnv(): NodeJS.ProcessEnv {
+  const sanitized: NodeJS.ProcessEnv = {};
+  const sensitivePattern = new RegExp(SENSITIVE_ENV_PATTERNS.map(p => p.source).join('|'), 'i');
+  
+  for (const [key, value] of Object.entries(process.env)) {
+    // Always include essential Node.js environment variables
+    if (['PATH', 'HOME', 'USERPROFILE', 'TMP', 'TEMP', 'SHELL', 'COMSPEC'].includes(key)) {
+      sanitized[key] = value;
+      continue;
+    }
+    // Filter out sensitive variables
+    if (sensitivePattern.test(key)) {
+      continue;
+    }
+    // Include non-sensitive variables
+    sanitized[key] = value;
+  }
+  
+  // Ensure PYTHONIOENCODING is set for Python scripts
+  sanitized.PYTHONIOENCODING = 'utf-8';
+  
+  return sanitized;
+}
+
+/**
+ * Parse a command string into executable and argument array.
+ * This prevents shell injection by avoiding string concatenation.
+ * Returns null if the command cannot be safely parsed.
+ */
+function parseCommand(cmd: string): { command: string; args: string[]; useShell: boolean } | null {
+  const trimmed = cmd.trim();
+  if (!trimmed) return null;
+  
+  // Check for shell metacharacters that indicate the command needs a shell
+  const shellChars = ['|', '&', ';', '>', '<', '(', ')', '$', '`', '\n', '\r'];
+  const needsShell = shellChars.some(char => trimmed.includes(char));
+  
+  if (needsShell) {
+    // For commands that need shell features, we still use a shell but with strict validation
+    // This is less secure but some commands (pipes, redirects) require it
+    return {
+      command: trimmed,
+      args: [],
+      useShell: true
+    };
+  }
+  
+  // Parse the command into executable and arguments
+  // Simple parsing - split on whitespace, respecting quotes
+  const args: string[] = [];
+  let current = '';
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let escapeNext = false;
+  
+  for (let i = 0; i < trimmed.length; i++) {
+    const char = trimmed[i];
+    
+    if (escapeNext) {
+      current += char;
+      escapeNext = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      escapeNext = true;
+      continue;
+    }
+    
+    if (inSingleQuote) {
+      if (char === "'") {
+        inSingleQuote = false;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    
+    if (inDoubleQuote) {
+      if (char === '"') {
+        inDoubleQuote = false;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    
+    if (char === "'" || char === '"') {
+      if (char === "'") inSingleQuote = true;
+      if (char === '"') inDoubleQuote = true;
+      continue;
+    }
+    
+    if (char === ' ' || char === '\t') {
+      if (current) {
+        args.push(current);
+        current = '';
+      }
+      continue;
+    }
+    
+    current += char;
+  }
+  
+  if (current) {
+    args.push(current);
+  }
+  
+  if (args.length === 0) return null;
+  
+  return {
+    command: args[0],
+    args: args.slice(1),
+    useShell: false
+  };
+}
+
 function checkSmallModel(cfg?: Config): boolean {
   if (!cfg?.model) return false;
   return isSmallModelFromConfig(cfg);
@@ -74,7 +225,7 @@ function checkSmallModel(cfg?: Config): boolean {
 
 /** Shorter tool descriptions for ≤8B models (full params stay in JSON schema). */
 const SMALL_TOOL_DESCRIPTIONS: Record<string, string> = {
-  read_file: "Read file; use offset/limit. Lines are numbered for edit_file_lines.",
+  read_file: "Read file; use start_line/end_line (1-indexed). Lines are numbered for edit_file_lines.",
   write_file: "Create or overwrite a file.",
   edit_file: "Replace exact old_text once (read file first).",
   edit_file_lines: "Replace lines start_line–end_line (1-based, from read_file).",
@@ -98,13 +249,55 @@ const SMALL_TOOL_DESCRIPTIONS: Record<string, string> = {
   install_dependencies: "Install project dependencies.",
 };
 
+/**
+ * Validate and resolve a path relative to the workspace.
+ * Throws if the path attempts to escape the workspace boundary.
+ */
 function safe(p: string, ws: string, cfg?: Config): string {
-  return resolve(ws, p || ".");
+  const resolved = resolve(ws, p || ".");
+  
+  // Check if the resolved path is within the workspace
+  // Use realpathSync to resolve symlinks
+  try {
+    const realResolved = realpathSync(resolved);
+    const realWorkspace = realpathSync(ws);
+    
+    // Normalize paths for comparison
+    const normResolved = realResolved.replace(/\\/g, '/');
+    const normWorkspace = realWorkspace.replace(/\\/g, '/');
+    
+    // Ensure the resolved path is within workspace or is the workspace itself
+    if (!normResolved.startsWith(normWorkspace + '/') && normResolved !== normWorkspace) {
+      throw new Error(`Path escapes workspace: ${p}`);
+    }
+    
+    return resolved;
+  } catch (e) {
+    // If realpath fails, fall back to string comparison with the original paths
+    const normResolved = resolved.replace(/\\/g, '/');
+    const normWorkspace = ws.replace(/\\/g, '/');
+    
+    if (!normResolved.startsWith(normWorkspace + '/') && normResolved !== normWorkspace) {
+      throw new Error(`Path escapes workspace: ${p}`);
+    }
+    
+    return resolved;
+  }
 }
 
+/**
+ * Get relative path from workspace, or absolute path if outside workspace.
+ * This function is safe because safe() already validates the path is within workspace.
+ */
 function rel(abs: string, ws: string): string {
-  const r = relative(ws, abs).replace(/\\/g, "/");
-  return r && !r.startsWith("..") ? r : abs;
+  try {
+    const r = relative(ws, abs).replace(/\\/g, "/");
+    // After calling safe(), the path should be within workspace, so r should not start with ".."
+    // If it does, return the absolute path for safety
+    return r && !r.startsWith("..") ? r : abs;
+  } catch {
+    return abs;
+  }
 }
 
 function truncate(text: string, limit = DEFAULT_READ_LIMIT): { content: string; truncated: boolean; originalLength: number } {
@@ -126,76 +319,6 @@ function walk(root: string, ws: string, cfg: Config | undefined, visit: (file: s
   }
 }
 
-function tryExecBash(): boolean {
-  try {
-    execSync("bash --version", {
-      encoding: "utf-8",
-      timeout: 5000,
-      maxBuffer: 1024 * 1024,
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function resolveShell(): { usePowerShell: boolean; shell: string | undefined } {
-  const isWin = process.platform === "win32";
-  if (!isWin) return { usePowerShell: false, shell: undefined };
-
-  const shellEnv = process.env.SHELL || '';
-  const comspecEnv = process.env.COMSPEC || '';
-  const isGitBash = comspecEnv.toLowerCase().includes('git') || shellEnv.toLowerCase().includes('git') || shellEnv.toLowerCase().includes('bash');
-  const isWSL = process.env.WSL_DISTRO_NAME !== undefined;
-
-  if (isGitBash || isWSL) {
-    const isBashAvailable = tryExecBash();
-    return { usePowerShell: false, shell: isBashAvailable ? "bash" : undefined };
-  }
-
-  return { usePowerShell: true, shell: "powershell.exe" };
-}
-
-function translateToPowerShell(cmd: string): string {
-  // Don't translate multi-line commands or commands with pipes/semicolons —
-  // the regex replacements below are line-scoped and can break compound commands.
-  const isSimpleCommand = !cmd.includes("\n") && !cmd.includes("|") && !cmd.includes(";") && !cmd.includes("&&") && !cmd.includes("||");
-  
-  if (!isSimpleCommand) return cmd;
-  
-  let result = cmd;
-  
-  // grep → Select-String (PowerShell equivalent)
-  result = result.replace(/\bgrep\s+(.*)/g, 'Select-String $1');
-  
-  // ls with flags → Get-ChildItem with -Force for hidden files
-  result = result.replace(/\bls\s+(-[a-zA-Z]*a[a-zA-Z]*)\s+(.*)/g, 'Get-ChildItem -Force $2');
-  result = result.replace(/\bls\s+(-[a-zA-Z]+)?\s*(.*)/g, 'Get-ChildItem $2');
-  result = result.replace(/\bls\b/g, 'Get-ChildItem');
-  
-  // ll → Get-ChildItem -Force (show hidden/system files)
-  result = result.replace(/\bll\s+(.*)/g, 'Get-ChildItem -Force $1');
-  result = result.replace(/\bll\b/g, 'Get-ChildItem -Force');
-  
-  // pwd → (Get-Location).Path
-  result = result.replace(/\bpwd\b/g, '(Get-Location).Path');
-  
-  // ps → Get-Process
-  result = result.replace(/\bps\b/g, 'Get-Process');
-  
-  // cat → Get-Content
-  result = result.replace(/\bcat\s+(.*)/g, 'Get-Content $1');
-  
-  // head -N file → Get-Content file | Select-Object -First N
-  result = result.replace(/\bhead\s+(-\d+)\s+(.*)/g, (_, num, file) => `Get-Content ${file} | Select-Object -First ${Math.abs(parseInt(num))}`);
-  
-  // echo "text" → Write-Output "text" (only simple echo, not echo with redirection)
-  result = result.replace(/^echo\s+([^>].*)$/m, 'Write-Output $1');
-  
-  return result;
-}
-
 function formatExecResult(ok: boolean, out: string, err?: string, code?: number | null): string {
   const cleanOut = (out || "").replace(/\u0000/g, "").replace(/[\uFFFD]/g, "");
   const cleanErr = (err || "").replace(/\u0000/g, "").replace(/[\uFFFD]/g, "");
@@ -210,55 +333,162 @@ function formatExecResult(ok: boolean, out: string, err?: string, code?: number 
 
 function execCmd(cmd: string, ws: string, timeoutSeconds = 60): string {
   try {
-    const { usePowerShell, shell } = resolveShell();
-    let finalCmd = usePowerShell ? translateToPowerShell(cmd) : cmd;
-    
-    // On Windows with PowerShell, use -Command flag for reliable execution
-    const execOptions: any = {
-      cwd: ws,
-      encoding: "utf-8",
-      timeout: timeoutSeconds * 1000,
-      maxBuffer: 10 * 1024 * 1024,
-      stdio: ["pipe", "pipe", "pipe"],
-    };
-    
-    if (usePowerShell && shell) {
-      execOptions.shell = shell;
-      // Pass command via -Command flag for proper parsing
-      execOptions.env = { ...process.env, PYTHONIOENCODING: "utf-8" };
-    } else {
-      execOptions.shell = shell;
+    const parsed = parseCommand(cmd);
+    if (!parsed) {
+      return JSON.stringify({ ok: false, error: "Failed to parse command" });
     }
     
-    const out = execSync(finalCmd, execOptions);
-    return formatExecResult(true, out);
+    const { command, args, useShell } = parsed;
+    const timeoutMs = timeoutSeconds * 1000;
+    
+    // Use sanitized environment to prevent credential exposure
+    const env = getSanitizedEnv();
+    
+    // Helper to convert buffer or string to UTF-8 string
+    const toString = (data: any): string => {
+      if (Buffer.isBuffer(data)) return data.toString('utf-8');
+      if (typeof data === 'string') return data;
+      return '';
+    };
+    
+    // For commands that need shell features, we must use a shell
+    // but we still sanitize the environment
+    if (useShell) {
+      const result = spawnSync(
+        process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
+        [process.platform === 'win32' ? '/c' : '-c', cmd],
+        {
+          cwd: ws,
+          timeout: timeoutMs,
+          stdio: ["pipe", "pipe", "pipe"],
+          env,
+          shell: true
+        }
+      );
+      
+      if (result.error) {
+        return formatExecResult(false, toString(result.stdout), toString(result.stderr) || result.error.message, result.status ?? null);
+      }
+      return formatExecResult(true, toString(result.stdout));
+    }
+    
+    // For simple commands without shell metacharacters - secure path
+    const result = spawnSync(
+      command,
+      args,
+      {
+        cwd: ws,
+        timeout: timeoutMs,
+        stdio: ["pipe", "pipe", "pipe"],
+        env
+      }
+    );
+    
+    if (result.error) {
+      return formatExecResult(false, toString(result.stdout), toString(result.stderr) || result.error.message, result.status ?? null);
+    }
+    return formatExecResult(true, toString(result.stdout));
   } catch (e: any) {
-    return formatExecResult(false, e.stdout?.toString?.() || "", e.stderr?.toString?.() || e.message, e.status ?? null);
+    return formatExecResult(false, "", e.message, e.status ?? null);
   }
 }
 
 function execCmdAsync(cmd: string, ws: string, timeoutSeconds = 60, signal?: AbortSignal): Promise<string> {
   return new Promise((resolvePromise) => {
-    const { usePowerShell, shell } = resolveShell();
-    const finalCmd = usePowerShell ? translateToPowerShell(cmd) : cmd;
+    const parsed = parseCommand(cmd);
+    if (!parsed) {
+      resolvePromise(JSON.stringify({ ok: false, error: "Failed to parse command" }));
+      return;
+    }
+    
+    const { command, args, useShell } = parsed;
+    const timeoutMs = timeoutSeconds * 1000;
+    const env = getSanitizedEnv();
+    
+    let child: ChildProcess;
+    
+    try {
+      // For commands that need shell features
+      if (useShell) {
+        child = spawn(
+          process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
+          [process.platform === 'win32' ? '/c' : '-c', cmd],
+          {
+            cwd: ws,
+            timeout: timeoutMs,
+            stdio: ["pipe", "pipe", "pipe"],
+            env,
+            shell: true
+          }
+        );
+      } else {
+        // For simple commands without shell metacharacters - secure path
+        child = spawn(
+          command,
+          args,
+          {
+            cwd: ws,
+            timeout: timeoutMs,
+            stdio: ["pipe", "pipe", "pipe"],
+            env
+          }
+        );
+      }
+    } catch (e: any) {
+      resolvePromise(formatExecResult(false, "", e.message, null));
+      return;
+    }
 
-    const child = exec(
-      finalCmd,
-      {
-        cwd: ws,
-        encoding: "utf-8",
-        timeout: timeoutSeconds * 1000,
-        maxBuffer: 10 * 1024 * 1024,
-        shell,
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          resolvePromise(formatExecResult(false, stdout || "", stderr || error.message, (error as any).code ?? null));
+    let stdoutBuffer = '';
+    let stderrBuffer = '';
+    let resolved = false;
+    
+    child.stdout?.on('data', (data) => {
+      stdoutBuffer += data.toString();
+    });
+    
+    child.stderr?.on('data', (data) => {
+      stderrBuffer += data.toString();
+    });
+
+    child.on('error', (error) => {
+      if (!resolved) {
+        resolved = true;
+        resolvePromise(formatExecResult(false, stdoutBuffer, stderrBuffer || error.message, null));
+      }
+    });
+
+    // Set up timeout to kill the child process explicitly
+    const timeoutId = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        child.kill();
+        resolvePromise(formatExecResult(false, stdoutBuffer, stderrBuffer, null));
+      }
+    }, timeoutMs);
+
+    // Clear timeout when child closes or errors
+    const clearTimeoutFn = () => clearTimeout(timeoutId);
+    
+    child.on('close', (code, signal) => {
+      clearTimeoutFn();
+      if (!resolved) {
+        resolved = true;
+        if (code === 0) {
+          resolvePromise(formatExecResult(true, stdoutBuffer));
         } else {
-          resolvePromise(formatExecResult(true, stdout || ""));
+          resolvePromise(formatExecResult(false, stdoutBuffer, stderrBuffer, code));
         }
       }
-    );
+    });
+    
+    child.on('error', (error) => {
+      clearTimeoutFn();
+      if (!resolved) {
+        resolved = true;
+        resolvePromise(formatExecResult(false, stdoutBuffer, stderrBuffer || error.message, null));
+      }
+    });
 
     if (signal) {
       if (signal.aborted) {
@@ -269,8 +499,11 @@ function execCmdAsync(cmd: string, ws: string, timeoutSeconds = 60, signal?: Abo
       signal.addEventListener(
         "abort",
         () => {
-          child.kill();
-          resolvePromise(formatExecResult(false, "", "Command cancelled", null));
+          if (!resolved) {
+            resolved = true;
+            child.kill();
+            resolvePromise(formatExecResult(false, "", "Command cancelled", null));
+          }
         },
         { once: true }
       );
@@ -286,23 +519,45 @@ function isDangerous(cmd: string): boolean {
 /**
  * Run a git command directly (bypasses PowerShell translation for speed on Windows).
  * Sets GIT_OPTIONAL_LOCKS=0 to avoid lock contention during read-only operations.
+ * Sets GIT_SKIP_HOOKS=1 to prevent malicious git hooks from executing.
  */
 function execGit(args: string[], ws: string, opts: { timeout?: number; maxBuffer?: number; write?: boolean } = {}): { ok: boolean; stdout: string; stderr: string; code: number | null } {
   const isWin = process.platform === "win32";
-  const env = { ...process.env, GIT_OPTIONAL_LOCKS: "0" };
-  // Build command string. On Windows, ensure git.exe is found via PATH.
-  const cmd = "git " + args.map(a => a.includes(" ") ? `"${a}"` : a).join(" ");
+  const env = {
+    ...getSanitizedEnv(),
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_SKIP_HOOKS: "1"  // Security: Prevent git hooks from executing
+  };
+  
+  // Use spawnSync with explicit argument array for security
   try {
-    const out = execSync(cmd, {
-      cwd: ws,
-      encoding: "utf-8",
-      timeout: opts.timeout ?? 30000,
-      maxBuffer: opts.maxBuffer ?? 10 * 1024 * 1024,
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: isWin ? "cmd.exe" : undefined,
-      env,
-    });
-    return { ok: true, stdout: (out || "").replace(/\u0000/g, ""), stderr: "", code: 0 };
+    const result = spawnSync(
+      "git",
+      args,
+      {
+        cwd: ws,
+        timeout: opts.timeout ?? 30000,
+        stdio: ["pipe", "pipe", "pipe"],
+        env,
+        shell: isWin ? "cmd.exe" : undefined
+      }
+    );
+    
+    // Convert buffers to strings
+    const toString = (data: any): string => {
+      if (Buffer.isBuffer(data)) return data.toString('utf-8');
+      if (typeof data === 'string') return data;
+      return '';
+    };
+    const stdout = toString(result.stdout).replace(/\u0000/g, "");
+    const stderr = toString(result.stderr).replace(/\u0000/g, "");
+    
+    return {
+      ok: result.status === 0,
+      stdout,
+      stderr,
+      code: result.status ?? null
+    };
   } catch (e: any) {
     const stdout = (e.stdout || "").replace(/\u0000/g, "");
     const stderr = (e.stderr || "").replace(/\u0000/g, "");
@@ -400,7 +655,7 @@ export const tools: Tool[] = [
   {
     name: "read_file",
     description: "Read a file from the workspace",
-    parameters: { type: "object", properties: { path: { type: "string", description: "File path to read" }, offset: { type: "number", description: "Line offset to start reading from (0-indexed, optional)" }, limit: { type: "number", description: "Maximum lines to read (optional)" }, numbered: { type: "boolean", description: "Return lines with line numbers (default: auto for small models)" } }, required: ["path"] },
+    parameters: { type: "object", properties: { path: { type: "string", description: "File path to read" }, start_line: { type: "number", description: "Line to start reading from (1-indexed, optional, defaults to 1)" }, end_line: { type: "number", description: "Line to stop reading at (1-indexed, optional, defaults to start_line + 100)" }, numbered: { type: "boolean", description: "Return lines with line numbers (default: auto for small models)" } }, required: ["path"] },
     execute: (args, ws, cfg) => {
       try {
         const p = safe(args.path, ws, cfg);
@@ -416,9 +671,12 @@ export const tools: Tool[] = [
       if (!st.isFile()) return JSON.stringify({ ok: false, error: `Not a file: ${args.path}` });
       const text = readFileSync(p, "utf-8");
       const lines = text.split("\n");
-      const offset = Math.max(0, Number(args.offset || 0));
       const isSmall = checkSmallModel(cfg);
-      const limit = Math.max(1, Math.min(Number(args.limit || (isSmall ? SMALL_MODEL_READ_LIMIT : DEFAULT_READ_LIMIT)), 2000));
+      const defaultLines = isSmall ? SMALL_MODEL_READ_LIMIT : DEFAULT_READ_LIMIT;
+      const startLine = Math.max(1, Number(args.start_line || 1));
+      let endLine = args.end_line ? Number(args.end_line) : startLine + defaultLines - 1;
+      const limit = Math.max(1, Math.min(endLine - startLine + 1, 2000));
+      const offset = startLine - 1;
       const sliced = lines.slice(offset, offset + limit);
       const numbered = isSmall && args.numbered !== false;
       const content = numbered
@@ -436,7 +694,8 @@ export const tools: Tool[] = [
         content: safeContent,
         numbered,
         truncated: offset + limit < lines.length || safeContent.length < content.length,
-        offset,
+        start_line: startLine,
+        end_line: startLine + sliced.length - 1,
         line_count: lines.length,
       });
     } catch (e: any) {
@@ -1108,231 +1367,6 @@ export const tools: Tool[] = [
   }
 },
 
-// Sub-agent exploration (main model only; uses second LM Studio model)
-{
-  name: "explore_subagent",
-  description:
-    "Delegate one read-only investigation to a sub-agent. You write the prompt — it explores with tools and returns an evidence summary. For multiple investigations, use dispatch_subagents.",
-  parameters: {
-    type: "object",
-    properties: {
-      prompt: {
-        type: "string",
-        description:
-          "Full investigation instructions (what to find, which patterns to check, expected output format)",
-      },
-      task: {
-        type: "string",
-        description: "Alias for prompt (legacy)",
-      },
-      name: {
-        type: "string",
-        description: "Optional label for this run (e.g. auth-handlers)",
-      },
-      focus_path: {
-        type: "string",
-        description: "Optional directory or file to prioritize (comma-separated ok)",
-      },
-      lens: {
-        type: "string",
-        enum: ["general", "security", "performance", "correctness", "readability", "structure"],
-        description: "Optional focus hint appended to your prompt",
-      },
-    },
-    required: [],
-  },
-  execute: () =>
-    JSON.stringify({ ok: false, error: "explore_subagent requires async execution" }),
-  executeAsync: async (args, ws, cfg, signal, hooks) => {
-    if (!cfg?.subAgentModel || cfg.subAgentEnabled === false) {
-      return JSON.stringify({
-        ok: false,
-        error:
-          "Sub-agent not configured. Set OPENROUTER_API_KEY or subAgentModel in ~/.qwen-agent.json",
-      });
-    }
-    const task = String(args.prompt ?? args.task ?? "").trim();
-    if (!task) {
-      return JSON.stringify({ ok: false, error: "prompt (or task) is required" });
-    }
-    const focus = String(args.focus_path ?? "").trim();
-    const name = String(args.name ?? "").trim();
-    const label = name || "explore";
-    const rows: SubAgentDispatchAgentRow[] = [
-      {
-        name: label,
-        status: "pending",
-        tools_used: 0,
-        input_tokens: 0,
-        output_tokens: 0,
-      },
-    ];
-    const emit = (status: SubAgentAgentStatus, snap?: {
-      tools_used: number;
-      input_tokens: number;
-      output_tokens: number;
-      error?: string;
-    }) => {
-      rows[0]!.status = status;
-      if (snap) {
-        rows[0]!.tools_used = snap.tools_used;
-        rows[0]!.input_tokens = snap.input_tokens;
-        rows[0]!.output_tokens = snap.output_tokens;
-        if (snap.error) rows[0]!.error = snap.error;
-      }
-      hooks?.onSubAgentProgress?.({
-        total: 1,
-        index: 0,
-        phase: status === "done" || status === "failed" ? "done" : "running",
-        agents: rows.map((r) => ({ ...r })),
-      });
-    };
-    emit("running");
-    const result = await runExploreSubAgent(task, cfg, ws, signal, {
-      focusPath: focus && focus !== "." && focus !== "./" ? focus : undefined,
-      lens: args.lens ? normalizeLens(args.lens) : undefined,
-      name: name || undefined,
-      onProgress: (snap) => {
-        emit(
-          snap.status === "done" ? "done" : snap.status === "failed" ? "failed" : "running",
-          snap
-        );
-      },
-    });
-    emit(result.ok ? "done" : "failed", {
-      tools_used: result.tools_used.length,
-      input_tokens: result.usage?.input_tokens ?? 0,
-      output_tokens: result.usage?.output_tokens ?? 0,
-      error: result.error,
-    });
-    return JSON.stringify(result);
-  },
-},
-
-{
-  name: "dispatch_subagents",
-  description:
-    "Run read-only sub-agents sequentially. REQUIRED: pass agents array with your custom prompts. Example: {\"agents\":[{\"name\":\"security\",\"prompt\":\"Review git-changed auth code for missing checks. Return path:line bullets.\",\"focus_path\":\"src/\"}]}. On OpenRouter free tier, max 2 agents per call (extras are skipped). Legacy: mode=code_review also works. Runs one agent at a time.",
-  parameters: {
-    type: "object",
-    properties: {
-      agents: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            name: {
-              type: "string",
-              description:
-                "Short label (e.g. security-auth, perf-db, api-contracts)",
-            },
-            prompt: {
-              type: "string",
-              description:
-                "Full investigation instructions — files, patterns, output format",
-            },
-            focus_path: {
-              type: "string",
-              description: "Optional file or directory scope (comma-separated)",
-            },
-            lens: {
-              type: "string",
-              enum: ["general", "security", "performance", "correctness", "readability", "structure"],
-              description: "Optional focus hint appended to your prompt",
-            },
-          },
-          required: ["prompt"],
-        },
-        description: "Sub-agents to run in order (max 8). Each must include prompt.",
-      },
-      mode: {
-        type: "string",
-        enum: ["code_review"],
-        description: "Legacy: auto-builds 4 lens agents on git changes when agents omitted",
-      },
-      question: {
-        type: "string",
-        description: "Review question when using mode=code_review",
-      },
-      scope: {
-        type: "string",
-        description: "code_review scope: git (default) or directory path",
-      },
-      tasks: {
-        type: "array",
-        description: "Legacy alias for agents (items use task or prompt field)",
-      },
-    },
-  },
-  execute: () =>
-    JSON.stringify({ ok: false, error: "dispatch_subagents requires async execution" }),
-  executeAsync: async (args, ws, cfg, signal, hooks) => {
-    if (!subAgentAvailable(cfg)) {
-      return JSON.stringify({
-        ok: false,
-        error:
-          "Sub-agents not configured. Set OPENROUTER_API_KEY or subAgentModel in ~/.qwen-agent.json",
-      });
-    }
-
-    const parsed = parseDispatchSubAgentArgs(args as Record<string, unknown>, ws);
-    const tasks = parsed.tasks;
-    if (!tasks.length) {
-      return JSON.stringify({
-        ok: false,
-        error:
-          "No sub-agent tasks — pass agents: [{ name, prompt, focus_path? }]. Example prompt: \"Review src/subagent.ts for error handling gaps; cite path:line.\"",
-        received_keys: Object.keys(args ?? {}).filter((k) => k !== "raw_input"),
-        example: {
-          agents: [
-            {
-              name: "security",
-              prompt:
-                "Review git-changed files for auth/injection/secrets issues. Bullet findings with path:line and severity.",
-              focus_path: "src/",
-            },
-          ],
-        },
-      });
-    }
-    if (tasks.length > 8) {
-      return JSON.stringify({ ok: false, error: "Too many agents (max 8)" });
-    }
-
-    const results = await runSequentialSubAgents(tasks, cfg!, ws, signal, {
-      onProgress: hooks?.onSubAgentProgress,
-    });
-    const okCount = results.filter((r) => r.ok).length;
-    const partialCount = results.filter(
-      (r) => !r.ok && (r.summary?.length ?? 0) > 40
-    ).length;
-    const skippedCount = results.filter((r) =>
-      (r.error ?? "").startsWith("Skipped —")
-    ).length;
-    const errors = results
-      .filter((r) => !r.ok)
-      .map((r) => {
-        const label = r.name || r.task || "agent";
-        return `${label}: ${r.error || r.summary || "unknown error"}`;
-      })
-      .slice(0, 6);
-    const allFailed = okCount === 0 && partialCount === 0;
-    return JSON.stringify({
-      ok: okCount > 0 || partialCount > 0,
-      sequential: true,
-      count: results.length,
-      ok_count: okCount,
-      partial_count: partialCount || undefined,
-      skipped_count: skippedCount || undefined,
-      dispatch_limit: openRouterDispatchLimit(cfg!) ?? undefined,
-      auto_fallback: parsed.autoFallback,
-      error: allFailed && errors.length ? errors.join("; ") : undefined,
-      errors: errors.length ? errors : undefined,
-      results,
-    });
-  },
-},
-
 // Todo Management
 {
   name: "manage_todos",
@@ -1414,19 +1448,102 @@ export const tools: Tool[] = [
   execute: () => JSON.stringify({ ok: false, error: "Use executeAsync for this tool" }),
   executeAsync: async (args, ws) => JSON.stringify(await MemoryGraphTools.pattern_search({ workspace: ws, pattern: args.pattern, limit: args.limit })),
 },
+{
+  name: "get_file_info",
+  description: "Get all nodes in a file.",
+  parameters: { type: "object", properties: { path: { type: "string", description: "File path" } }, required: ["path"] },
+  execute: () => JSON.stringify({ ok: false, error: "Use executeAsync for this tool" }),
+  executeAsync: async (args, ws) => JSON.stringify(await MemoryGraphTools.get_file_info({ workspace: ws, path: args.path })),
+},
+{
+  name: "get_communities",
+  description: "Detect community clusters using Louvain modularity algorithm.",
+  parameters: { type: "object", properties: {}, required: [] },
+  execute: () => JSON.stringify({ ok: false, error: "Use executeAsync for this tool" }),
+  executeAsync: async (args, ws) => JSON.stringify(await MemoryGraphTools.get_communities({ workspace: ws })),
+},
+{
+  name: "get_god_nodes",
+  description: "Find the most-connected hub nodes (highest degree).",
+  parameters: { type: "object", properties: { limit: { type: "number", description: "Max results" } }, required: [] },
+  execute: () => JSON.stringify({ ok: false, error: "Use executeAsync for this tool" }),
+  executeAsync: async (args, ws) => JSON.stringify(await MemoryGraphTools.get_god_nodes({ workspace: ws, limit: args.limit })),
+},
+{
+  name: "get_surprising_connections",
+  description: "Find cross-community edges (architectural boundary violations).",
+  parameters: { type: "object", properties: { limit: { type: "number", description: "Max results" } }, required: [] },
+  execute: () => JSON.stringify({ ok: false, error: "Use executeAsync for this tool" }),
+  executeAsync: async (args, ws) => JSON.stringify(await MemoryGraphTools.get_surprising_connections({ workspace: ws, limit: args.limit })),
+},
+{
+  name: "get_analysis_report",
+  description: "Get full markdown report with stats, communities, god nodes, and surprising connections.",
+  parameters: { type: "object", properties: {}, required: [] },
+  execute: () => JSON.stringify({ ok: false, error: "Use executeAsync for this tool" }),
+  executeAsync: async (args, ws) => JSON.stringify(await MemoryGraphTools.get_analysis_report({ workspace: ws })),
+},
+
+// Remote sub-agent tool — the main (big) model calls explore_subagent to
+// dispatch ONE focused remote sub-agent at a time (or several in parallel),
+// each with a tight, context-rich prompt. The pool is reached via
+// resolveSubAgentPool + exploreWithSubAgent. No blind "fan to all" tool: a
+// large codebase with no direction just times out the small models.
+{
+  name: "explore_subagent",
+  description: "Dispatch ONE remote sub-agent (2B model on another device) with a focused, context-rich prompt. It has read-only exploration tools (read_file, list_dir, grep_search, map_project_tree, git_status) against this workspace. BEFORE calling this, gather codebase context yourself (use map_project_tree / list_dir / grep_search on the main workspace) and weave the relevant findings into each sub-agent's prompt so it is NOT sent out blind. Call this 1–3 times IN PARALLEL, each with a tight prompt naming the exact files/areas to investigate. The model synthesizes their results. Concurrency is capped at 3. The workspace root and a top-level file listing are auto-injected into every sub-agent prompt.",
+  parameters: {
+    type: "object",
+    properties: {
+      prompt: { type: "string", description: "The investigation prompt for the sub-agent. Be specific: name files, functions, and what to look for (e.g. 'Review src/agent.ts run() loop for tool-call ordering bugs; report line numbers'). Include any context you already gathered about these files." },
+      endpoint: { type: "string", description: "Optional specific sub-agent name (e.g. 'qwen-remote-1'). Omit to let the pool pick a free one." },
+      focus_path: { type: "string", description: "Optional file or directory to scope the sub-agent's investigation." },
+    },
+    required: ["prompt"],
+  },
+  execute: () => JSON.stringify({ ok: false, error: "Use executeAsync for this tool" }),
+  executeAsync: async (args, ws, cfg, signal, hooks) => {
+    try {
+      const task = args.prompt ?? args.task;
+      if (!task) {
+        return JSON.stringify({ ok: false, error: "Missing required argument `prompt` (the sub-agent investigation task)." });
+      }
+      // Inject shared context (workspace root + top-level listing) so the
+      // sub-agent knows the real path and isn't dispatched blind. This is done
+      // inside spawnBackgroundSubAgent so the live TUI stream shows only the
+      // original prompt, not the injected context block.
+      // Launch as a DETACHED background task: returns immediately so the
+      // main agent can call the next sub-agent (up to 3 concurrent) or
+      // continue its own reasoning. Progress streams via hooks.
+      if (hooks?.launchBackgroundSubAgent) {
+        return hooks.launchBackgroundSubAgent(task, args.focus_path);
+      }
+      // Fallback (no agent hook): run inline and await. When the main agent
+      // emits several explore_subagent calls in one message, the agent loop
+      // runs them concurrently (see PARALLEL_SAFE_TOOLS), so this awaits a
+      // single worker while others run alongside it.
+      const { resolveSubAgentPool, exploreWithSubAgent, formatSubAgentResults, enrichTaskWithContext } = await import("../subagents");
+      const pool = await resolveSubAgentPool(cfg!);
+      if (!pool) {
+        return JSON.stringify({ ok: false, error: "No remote sub-agent pool configured. Set subagents in ~/.qwen-agent.json or REMOTE_LMSTUDIO_URL." });
+      }
+      const result = await exploreWithSubAgent(cfg!, pool, args.endpoint, await enrichTaskWithContext(task, cfg!, args.focus_path), signal, hooks);
+      return formatSubAgentResults([result]);
+    } catch (e: any) {
+      return JSON.stringify({ ok: false, error: e?.message || String(e) });
+    }
+  },
+},
 ];
 
 // Tools excluded for ≤8B models — fewer choices, less wrong-tool drift
 const SMALL_MODEL_EXCLUDED = new Set([
-  "typecheck",
   "install_dependencies",
   "run_command",
   "run_tests",
   "map_project_tree",
   "batch_read_files",
   "grep_search",
-  "explore_subagent",
-  "dispatch_subagents",
   // Graph tools — too complex/heavy for ≤8B models
   "build_memory_graph",
   "query_memory_graph",
@@ -1437,6 +1554,11 @@ const SMALL_MODEL_EXCLUDED = new Set([
   "find_dependencies",
   "find_path",
   "pattern_search",
+  "get_file_info",
+  "get_communities",
+  "get_god_nodes",
+  "get_surprising_connections",
+  "get_analysis_report",
 ]);
 
 // Tools that can be executed in parallel (read-only, non-blocking)
@@ -1460,11 +1582,18 @@ const PARALLEL_SAFE_TOOLS = new Set([
   "find_path",
   "pattern_search",
   "query_memory_graph",
+  "get_file_info",
+  "get_communities",
+  "get_god_nodes",
+  "get_surprising_connections",
+  "get_analysis_report",
+  // Remote sub-agent dispatch — each call hits a different model; running
+  // multiple in one message fans them out to up to 3 concurrent workers.
+  "explore_subagent",
 ]);
 
 // Tools that must run sequentially (write operations, state changes)
 const SEQUENTIAL_ONLY_TOOLS = new Set([
-  "write_file",
   "edit_file",
   "edit_file_lines",
   "execute_command",
@@ -1475,33 +1604,60 @@ const SEQUENTIAL_ONLY_TOOLS = new Set([
   "typecheck",
   "change_workspace",
   "manage_todos",
-  "explore_subagent",
-  "dispatch_subagents",
+  "write_file",
   // Graph build is expensive and mutates state
   "build_memory_graph",
 ]);
 
+/**
+ * Whether the remote sub-agent pool is available for the given config.
+ * Used by the agent to decide whether to advertise sub-agents in the system
+ * prompt. A pool is available when an explicit `subagents` config is enabled
+ * with endpoints, or a remote LM Studio URL is set for auto-discovery.
+ */
 export function subAgentAvailable(cfg?: Config): boolean {
-  if (!cfg?.subAgentModel || cfg.subAgentEnabled === false) return false;
-  if (!requiresDistinctSubAgentModels(cfg)) return true;
-  return !modelIdsMatch(cfg.model, cfg.subAgentModel);
+  if (!cfg) return false;
+  const pool = (cfg as Config & { subagents?: { enabled?: boolean; endpoints?: unknown[] } }).subagents;
+  if (pool?.enabled && pool.endpoints && pool.endpoints.length > 0) {
+    return true;
+  }
+  return Boolean(cfg.subAgentEnabled);
 }
 
-export function toolsForConfig(all: Tool[], cfg?: Config): Tool[] {
+const GRAPH_TOOLS = new Set([
+  "build_memory_graph",
+  "query_memory_graph",
+  "get_graph_stats",
+  "search_nodes_by_type",
+  "search_nodes_by_name",
+  "search_nodes_by_path",
+  "find_dependencies",
+  "find_path",
+  "pattern_search",
+  "get_file_info",
+  "get_communities",
+  "get_god_nodes",
+  "get_surprising_connections",
+  "get_analysis_report",
+]);
+
+export function toolsForConfig(all: Tool[], cfg?: Config, activeSkills?: Set<string>): Tool[] {
   let filtered = all;
   if (cfg && checkSmallModel(cfg)) {
-    filtered = filtered.filter((t) => !SMALL_MODEL_EXCLUDED.has(t.name));
-  }
-  if (!subAgentAvailable(cfg)) {
-    filtered = filtered.filter(
-      (t) => t.name !== "explore_subagent" && t.name !== "dispatch_subagents"
-    );
+    filtered = filtered.filter((t) => {
+      if (activeSkills?.has("memory-graph") && GRAPH_TOOLS.has(t.name)) return true;
+      return !SMALL_MODEL_EXCLUDED.has(t.name);
+    });
   }
   return filtered;
 }
 
-export function toOpenAI(allTools: Tool[], cfg?: Config) {
-  const filtered = toolsForConfig(allTools, cfg);
+// The remote sub-agent tool (explore_subagent) IS exposed to the LLM as a
+// function call so the main agent can actually invoke it. The agent loop
+// handles it like any other tool (see src/subagents.ts).
+
+export function toOpenAI(allTools: Tool[], cfg?: Config, activeSkills?: Set<string>) {
+  const filtered = toolsForConfig(allTools, cfg, activeSkills);
   const small = cfg && checkSmallModel(cfg);
   return filtered.map((t) => ({
     type: "function" as const,

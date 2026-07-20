@@ -784,7 +784,8 @@ export function getProviderBaseURL(provider: RuntimeProvider | undefined): strin
  * Get a provider by its ID.
  */
 export function getProvider(id: string): RuntimeProvider | undefined {
-  return RUNTIME_PROVIDERS.find((p) => p.id === id);
+  const lowerId = id.toLowerCase();
+  return RUNTIME_PROVIDERS.find((p) => p.id.toLowerCase() === lowerId);
 }
 
 /**
@@ -814,7 +815,8 @@ export function getDefaultModel(providerId: string): ModelInfo | undefined {
  * Check if a provider exists.
  */
 export function hasProvider(id: string): boolean {
-  return RUNTIME_PROVIDERS.some((p) => p.id === id);
+  const lowerId = id.toLowerCase();
+  return RUNTIME_PROVIDERS.some((p) => p.id.toLowerCase() === lowerId);
 }
 
 /**

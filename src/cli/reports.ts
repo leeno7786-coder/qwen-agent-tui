@@ -14,8 +14,7 @@ export interface DoctorReport {
   model_max_context_length?: number;
   model_param_billions?: number;
   small_model_mode: boolean;
-  sub_agent_model?: string;
-  sub_agent_enabled?: boolean;
+
   warnings: string[];
   errors: string[];
 }
@@ -38,8 +37,7 @@ export async function getDoctorReport(cfg?: Config): Promise<DoctorReport> {
     model_max_context_length: enriched.modelMaxContextLength,
     model_param_billions: enriched.modelParamBillions,
     small_model_mode: isSmallModelFromConfig(enriched),
-    sub_agent_model: enriched.subAgentModel,
-    sub_agent_enabled: enriched.subAgentEnabled,
+
     warnings: validation.warnings,
     errors: validation.errors,
   };
@@ -62,11 +60,6 @@ export function formatDoctorReport(report: DoctorReport): string {
     lines.push(`params: ~${report.model_param_billions}B`);
   }
   lines.push(`small_model_mode: ${report.small_model_mode}`);
-  if (report.sub_agent_model) {
-    lines.push(
-      `sub_agent: ${report.sub_agent_model} (${report.sub_agent_enabled ? "enabled" : "disabled"})`
-    );
-  }
   for (const w of report.warnings) lines.push(`warning: ${w}`);
   for (const e of report.errors) lines.push(`error: ${e}`);
   lines.push("", "CLI: qwen-agent doctor --json");

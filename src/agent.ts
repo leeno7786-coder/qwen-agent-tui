@@ -1,7 +1,7 @@
 import { createClient, chat, streamChat, isLocalProvider } from "./llm";
 import type { ChatMessage } from "./llm";
 import { tools, toOpenAI, type ToolExecutionHooks, ToolCacheManager, createToolCacheManager, groupToolsForParallelExecution, canRunInParallel } from "./tools";
-import type { SubAgentDispatchProgress } from "./subagent";
+import type { SubAgentProgressEvent } from "./tools";
 import { detectContext } from "./context";
 import { SkillManager } from "./skill-manager";
 import { loadSkills } from "./skills";
@@ -13,8 +13,35 @@ import {
 import { loadConfig, applySubAgentDefaults } from "./config";
 import type { Config, Message, ToolResult, AgentState, Todo, Skill } from "./types";
 import { subAgentAvailable } from "./tools";
+import {
+  resolveSubAgentPool,
+  exploreWithSubAgent,
+  formatSubAgentResults,
+  type SubAgentResult,
+} from "./subagents";
 import { ContextManager, createContextManager } from "./context/manager";
 import { SecurityManager, createSecurityManager } from "./security";
+
+/**
+ * Detached background sub-agent handle.
+ *
+ * Each `explore_subagent` call launches one of these as a fire-and-forget
+ * task. Progress streams through `ToolExecutionHooks.onSubAgentProgress`.
+ * The run loop blocks in `awaitAllBackgroundSubAgents` until every handle
+ * resolves before it synthesises the results.
+ */
+interface BackgroundSubAgent {
+  id: string;
+  prompt: string;
+  focusPath?: string;
+  status: "running" | "done" | "error";
+  /** Accumulated streamed progress events (full live transcript). */
+  log?: SubAgentProgressEvent[];
+  result?: SubAgentResult;
+  promise: Promise<void>;
+  resolve: (value: void) => void;
+  reject: (reason?: any) => void;
+}
 
 /**
  * Core agent orchestrator: manages conversation state, tool execution,
@@ -29,7 +56,7 @@ export class AgentCore {
   public currentTool?: {
     name: string;
     args: string;
-    subAgentProgress?: SubAgentDispatchProgress;
+    subAgentProgress?: SubAgentProgressEvent;
   };
   /** Usage from the most recent assistant response. */
   public lastUsage?: { input_tokens: number; output_tokens: number };
@@ -60,6 +87,33 @@ export class AgentCore {
   /** Security manager for command and file access validation. */
   public securityManager: SecurityManager;
 
+  /** Active background sub-agents keyed by id. */
+  public backgroundSubAgents: Map<string, BackgroundSubAgent> = new Map();
+  /** Max number of concurrently running background sub-agents (default: 3). */
+  public maxBackgroundSubAgents: number;
+
+  /**
+   * Snapshot of the live background sub-agent handles for the TUI. Returns a
+   * plain array (not the internal Map) so React state updates correctly.
+   */
+  public getSubAgentSnapshot(): Array<{
+    id: string;
+    prompt: string;
+    focusPath?: string;
+    status: "running" | "done" | "error";
+    log?: SubAgentProgressEvent[];
+    result?: SubAgentResult;
+  }> {
+    return [...this.backgroundSubAgents.values()].map((h) => ({
+      id: h.id,
+      prompt: h.prompt,
+      focusPath: h.focusPath,
+      status: h.status,
+      log: h.log,
+      result: h.result,
+    }));
+  }
+
 
   /**
    * @param cfg - Agent configuration.
@@ -69,6 +123,7 @@ export class AgentCore {
     this.client = createClient(cfg);
     this.toolCache = createToolCacheManager(cfg, cfg.workspace);
     this.contextManager = createContextManager(cfg, []);
+    this.maxBackgroundSubAgents = cfg.maxBackgroundSubAgents ?? 3;
     this.securityManager = createSecurityManager(
       {
         enabled: cfg.securityEnabled,
@@ -236,7 +291,7 @@ export class AgentCore {
           : isLocalProvider(subBase)
             ? "Local"
             : "Cloud";
-      system += `\nSub-agents: ${providerName} \`${this.cfg.subAgentModel}\` — dispatch_subagents (you set prompts, sequential) or explore_subagent (one task).`;
+      system += `\nSub-agents: ${providerName} \`${this.cfg.subAgentModel}\` — explore_subagent (emit up to 3 in one message for parallel dispatch).`;
     }
     this.messages = [
       { id: "system-base", role: "system", content: system, timestamp: now() },
@@ -293,30 +348,26 @@ export class AgentCore {
     const trimmed = userText.trim();
     const sm = this.skillManager;
 
-    if (trimmed.startsWith("/skill:")) {
-      const skillName = trimmed.replace(/^\/skill:/, "").split(/\s+/)[0];
-      const skill = SkillManager.getByName(skillName);
-      if (skill && sm.load(skill, this.messages, this._smallModel, this.onUpdate)) {
-        this.addAssistantMessage(`**Skill Loaded: ${skill.name}**\n\n${skill.description}\n\nHow would you like to use this skill?`);
-      } else if (skill) {
-        this.addAssistantMessage(`Skill "${skillName}" is already loaded.`);
-      } else {
-        this.addAssistantMessage(`Skill "${skillName}" not found.`);
-      }
-      return;
-    }
+    let skipUserMessage = false;
 
-    if (trimmed.startsWith("/skill-load ")) {
-      const skillName = trimmed.replace("/skill-load ", "").trim().split(/\s+/)[0];
+    if (trimmed.startsWith("/skill:") || trimmed.startsWith("/skill-load ")) {
+      const isLoad = trimmed.startsWith("/skill-load ");
+      const prefixLength = isLoad ? "/skill-load ".length : "/skill:".length;
+      const skillName = trimmed.substring(prefixLength).trim().split(/\s+/)[0];
       const skill = SkillManager.getByName(skillName);
       if (skill && sm.load(skill, this.messages, this._smallModel, this.onUpdate)) {
-        this.addAssistantMessage(`**Skill Loaded: ${skill.name}**\n\n${skill.description}\n\nHow would you like to use this skill?`);
+        this.addUserMessage(userText);
+        this.addUserMessage(`[System Notice: The skill "${skill.name}" has just been activated. Please review its context, introduce yourself according to this skill's persona or capabilities, summarize what you can do, and proceed to work or ask the user for clarifying questions.]`);
+        skipUserMessage = true;
       } else if (skill) {
         this.addAssistantMessage(`Skill "${skillName}" is already loaded.`);
+        this.setState("idle");
+        return;
       } else {
         this.addAssistantMessage(`Skill "${skillName}" not found.`);
+        this.setState("idle");
+        return;
       }
-      return;
     }
 
     if (trimmed.startsWith("/unload ")) {
@@ -337,7 +388,39 @@ export class AgentCore {
       return;
     }
 
-    this.addUserMessage(userText);
+    if (trimmed === "/subagents") {
+      const pool = await resolveSubAgentPool(this.cfg);
+      if (!pool) {
+        this.addAssistantMessage(
+          "No remote sub-agent pool configured. Set `subagents` in ~/.qwen-agent.json or set REMOTE_LMSTUDIO_URL."
+        );
+      } else {
+        const lines = [
+          `## Remote Sub-agents (${pool.endpoints.length} endpoints)`,
+          "",
+          ...pool.endpoints.map(
+            (e) => `- ${e.name}: \`${e.model}\` @ ${e.baseURL}`
+          ),
+          "",
+          `Concurrency cap: ${this.maxBackgroundSubAgents}`,
+        ];
+        if (this.backgroundSubAgents.size > 0) {
+          lines.push(
+            "",
+            `Running: ${[...this.backgroundSubAgents.values()]
+              .map((h) => `${h.id} (${h.status})`)
+              .join(", ")}`
+          );
+        }
+        this.addAssistantMessage(lines.join("\n"));
+      }
+      this.setState("idle");
+      return;
+    }
+
+    if (!skipUserMessage) {
+      this.addUserMessage(userText);
+    }
 
     let reasoningOnlyStreak = 0;
     const MAX_REASONING_ONLY = 3;
@@ -368,14 +451,14 @@ export class AgentCore {
            timestamp: now(),
          };
          this.messages.push(assistantMsg);
-         this.contextManager.addMessage(assistantMsg);
 
         try {
+          const activeSkills = new Set(this.skillManager.getAllWithStatus().filter(s => s.active).map(s => s.name));
           const stream = streamChat(
             this.client,
             this.cfg,
             this.toChatMessages(),
-            toOpenAI(tools, this.cfg),
+            toOpenAI(tools, this.cfg, activeSkills),
             signal
           );
 
@@ -452,6 +535,9 @@ export class AgentCore {
                 : `I will use a tool (${first?.name || "tool"}) to gather the needed context.`;
           }
 
+          // Now that streaming is complete, add the message to history context
+          this.contextManager.addMessage(assistantMsg);
+
           if (!assistantMsg.toolCalls && assistantMsg.content.trim() === "" && !assistantMsg.reasoningContent) {
             this.messages = this.messages.filter((m) => m.id !== assistantMsg.id);
             this.setState("idle");
@@ -494,6 +580,9 @@ export class AgentCore {
           } else {
             assistantMsg.content = `API error (${status || "unknown"}): ${msg}`;
           }
+          // Add the error message to history so it's visible
+          this.messages.push(assistantMsg);
+          this.contextManager.addMessage(assistantMsg);
           this.setState("error");
           this.onUpdate?.();
           return;
@@ -506,11 +595,12 @@ export class AgentCore {
          this.checkAndCompactContext();
          
          try {
+           const activeSkills = new Set(this.skillManager.getAllWithStatus().filter(s => s.active).map(s => s.name));
            response = await chat(
              this.client,
              this.cfg,
              this.toChatMessages(),
-             toOpenAI(tools, this.cfg),
+             toOpenAI(tools, this.cfg, activeSkills),
              signal
            );
         } catch (err: any) {
@@ -598,10 +688,190 @@ export class AgentCore {
         for (const tc of sequential) {
           await this.executeToolSequential(tc, signal);
         }
+
+        // If any background sub-agents were launched this turn, block until
+        // they all finish, then collect their results before synthesising.
+        if (this.backgroundSubAgents.size > 0) {
+          await this.awaitAllBackgroundSubAgents(signal);
+        }
     }
 
     this.addAssistantMessage("Max iterations reached without completion.");
     this.setState("error");
+  }
+
+  /**
+   * Launch a remote sub-agent as a DETACHED background task.
+   *
+   * Returns a JSON handle immediately so the main agent loop can keep going
+   * (e.g. fire up to `maxBackgroundSubAgents` in parallel, or continue its own
+   * reasoning). The actual work runs via `exploreWithSubAgent` and streams
+   * progress through `onSubAgentProgress`. The run loop later blocks in
+   * `awaitAllBackgroundSubAgents` until every task resolves.
+   */
+  spawnBackgroundSubAgent(prompt: string, focusPath?: string): string {
+    if (this.backgroundSubAgents.size >= this.maxBackgroundSubAgents) {
+      return JSON.stringify({
+        ok: false,
+        error: `Sub-agent pool busy (${this.backgroundSubAgents.size}/${this.maxBackgroundSubAgents}). Wait for the current batch to finish.`,
+      });
+    }
+
+    const id = `sa-${rnd()}`;
+    let resolveFn!: (value: void) => void;
+    let rejectFn!: (reason?: any) => void;
+    const promise = new Promise<void>((res, rej) => {
+      resolveFn = res;
+      rejectFn = rej;
+    });
+
+    const handle: BackgroundSubAgent = {
+      id,
+      // Store the ORIGINAL prompt for display in the live TUI stream. The
+      // shared-context block is injected only into the worker task below, so it
+      // never shows up in the chat.
+      prompt,
+      focusPath,
+      status: "running",
+      promise,
+      resolve: resolveFn,
+      reject: rejectFn,
+    };
+    this.backgroundSubAgents.set(id, handle);
+
+    // Fire-and-forget: run detached, never block the calling turn.
+    // Add .catch() to prevent unhandled promise rejections
+    void (async () => {
+      try {
+        const pool = await resolveSubAgentPool(this.cfg);
+        if (!pool) {
+          handle.status = "error";
+          handle.result = {
+            name: id,
+            model: "",
+            baseURL: "",
+            ok: false,
+            output: "",
+            durationMs: 0,
+            error: "No remote sub-agent pool configured. Set subagents in ~/.qwen-agent.json or REMOTE_LMSTUDIO_URL.",
+            toolCalls: 0,
+          };
+          return;
+        }
+        // Enrich only the worker task with shared context (workspace root +
+        // listing). The model sees it; the TUI stream shows `handle.prompt`.
+        const { enrichTaskWithContext } = await import("./subagents");
+        const task = await enrichTaskWithContext(prompt, this.cfg, focusPath);
+        handle.result = await exploreWithSubAgent(
+          this.cfg,
+          pool,
+          undefined,
+          task,
+          undefined,
+          this.buildSubAgentHooks(id)
+        );
+        handle.status = handle.result.ok ? "done" : "error";
+      } catch (e: any) {
+        handle.status = "error";
+        handle.result = {
+          name: id,
+          model: "",
+          baseURL: "",
+          ok: false,
+          output: "",
+          durationMs: 0,
+          error: e?.message || String(e),
+          toolCalls: 0,
+        };
+      } finally {
+        handle.resolve();
+      }
+    })().catch((err) => {
+      // Catch any errors that escape the async IIFE
+      console.error("Background sub-agent error:", err);
+      handle.status = "error";
+      handle.result = {
+        name: id,
+        model: "",
+        baseURL: "",
+        ok: false,
+        output: "",
+        durationMs: 0,
+        error: err instanceof Error ? err.message : String(err),
+        toolCalls: 0,
+      };
+      handle.resolve();
+    });
+
+    return JSON.stringify({
+      ok: true,
+      launched: true,
+      id,
+      note: "Sub-agent running in background. Its result will be collected automatically before the next synthesis turn.",
+    });
+  }
+
+  /** Build a `ToolExecutionHooks` that routes sub-agent progress to the TUI. */
+  private buildSubAgentHooks(id: string): ToolExecutionHooks {
+    return {
+      onSubAgentProgress: (event) => {
+        const handle = this.backgroundSubAgents.get(id);
+        if (handle) {
+          handle.log = handle.log ?? [];
+          // Keep the transcript bounded so the TUI doesn't overflow.
+          if (handle.log.length < 200) handle.log.push(event);
+        }
+        this.onUpdate?.();
+      },
+    };
+  }
+
+  /**
+   * Block until every launched background sub-agent has finished, then collect
+   * their results into the conversation as a single `explore_subagent` result
+   * block. Called from the run loop after tool execution when any are pending.
+   */
+  async awaitAllBackgroundSubAgents(signal?: AbortSignal): Promise<void> {
+    if (this.backgroundSubAgents.size === 0) return;
+
+    const handles = [...this.backgroundSubAgents.values()];
+    
+    // Use Promise.allSettled to handle rejections gracefully
+    const settledResults = await Promise.allSettled(handles.map((h) => h.promise));
+
+    // Extract results from settled promises
+    const results = settledResults
+      .map((result, index) => {
+        if (result.status === 'fulfilled') {
+          return handles[index].result;
+        } else {
+          // For rejected promises, create an error result
+          console.error("Background sub-agent failed:", result.reason);
+          return {
+            ok: false,
+            error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+            output: "",
+            durationMs: 0,
+          } as SubAgentResult;
+        }
+      })
+      .filter((r): r is SubAgentResult => !!r);
+    
+    const formatted = formatSubAgentResults(results);
+
+    // Emit one consolidated tool result message per batch.
+    this.messages.push({
+      id: rnd(),
+      role: "tool",
+      content: formatted,
+      timestamp: now(),
+      toolCallId: `bg-${handles.map((h) => h.id).join(",")}`,
+    });
+
+    // Always clear the background sub-agents map, even on errors
+    this.backgroundSubAgents.clear();
+    this.currentTool = undefined;
+    this.onUpdate?.();
   }
 
   /**
@@ -678,8 +948,10 @@ export class AgentCore {
       
       if (tool?.executeAsync) {
         const subHooks: ToolExecutionHooks | undefined =
-          tc.name === "dispatch_subagents" || tc.name === "explore_subagent"
+          tc.name === "explore_subagent"
             ? {
+                launchBackgroundSubAgent: (prompt, focusPath) =>
+                  this.spawnBackgroundSubAgent(prompt, focusPath),
                 onSubAgentProgress: (progress) => {
                   this.currentTool = {
                     name: tc.name,
@@ -718,11 +990,13 @@ export class AgentCore {
       try {
         const args = this.parseToolArgs(tc);
         const resultObj = JSON.parse(output);
-        if (resultObj.ok !== false) {
+        // Only cache if output is valid and represents a successful execution
+        if (resultObj && typeof resultObj === 'object' && resultObj.ok === true) {
           this.toolCache.set(tc.name, args, this.cfg.workspace, output, duration, true);
         }
-      } catch {
-        // If we can't parse the output, don't cache it
+      } catch (e) {
+        // If we can't parse the output or it's not a valid success, don't cache it
+        console.debug("Tool output not cached due to invalid format:", e);
       }
     }
 
@@ -785,11 +1059,27 @@ export class AgentCore {
         };
         
         if (tool?.executeAsync) {
+          const subHooks: ToolExecutionHooks | undefined =
+            tc.name === "explore_subagent"
+              ? {
+                  launchBackgroundSubAgent: (prompt, focusPath) =>
+                    this.spawnBackgroundSubAgent(prompt, focusPath),
+                  onSubAgentProgress: (progress) => {
+                    this.currentTool = {
+                      name: tc.name,
+                      args: tc.arguments,
+                      subAgentProgress: progress,
+                    };
+                    this.onUpdate?.();
+                  },
+                }
+              : undefined;
           output = await tool.executeAsync(
             args,
             this.cfg.workspace,
             configWithSecurity,
-            signal
+            signal,
+            subHooks
           );
         } else {
           output = tool
@@ -801,17 +1091,21 @@ export class AgentCore {
         if (tool) {
           try {
             const resultObj = JSON.parse(output);
-            if (resultObj.ok !== false) {
+            // Only cache if output is valid and represents a successful execution
+            if (resultObj && typeof resultObj === 'object' && resultObj.ok === true) {
               const duration = performance.now() - toolStart;
               this.toolCache.set(tc.name, args, this.cfg.workspace, output, duration, true);
             }
-          } catch {
-            // If we can't parse the output, don't cache it
+          } catch (e) {
+            // If we can't parse the output or it's not a valid success, don't cache it
+            console.debug("Parallel tool output not cached due to invalid format:", e);
           }
         }
         
         return { index: tc.index, id: tc.id, output, duration: performance.now() - toolStart, wasCached };
       } catch (e: any) {
+        // Log the full error including stack trace for debugging
+        console.error(`Parallel tool execution error [${tc.name}]:`, e);
         return { index: tc.index, id: tc.id, output: JSON.stringify({ ok: false, error: e.message }), duration: performance.now() - toolStart, wasCached: false };
       }
     });
@@ -820,15 +1114,16 @@ export class AgentCore {
     const settledResults = await Promise.allSettled(promises);
     
     // Process results in original order
-    for (const result of settledResults) {
+    for (const index of settledResults.keys()) {
+      const result = settledResults[index];
       if (result.status === 'fulfilled') {
         results.push(result.value);
       } else {
-        // Handle rejected promises — use the original index from parallelTools
-        // to maintain correct ordering (index: -1 would sort to the front)
-        const originalTc = parallelTools[settledResults.indexOf(result)];
+        // Handle rejected promises — use the actual index from the loop
+        // to maintain correct ordering
+        const originalTc = parallelTools[index];
         results.push({
-          index: originalTc?.index ?? settledResults.indexOf(result),
+          index: originalTc?.index ?? index,
           id: originalTc?.id ?? '',
           output: JSON.stringify({ ok: false, error: result.reason?.message || 'Unknown error' }),
           duration: 0,

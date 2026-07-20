@@ -2,7 +2,7 @@
  * Tests for context window management system.
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, expect, beforeEach, vi } from 'bun:test';
 import { ContextManager, createContextManager, DEFAULT_CONTEXT_CONFIG } from './manager';
 import type { Config, Message } from '../types';
 
@@ -70,6 +70,44 @@ describe('ContextManager', () => {
       
       const messages = contextManager.getMessages();
       expect(messages.length).toBe(3);
+    });
+
+    it('should warn when context approaches maxHistoryTokens limit', () => {
+      // Create a manager with a small maxHistoryTokens for testing
+      const smallCfg: Config = {
+        ...cfg,
+        contextMaxHistoryTokens: 100,
+      };
+      const smallManager = createContextManager(smallCfg);
+      
+      // Mock console.warn BEFORE adding messages
+      const originalWarn = console.warn;
+      const warnings: string[] = [];
+      console.warn = (...args: any[]) => {
+        warnings.push(args[0]);
+        originalWarn(...args);
+      };
+      
+      // Add messages that approach 80% of the limit (80 tokens)
+      // With tiktoken, 'A'.repeat(40) is about 6 tokens, role 'user' is ~1
+      // So ~7 tokens per message. Need > 80 tokens, so ~12 messages
+      for (let i = 0; i < 15; i++) {
+        smallManager.addMessage({
+          id: String(i),
+          role: 'user',
+          content: 'A'.repeat(40),
+          timestamp: Date.now(),
+        });
+      }
+      
+      // Restore console.warn
+      console.warn = originalWarn;
+      
+      // Check that a warning was logged
+      const contextWarning = warnings.find(w => w.includes('[ContextManager] Context approaching limit'));
+      expect(contextWarning).toBeDefined();
+      expect(contextWarning).toContain('100'); // Should contain the max
+      expect(contextWarning).toContain('%'); // Should contain percentage
     });
   });
 

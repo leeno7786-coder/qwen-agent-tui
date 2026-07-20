@@ -168,6 +168,17 @@ export class ContextManager {
     this.messageTokenCache.set(message.id, tokens);
     this.cachedTotalTokens += tokens;
     this.stats = null; // Invalidate cached stats
+
+    // Monitor context growth - warn when approaching maxHistoryTokens limit
+    const thresholdPercent = 0.8; // Warn at 80% usage
+    if (this.config.maxHistoryTokens > 0 && 
+        this.cachedTotalTokens > this.config.maxHistoryTokens * thresholdPercent) {
+      console.warn(
+        `[ContextManager] Context approaching limit: ` +
+        `${this.cachedTotalTokens}/${this.config.maxHistoryTokens} tokens ` +
+        `(${Math.round((this.cachedTotalTokens / this.config.maxHistoryTokens) * 100)}%)`
+      );
+    }
   }
 
   /**

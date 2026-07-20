@@ -1,7 +1,6 @@
 import type { Config } from "./types";
 import { isSmallModelFromConfig } from "./model-runtime";
-import { subAgentAvailable } from "./tools";
-import { openRouterDispatchLimit } from "./subagent";
+
 
 export interface PromptContext {
   workspace: string;
@@ -54,9 +53,8 @@ export function buildLargeModelPrompt(
     "",
     "## Workflow",
     "1. git_diff / git_status first for review or audit tasks",
-    "2. **dispatch_subagents** — you write each sub-agent's name + prompt; they run sequentially and return evidence",
-    "3. read_file only for files you must verify or edit",
-    "4. edit_file or edit_file_lines; run_tests / typecheck / run_command to verify",
+    "2. read_file only for files you must verify or edit",
+    "3. edit_file or edit_file_lines; run_tests / typecheck / run_command to verify",
     "",
     "## Rules",
     "- If you call tools, first write a brief preface (1–2 lines) describing the plan, then call the tool(s)",
@@ -68,51 +66,12 @@ export function buildLargeModelPrompt(
     "- manage_todos for multi-step work",
     "",
     "## Review / audit output",
-    "- Synthesize sub-agent findings into a short report: Critical → High → Medium → Low",
+    "- Synthesize findings into a short report: Critical → High → Medium → Low",
     "- Each finding: file path, issue, suggested fix",
-    "- Skip noise; dedupe overlapping lens reports",
+    "- Skip noise",
   ];
 
-  if (cfg && subAgentAvailable(cfg)) {
-    const subBase = cfg.subAgentBaseURL ?? cfg.baseURL;
-    const isMistral = subBase.toLowerCase().includes("mistral.ai");
-    const isOpenRouter = subBase.toLowerCase().includes("openrouter.ai");
 
-    lines.push(
-      "",
-      "## Sub-agents"
-    );
-
-    if (isMistral) {
-      lines.push(
-        `- Sub-agents use Mistral API with model \`${cfg.subAgentModel}\`.`
-      );
-    } else if (isOpenRouter) {
-      lines.push(
-        `- On OpenRouter, sub-agents use \`openrouter/free\` by default (random free tool-capable model). Current: \`${cfg.subAgentModel}\`. Override via \`subAgentModel\` in config.`
-      );
-    } else {
-      lines.push(
-        `- Sub-agents use model \`${cfg.subAgentModel}\`.`
-      );
-    }
-
-    lines.push(
-      "- **dispatch_subagents** — pass `agents: [{ name, prompt, focus_path? }]`. You craft each prompt; they run one at a time."
-    );
-
-    const limit = openRouterDispatchLimit(cfg);
-    if (limit !== null) {
-      lines.push(
-        `- On OpenRouter free tier, dispatch **at most ${limit} agents** per call; use **explore_subagent** for additional lenses.`
-      );
-    }
-
-    lines.push(
-      "- **explore_subagent** — single investigation when one angle is enough.",
-      "- Sub-agents gather evidence with path:line citations; you verify and apply fixes."
-    );
-  }
 
   return lines.join("\n");
 }
@@ -146,6 +105,17 @@ export function appendPromptExtras(
   }
 
   system += "\n\n## Todos\nBreak multi-step requests into manage_todos items. Mark complete via the tool — do not skip it.";
+
+  system +=
+    "\n\n## Remote sub-agents\n" +
+    "You have 3 remote sub-agents backed by small Qwen models (2B each) on another device, reached via this machine's LM Studio. " +
+    "They have READ-ONLY exploration tools (read_file, list_dir, grep_search, map_project_tree, git_status) against this workspace.\n" +
+    "- `explore_subagent` — dispatch ONE sub-agent with a SPECIFIC, FOCUSED `prompt` and an optional `focus_path` (a single file or directory). This is the ONLY sub-agent tool.\n" +
+    "Rules:\n" +
+    "  - BEFORE dispatching, GATHER CONTEXT YOURSELF: run map_project_tree / list_dir / grep_search on the main workspace to learn the real structure, then weave the relevant findings into each sub-agent's prompt so it is NOT sent out blind. The workspace root is auto-injected, but richer leads make them far more effective.\n" +
+    "  - Give each sub-agent a NARROW task: name the exact file/function and what to find (e.g. 'In src/agent.ts, trace how tool calls are grouped for parallel execution; report line numbers'). A vague prompt on a large codebase will time out.\n" +
+    "  - To run all 3 at once, emit ALL `explore_subagent` calls in a SINGLE message. They then execute in PARALLEL on 3 different models and run simultaneously — each making its own tool calls, all visible on screen. Up to 3 concurrent.\n" +
+    "  - After they all return, SYNTHESIZE their findings yourself — sub-agents gather context; you reason. Never narrate 'dispatching' — actually call the tool.";
 
   return system;
 }

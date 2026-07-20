@@ -36,6 +36,33 @@ function ensureSkillDirs(): void {
   }
 }
 
+// P1: Validate skill sourcePath against allowed paths
+export function isSkillPathAllowed(sourcePath: string, allowedPaths?: string[]): boolean {
+  if (!allowedPaths || allowedPaths.length === 0) {
+    // No restrictions configured, allow by default
+    return true;
+  }
+  
+  for (const allowedPath of allowedPaths) {
+    try {
+      // Normalize paths for comparison
+      const normalizedSource = sourcePath.replace(/\\/g, '/');
+      const normalizedAllowed = allowedPath.replace(/\\/g, '/');
+      
+      // Check if sourcePath starts with allowedPath
+      if (normalizedSource.startsWith(normalizedAllowed + '/') || 
+          normalizedSource === normalizedAllowed) {
+        return true;
+      }
+    } catch {
+      // If comparison fails, continue to next allowed path
+      continue;
+    }
+  }
+  
+  return false;
+}
+
 function parseYamlFrontmatter(text: string): { name?: string; description?: string; triggers?: string[]; [key: string]: any } {
   const result: { name?: string; description?: string; triggers?: string[]; [key: string]: any } = {};
 

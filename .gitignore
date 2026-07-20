@@ -32,3 +32,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Finder (MacOS) folder config
 .DS_Store
+
+# local caches and temp files
+.qwen-graph/
+fix_tools.py
+test-output.txt
+skills/test-*.json

@@ -4,15 +4,15 @@ import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type { Message, ToolResult, AgentState, ToolCall } from "../types";
+import type { SubAgentProgressEvent } from "../tools";
+import type { SubAgentResult } from "../subagents";
 import { CommandDropdown } from "./command-dropdown";
 import { getSyntaxStyle } from "./syntax-style";
 import type { Theme } from "./theme";
 import {
   buildToolDisplayBlock,
-  subAgentLinesFromProgress,
   type ToolDisplayBlock,
 } from "./tool-display";
-import type { SubAgentDispatchProgress } from "../subagent";
 
 interface ChatScreenProps {
   theme: Theme;
@@ -25,10 +25,17 @@ interface ChatScreenProps {
   currentTool?: {
     name: string;
     args: string;
-    subAgentProgress?: SubAgentDispatchProgress;
   };
   lastUsage?: { input_tokens: number; output_tokens: number };
   totalUsage: { input_tokens: number; output_tokens: number };
+  subAgents?: Array<{
+    id: string;
+    prompt: string;
+    focusPath?: string;
+    status: "running" | "done" | "error";
+    progress?: SubAgentProgressEvent;
+    result?: SubAgentResult;
+  }>;
   onSubmit: (text: string) => void;
   selectedMessageIndex?: number | null;
   page?: number;
@@ -84,6 +91,7 @@ export function ChatScreen({
   currentTool,
   lastUsage,
   onSubmit,
+  subAgents = [],
   selectedMessageIndex = null,
   page = 1,
   totalPages = 1,
@@ -226,34 +234,49 @@ export function ChatScreen({
             </box>
           );
         })}
-        {showBusy && <text fg={theme.statusThinking}>  {spinnerFrame(elapsedMs)} thinking</text>}
-      </scrollbox>
+         {showBusy && <text fg={theme.statusThinking}>  {spinnerFrame(elapsedMs)} thinking</text>}
 
-      {paginated && totalPages > 1 && (
-        <box flexDirection="row" height={1} flexShrink={0} paddingX={2} backgroundColor={theme.bgPanel}>
-          <text fg={theme.mutedFg}>
-            Page {page}/{totalPages} · PgUp/PgDn to change page · Shift+↑/↓ to scroll
-          </text>
-        </box>
-      )}
+         {/* Live sub-agent stream renders inline in the main chat, not a separate panel. */}
+         <SubAgentPanel subAgents={subAgents} theme={theme} elapsedMs={elapsedMs} />
+       </scrollbox>
 
-      <CommandDropdown inputValue={inputValue} theme={theme} onSubmit={(v) => { setInputValue(""); handleSubmitLocal(v); }} onPick={(cmd) => {
-        if (ARG_BEARING.has(cmd)) {
-          const rest = inputValue.slice(cmd.length).trim();
-          if (rest) {
-            setInputValue("");
-            handleSubmitLocal(inputValue.trim());
+       {paginated && totalPages > 1 && (
+         <box flexDirection="row" height={1} flexShrink={0} paddingX={2} backgroundColor={theme.bgPanel}>
+           <text fg={theme.mutedFg}>
+             Page {page}/{totalPages} · PgUp/PgDn to change page · Shift+↑/↓ to scroll
+           </text>
+         </box>
+       )}
+
+       <CommandDropdown 
+         inputValue={inputValue} 
+         theme={theme} 
+         onSubmit={useCallback((v: any) => { setInputValue(""); handleSubmitLocal(v); }, [handleSubmitLocal])} 
+         onPick={useCallback((cmd: string) => {
+          if (ARG_BEARING.has(cmd)) {
+            const rest = inputValue.slice(cmd.length).trim();
+            if (rest) {
+              setInputValue("");
+              handleSubmitLocal(inputValue.trim());
+            } else {
+              setInputValue(cmd + " ");
+            }
           } else {
-            setInputValue(cmd + " ");
+            setInputValue(""); handleSubmitLocal(cmd);
           }
-        } else {
-          setInputValue(""); handleSubmitLocal(cmd);
-        }
-      }} />
+        }, [inputValue, handleSubmitLocal])} 
+       />
 
       <box flexDirection="row" paddingX={2} paddingY={0} borderStyle="single" borderColor={theme.borderColor} height={3} flexShrink={0} backgroundColor={theme.bgPanel}>
         <text fg={theme.inputFg}>▶ </text>
-        <input flexGrow={1} placeholder={busy ? "Working…" : "Type a message or / for commands…"} value={inputValue} onInput={setInputValue} onSubmit={(v) => { if (!dropdownOpen && typeof v === "string") handleSubmitLocal(v); }} focused />
+        <input 
+          flexGrow={1} 
+          placeholder={busy ? "Working…" : "Type a message or / for commands…"} 
+          value={inputValue} 
+          onInput={setInputValue} 
+          onSubmit={useCallback((v: any) => { if (!dropdownOpen && typeof v === "string") handleSubmitLocal(v); }, [dropdownOpen, handleSubmitLocal])} 
+          focused 
+        />
       </box>
     </box>
   );
@@ -262,7 +285,7 @@ export function ChatScreen({
 function ToolActivityBlock({ block, theme }: { block: ToolDisplayBlock; theme: Theme }) {
   const headerColor = block.ok ? theme.toolFg : theme.errorFg;
   const duration = block.durationMs != null ? ` · ${Math.round(block.durationMs)}ms` : "";
-  const agentLines = block.subAgentLines ?? block.previewLines;
+  const agentLines = block.previewLines;
 
   return (
     <box flexDirection="column" marginY={0}>
@@ -276,12 +299,107 @@ function ToolActivityBlock({ block, theme }: { block: ToolDisplayBlock; theme: T
         </box>
       ) : null}
       {!block.diff &&
-        agentLines?.map((line, i) => (
+        agentLines?.map((line: string, i: number) => (
           <text key={i} fg={theme.mutedFg}>
             {"  "}{line.length > 140 ? line.slice(0, 139) + "…" : line || " "}
           </text>
         ))}
     </box>
+  );
+}
+
+const RUNNING = "running";
+const DONE = "done";
+const ERROR = "error";
+
+/**
+ * Live sub-agent stream, rendered inline in the chat flow (no bordered box).
+ * Each sub-agent reads like a streamed transcript straight from the remote
+ * endpoint — nothing is mocked:
+ *
+ *   Thought
+ *   Running explore agent: <prompt>
+ *   → grep: Found 100 matches          (one line per tool call, live)
+ *   → read_file: Read from x.ts (111 lines)
+ *   Agent completed in 8 turns          (one line when it finishes)
+ */
+function SubAgentPanel({
+  subAgents,
+  theme,
+  elapsedMs,
+}: {
+  subAgents: Array<{
+    id: string;
+    prompt: string;
+    focusPath?: string;
+    status: "running" | "done" | "error";
+    log?: SubAgentProgressEvent[];
+    result?: SubAgentResult;
+  }>;
+  theme: Theme;
+  elapsedMs: number;
+}) {
+  const live = subAgents.filter((s) => s.status === RUNNING);
+  const finished = subAgents.filter((s) => s.status !== RUNNING);
+  if (live.length === 0 && finished.length === 0) return null;
+
+  const spin = spinnerFrame(elapsedMs);
+
+  const renderAgent = (sa: {
+    id: string;
+    prompt: string;
+    status: "running" | "done" | "error";
+    log?: SubAgentProgressEvent[];
+    result?: SubAgentResult;
+  }): Array<{ key: string; color: string; text: string }> => {
+    const log = sa.log ?? [];
+    const turns = sa.result?.toolCalls ?? 0;
+    const toolResults = log.filter((e) => e.type === "subagent_tool_result" && e.toolResult);
+
+    const lines: Array<{ key: string; color: string; text: string }> = [];
+    lines.push({
+      key: `${sa.id}-h`,
+      color: sa.status === DONE ? theme.toolFg : theme.statusTool,
+      text:
+        (sa.status === RUNNING ? `${spin} ` : "") +
+        `Running explore agent: ${sa.prompt}`,
+    });
+    for (const e of toolResults) {
+      lines.push({
+        key: `${sa.id}-${e.tool}-${toolResults.indexOf(e)}`,
+        color: theme.mutedFg,
+        text: `  → ${e.toolResult}`,
+      });
+    }
+    if (sa.status === DONE) {
+      lines.push({
+        key: `${sa.id}-d`,
+        color: theme.mutedFg,
+        text: `  ✓ Agent completed in ${turns} turns${sa.result?.durationMs != null ? ` · ${Math.round(sa.result.durationMs)}ms` : ""}`,
+      });
+    } else if (sa.status === ERROR) {
+      lines.push({
+        key: `${sa.id}-e`,
+        color: theme.errorFg,
+        text: `  ✗ Agent failed after ${turns} turns${sa.result?.error ? `: ${sa.result.error.slice(0, 100)}` : ""}`,
+      });
+    }
+
+    return lines;
+  };
+
+  // Return flat <text> lines — no wrapping box — so the stream renders exactly
+  // like the main agent's own tool-call lines inside the chat.
+  const allLines = [...live, ...finished].flatMap(renderAgent);
+  if (allLines.length === 0) return null;
+  return (
+    <>
+      {allLines.map((l) => (
+        <text key={l.key} fg={l.color}>
+          {l.text}
+        </text>
+      ))}
+    </>
   );
 }
 
@@ -307,7 +425,6 @@ function MessageItem({ message, theme, toolMap, toolResultByCallId, lastUsage, s
   currentTool?: {
     name: string;
     args: string;
-    subAgentProgress?: SubAgentDispatchProgress;
   };
   highlighted?: boolean;
 }) {
@@ -363,21 +480,20 @@ function MessageItem({ message, theme, toolMap, toolResultByCallId, lastUsage, s
         </box>
       )}
 
-      {toolCalls.map((tc) => renderToolCall(tc, toolMap, toolResultByCallId, theme))}
+      {/* The main agent's own explore_subagent calls are background launches — their
+          live activity is shown by SubAgentPanel, so don't render the instant "ok"
+          tool-call blocks here. */}
+      {toolCalls
+        .filter((tc) => tc.name !== "explore_subagent")
+        .map((tc) => renderToolCall(tc, toolMap, toolResultByCallId, theme))}
 
-      {message.role === "assistant" && state === "executing_tool" && currentTool && (() => {
+      {message.role === "assistant" && state === "executing_tool" && currentTool && currentTool.name !== "explore_subagent" && (() => {
         const pending = buildToolDisplayBlock(currentTool.name, currentTool.args, "", undefined);
-        const liveLines = subAgentLinesFromProgress(currentTool.subAgentProgress);
         return (
           <box flexDirection="column">
             <text fg={theme.statusTool}>
               {"  "}{spinnerFrame(Date.now())} {pending.action}({pending.target})…
             </text>
-            {liveLines?.map((line, i) => (
-              <text key={i} fg={theme.mutedFg}>
-                {"    "}{line}
-              </text>
-            ))}
           </box>
         );
       })()}
