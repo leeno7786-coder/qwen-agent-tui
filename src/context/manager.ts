@@ -30,7 +30,7 @@ export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
   compactThreshold: 0.8,
   summaryReservedPercent: 0.3,
   keepCount: 12,
-  maxHistoryTokens: 16000,
+  maxHistoryTokens: 128000,
   enabled: true,
 };
 
@@ -97,6 +97,7 @@ export class ContextManager {
     
     this.config = {
       ...DEFAULT_CONTEXT_CONFIG,
+      maxHistoryTokens: compactionSettings.contextSize,
       compactThreshold: absoluteCompactThreshold,
       summaryReservedPercent: compactionSettings.summaryReservedPercent,
       keepCount: compactionSettings.keepCount,
@@ -145,7 +146,8 @@ export class ContextManager {
     
     this.config = {
       ...this.config,
-      compactThreshold: compactionSettings.compactThreshold / compactionSettings.contextSize,
+      maxHistoryTokens: compactionSettings.contextSize,
+      compactThreshold: compactionSettings.compactThreshold,
       summaryReservedPercent: compactionSettings.summaryReservedPercent,
       keepCount: compactionSettings.keepCount,
     };

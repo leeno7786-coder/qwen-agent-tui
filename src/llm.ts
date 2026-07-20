@@ -193,6 +193,7 @@ export function estimateModelContextSize(modelId: string, maxTokens?: number): n
   if (lowerModelId.includes('500k')) return 500000;
   if (lowerModelId.includes('400k')) return 400000;
   if (lowerModelId.includes('256k')) return 256000;
+  if (lowerModelId.includes('132k') || lowerModelId.includes('131k') || lowerModelId.includes('131072')) return 131072;
   if (lowerModelId.includes('128k')) return 128000;
   if (lowerModelId.includes('100k')) return 100000;
   if (lowerModelId.includes('64k')) return 64000;

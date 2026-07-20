@@ -56,7 +56,7 @@ export interface Config {
   contextSummaryReservedPercent?: number;
   /** Minimum number of messages to keep (default: varies by model). */
   contextKeepCount?: number;
-  /** Maximum history tokens (default: 16000). */
+  /** Maximum history tokens (default: 128000 or model context size). */
   contextMaxHistoryTokens?: number;
   /** Enable security checks (default: true). */
   securityEnabled?: boolean;
