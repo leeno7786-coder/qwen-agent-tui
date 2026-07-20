@@ -46,20 +46,16 @@ export interface SubAgentResult {
   toolCalls: number;
 }
 
-const SUBAGENT_SYSTEM_PROMPT = `You are a sub-agent worker running on a small (2B) remote model, assisting the main coding agent.
+const SUBAGENT_SYSTEM_PROMPT = `You are a sub-agent worker running on a small remote model, assisting the main coding agent.
 You have a curated READ-ONLY exploration tool set: read_file, batch_read_files, list_dir, map_project_tree, find_files, stat_path, grep_search, search_and_view, git_status, git_diff.
 
 CRITICAL RULES — follow exactly:
-- Use ONLY the tools listed above. There is NO execute_command / shell. Never try to run bash, grep, rg, cat, find, or any terminal command — those fail.
-- To search code, call grep_search (query + optional path). Do NOT shell out.
-- PATH HANDLING (most common failure): list_dir returns BARE names (e.g. "agent.ts", "opentui"). Pass them as-is. If a file lives under a subfolder, prefix ONLY that subfolder (e.g. "opentui/chat-screen.tsx"). NEVER prepend "src/" — the workspace root already is the project, so "src/agent.ts" is WRONG; use "agent.ts". If a read fails with "File not found", retry with the bare name from list_dir.
-- To read a file, call read_file with a path. Read whole files; do not guess contents.
-- To list a directory, call list_dir. To map structure, call map_project_tree.
-- Never write, edit, commit, install, or run tests. You are read-only.
-- BE EFFICIENT: read only the files directly relevant to the task. Do not re-read files you already read. Once you have enough evidence (usually 4-8 key files), STOP calling tools and write your answer.
-- Investigate with tools before answering. Do not guess file contents.
-- Keep your final answer under ~1200 words. Lead with the conclusion and cite file:line references.
-- Do not ask questions — make reasonable assumptions and note them.
+- Use ONLY the tools listed above. There is NO execute_command / shell. Never try to run bash, grep, rg, cat, find, or any terminal command.
+- PATH HANDLING: Use exact relative paths from the workspace root (e.g. "src/agent.ts" or "package.json"). Check list_dir or map_project_tree if unsure.
+- DO NOT REPEAT TOOL CALLS: Never call read_file on a file you already read, and never execute the exact same search twice. Refer to previous outputs in conversation history.
+- MAX 3-5 TOOL CALLS: Read only the 1-3 key files relevant to your assigned task. Once you have read them, STOP calling tools and write your final report immediately.
+- IF A SEARCH HAS 0 MATCHES: Do not repeat empty searches with minor text tweaks. Move on or write your final report based on what you have already inspected.
+- Keep your final answer under ~1000 words. Lead with clear findings, line numbers, and actionable recommendations.
 - Return findings as plain text / markdown. No tool-call syntax in the final answer.`;
 
 /**
@@ -296,7 +292,18 @@ async function runWorkerTool(
     } else {
       out = JSON.stringify({ ok: false, error: `Unknown tool: ${tc.name}` });
     }
-    return wctx.security.sanitizeOutput(out);
+
+    const sanitized = wctx.security.sanitizeOutput(out);
+    // Sub-agent file read truncation: keep outputs under ~7000 chars so small models don't get overwhelmed
+    if ((tc.name === "read_file" || tc.name === "batch_read_files") && sanitized.length > 7000) {
+      const lines = sanitized.split("\n");
+      if (lines.length > 200) {
+        const head = lines.slice(0, 150).join("\n");
+        const tail = lines.slice(-40).join("\n");
+        return `${head}\n\n... [${lines.length - 190} middle lines omitted for sub-agent context budget. Use line ranges start_line/end_line to inspect specific sections] ...\n\n${tail}`;
+      }
+    }
+    return sanitized;
   } catch (e: any) {
     return JSON.stringify({ ok: false, error: e?.message || String(e) });
   }
@@ -326,6 +333,8 @@ async function runSingleSubAgent(
     wctx.cfg
   );
   let toolCallCount = 0;
+  const seenSignatures = new Set<string>();
+  const readPaths = new Set<string>();
 
   emit({
     type: "subagent_start",
@@ -334,7 +343,9 @@ async function runSingleSubAgent(
     task,
   });
 
-  for (let i = 0; i < wctx.cfg.maxIterations!; i++) {
+  const maxIter = Math.min(wctx.cfg.maxIterations ?? 8, 8);
+
+  for (let i = 0; i < maxIter; i++) {
     if (signal?.aborted) {
       emit({
         type: "subagent_done",
@@ -354,6 +365,14 @@ async function runSingleSubAgent(
         error: "aborted",
         toolCalls: toolCallCount,
       };
+    }
+
+    // Force mandatory wrap-up when approaching max iterations
+    if (i >= maxIter - 2 && toolCallCount > 0) {
+      messages.push({
+        role: "system",
+        content: "MANDATORY DIRECTIVE: You have completed several tool inspections. Do NOT call any more tools. Immediately output your final text report synthesizing all findings.",
+      });
     }
 
     const resp = await chat(
@@ -381,6 +400,50 @@ async function runSingleSubAgent(
       });
       const results = await Promise.all(msg.tool_calls.map(async (tc, index) => {
         const currentToolCallCount = toolCallCount + index + 1;
+        const parsedArgs = parseArgs(tc.function);
+        const sig = `${tc.function.name}:${JSON.stringify(parsedArgs)}`;
+        const filePath = parsedArgs?.path || parsedArgs?.file;
+
+        // Intercept duplicate tool call loops
+        if (seenSignatures.has(sig)) {
+          const dupResult = JSON.stringify({
+            ok: false,
+            error: `Duplicate call blocked. You already ran ${tc.function.name} with these exact inputs. Do not repeat tool calls. Output your final report now.`,
+          });
+          emit({
+            type: "subagent_tool_result",
+            agent: wctx.endpoint.name,
+            model: wctx.cfg.model,
+            tool: tc.function.name,
+            toolArgs: tc.function.arguments,
+            toolResult: `${tc.function.name}: duplicate blocked`,
+            toolCalls: currentToolCallCount,
+          });
+          return { role: "tool" as const, content: dupResult, tool_call_id: tc.id };
+        }
+        seenSignatures.add(sig);
+
+        // Intercept re-reading the exact same file
+        if (tc.function.name === "read_file" && typeof filePath === "string") {
+          if (readPaths.has(filePath)) {
+            const reReadResult = JSON.stringify({
+              ok: false,
+              error: `File '${filePath}' was already read in a previous turn. Refer to its contents in your conversation history and output your final report.`,
+            });
+            emit({
+              type: "subagent_tool_result",
+              agent: wctx.endpoint.name,
+              model: wctx.cfg.model,
+              tool: tc.function.name,
+              toolArgs: tc.function.arguments,
+              toolResult: `${tc.function.name}: re-read blocked`,
+              toolCalls: currentToolCallCount,
+            });
+            return { role: "tool" as const, content: reReadResult, tool_call_id: tc.id };
+          }
+          readPaths.add(filePath);
+        }
+
         emit({
           type: "subagent_tool",
           agent: wctx.endpoint.name,
