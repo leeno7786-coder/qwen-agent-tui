@@ -26,8 +26,8 @@ export async function cmdModels(argv: string[]): Promise<number> {
     cliError(
       `No models returned from ${baseURL || 'config base URL'}`,
       '  Ensure LM Studio is running and a model is downloaded.\n' +
-        '  qwen-agent doctor\n' +
-        '  qwen-agent models --base-url http://127.0.0.1:1234/v1'
+        '  nanogent doctor\n' +
+        '  nanogent models --base-url http://127.0.0.1:1234/v1'
     );
   }
 

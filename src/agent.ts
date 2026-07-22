@@ -444,7 +444,7 @@ export class AgentCore {
       const pool = await resolveSubAgentPool(this.cfg);
       if (!pool) {
         this.addAssistantMessage(
-          'No remote sub-agent pool configured. Set `subagents` in ~/.qwen-agent.json or set REMOTE_LMSTUDIO_URL.'
+          'No remote sub-agent pool configured. Set `subagents` in ~/.nanogent.json or set REMOTE_LMSTUDIO_URL.'
         );
       } else {
         const lines = [
@@ -471,7 +471,7 @@ export class AgentCore {
     if (trimmed === '/mcp') {
       if (this.mcpStates.length === 0) {
         this.addAssistantMessage(
-          'No MCP servers configured. Add `mcp` to ~/.qwen-agent.json.\n\n' +
+          'No MCP servers configured. Add `mcp` to ~/.nanogent.json.\n\n' +
             'Example:\n```json\n"mcp": {\n  "filesystem": {\n    "type": "local",\n    "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]\n  },\n  "remote": {\n    "type": "remote",\n    "url": "https://mcp.example.com/sse"\n  }\n}\n```\n\nYou can also ask me to add an MCP server — just describe what you need and I\'ll use manage_mcp to configure it.'
         );
       } else {
@@ -940,7 +940,7 @@ export class AgentCore {
             output: '',
             durationMs: 0,
             error:
-              'No remote sub-agent pool configured. Set subagents in ~/.qwen-agent.json or REMOTE_LMSTUDIO_URL.',
+              'No remote sub-agent pool configured. Set subagents in ~/.nanogent.json or REMOTE_LMSTUDIO_URL.',
             toolCalls: 0,
           };
           return;

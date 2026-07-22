@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useKeyboard } from '@opentui/react';
 import type { CliRenderer } from '@opentui/core';
 import { AgentCore } from '../agent';
-import { loadConfig } from '../config';
+import { loadConfig, saveConfigFile } from '../config';
 import { getModelCompactionSettings, countTokens } from '../llm';
 import { tools } from '../tools';
 import {
@@ -1227,6 +1227,105 @@ export function App({ renderer }: { renderer: CliRenderer }) {
                 });
               }
               setMessages([...agent.messages]);
+              return;
+            }
+            case 'config':
+            case 'set': {
+              const trimmedArgs = args.trim();
+              const parts = trimmedArgs.split(/\s+/);
+              const subCommand = command === 'set' ? 'set' : parts[0]?.toLowerCase() || 'show';
+
+              if (subCommand === 'show' || !trimmedArgs) {
+                const currentCfg = agent?.cfg || cfg;
+                const info = [
+                  '### ⚙️ nanogent Configuration',
+                  '',
+                  `- **Model**: \`${currentCfg.model || 'auto-detect'}\``,
+                  `- **Base URL**: \`${currentCfg.baseURL || 'http://127.0.0.1:1234/v1'}\``,
+                  `- **Provider**: \`${currentCfg.baseURL?.includes('openrouter') ? 'OpenRouter' : 'LM Studio / Local'}\``,
+                  `- **Workspace**: \`${currentCfg.workspace || process.cwd()}\``,
+                  `- **API Key**: ${currentCfg.apiKey ? '`••••••••` (set)' : '*(not set)*'}`,
+                  `- **Temperature**: \`${currentCfg.temperature ?? 0.7}\``,
+                  `- **Max Tokens**: \`${currentCfg.maxTokens ?? 4096}\``,
+                  '',
+                  '**Configuration Files:**',
+                  '- Local: `.nanogent.json` in workspace root',
+                  '- Global: `~/.nanogent.json` in home directory',
+                  '',
+                  '**Usage:**',
+                  '- `/config set model <name>` (set model locally)',
+                  '- `/config set model <name> --global` (set model globally)',
+                  '- `/config set baseURL http://localhost:1234/v1`',
+                  '- `/config reload` (reload from disk)',
+                ].join('\n');
+
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: 'assistant',
+                  content: info,
+                  timestamp: Date.now(),
+                });
+                setMessages([...agent.messages]);
+                return;
+              }
+
+              if (subCommand === 'set') {
+                const setTokens = command === 'set' ? parts : parts.slice(1);
+                const isGlobal = setTokens.includes('--global');
+                const cleanTokens = setTokens.filter((t) => t !== '--global');
+                const key = cleanTokens[0];
+                const valueStr = cleanTokens.slice(1).join(' ');
+
+                if (!key || !valueStr) {
+                  agent.messages.push({
+                    id: Math.random().toString(36).slice(2, 10),
+                    role: 'assistant',
+                    content:
+                      'Usage: `/config set <key> <value> [--global]`\nExample: `/config set model qwen3.5-2b` or `/set baseURL http://127.0.0.1:1234/v1`',
+                    timestamp: Date.now(),
+                  });
+                  setMessages([...agent.messages]);
+                  return;
+                }
+
+                let parsedVal: unknown = valueStr;
+                if (valueStr === 'true') parsedVal = true;
+                else if (valueStr === 'false') parsedVal = false;
+                else if (!isNaN(Number(valueStr))) parsedVal = Number(valueStr);
+
+                const scope = isGlobal ? 'global' : 'local';
+                const { targetPath, config: newConfig } = saveConfigFile(
+                  { [key]: parsedVal },
+                  scope,
+                  agent?.cfg?.workspace
+                );
+
+                if (agent) {
+                  agent.cfg = newConfig;
+                }
+
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: 'assistant',
+                  content: `✅ Updated \`${key}\` to \`${String(parsedVal)}\` in **${targetPath}** (${scope}). Config reloaded.`,
+                  timestamp: Date.now(),
+                });
+                setMessages([...agent.messages]);
+                return;
+              }
+
+              if (subCommand === 'reload') {
+                const reloaded = loadConfig(agent?.cfg?.workspace);
+                if (agent) agent.cfg = reloaded;
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: 'assistant',
+                  content: '✅ Configuration reloaded from disk.',
+                  timestamp: Date.now(),
+                });
+                setMessages([...agent.messages]);
+                return;
+              }
               return;
             }
             case 'exit':

@@ -29,6 +29,8 @@ const BUILTIN_COMMANDS: Command[] = [
   { name: '/export', description: 'Export chat to markdown' },
   { name: '/skills', description: 'Manage skills (F8)' },
   { name: '/reload', description: 'Reload configuration' },
+  { name: '/config', description: 'Show or edit config (/config set key val [--global])' },
+  { name: '/set', description: 'Quick-set config option (/set model <name>)' },
   { name: '/theme', description: 'Switch theme' },
   { name: '/connect', description: 'Connect a runtime provider' },
   { name: '/doctor', description: 'Health check (config + LM Studio)' },

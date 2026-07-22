@@ -90,7 +90,7 @@ export async function getModelsList(baseURL?: string, cfg?: Config): Promise<Mod
 
 export function formatModelsList(models: ModelInfo[]): string {
   if (models.length === 0) {
-    return 'No models returned. For local providers, ensure the runtime is running.\nFor remote providers, check your API key and base URL.\nUse /connect to pick a model.\nCLI: qwen-agent models';
+    return 'No models returned. For local providers, ensure the runtime is running.\nFor remote providers, check your API key and base URL.\nUse /connect to pick a model.\nCLI: nanogent models';
   }
   const lines = models.map((m) => {
     const loaded = m.default ? ' [loaded]' : '';
@@ -98,6 +98,5 @@ export function formatModelsList(models: ModelInfo[]): string {
     return `${m.id}${loaded}${meta}`;
   });
   lines.push('', 'Use /connect to switch models.');
-  lines.push('CLI: qwen-agent models --json');
   return lines.join('\n');
 }

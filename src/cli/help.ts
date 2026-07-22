@@ -1,8 +1,8 @@
 export function printRootHelp(): void {
-  console.log(`qwen-agent — coding agent (TUI + headless)
+  console.log(`nanogent — coding agent (TUI + headless)
 
 Usage:
-  qwen-agent <command> [options]
+  nanogent <command> [options]
 
 Commands:
   run       Run one task headlessly (for scripts and agents)
@@ -14,17 +14,17 @@ Options:
   -h, --help    Show help
 
 Examples:
-  qwen-agent tui
-  qwen-agent run --prompt "summarize package.json"
-  echo "list src files" | qwen-agent run --stdin --workspace .
-  qwen-agent models --base-url http://127.0.0.1:1234/v1
-  qwen-agent doctor --json
+  nanogent tui
+  nanogent run --prompt "summarize package.json"
+  echo "list src files" | nanogent run --stdin --workspace .
+  nanogent models --base-url http://127.0.0.1:1234/v1
+  nanogent doctor --json
 `);
 }
 
 export function printRunHelp(): void {
   console.log(`Usage:
-  qwen-agent run [options]
+  nanogent run [options]
 
 Options:
   -p, --prompt <text>       Task prompt (required unless --stdin)
@@ -40,16 +40,16 @@ Options:
   -h, --help                  Show help
 
 Examples:
-  qwen-agent run --prompt "run tests and fix failures" --workspace .
-  qwen-agent run -p "what does agent.ts do?" -w ./src --quiet
-  cat task.txt | qwen-agent run --stdin --workspace /repo
-  qwen-agent run --prompt "status" --json --model qwen3-8b
+  nanogent run --prompt "run tests and fix failures" --workspace .
+  nanogent run -p "what does agent.ts do?" -w ./src --quiet
+  cat task.txt | nanogent run --stdin --workspace /repo
+  nanogent run --prompt "status" --json --model qwen3-8b
 `);
 }
 
 export function printModelsHelp(): void {
   console.log(`Usage:
-  qwen-agent models [options]
+  nanogent models [options]
 
 Options:
       --base-url <url>    Runtime URL (default: from config)
@@ -57,34 +57,34 @@ Options:
   -h, --help              Show help
 
 Examples:
-  qwen-agent models
-  qwen-agent models --base-url http://127.0.0.1:1234/v1 --json
+  nanogent models
+  nanogent models --base-url http://127.0.0.1:1234/v1 --json
 `);
 }
 
 export function printDoctorHelp(): void {
   console.log(`Usage:
-  qwen-agent doctor [options]
+  nanogent doctor [options]
 
 Options:
       --json              JSON report on stdout
   -h, --help              Show help
 
 Examples:
-  qwen-agent doctor
-  qwen-agent doctor --json
+  nanogent doctor
+  nanogent doctor --json
 `);
 }
 
 export function printTuiHelp(): void {
   console.log(`Usage:
-  qwen-agent tui
+  nanogent tui
 
 Launches the full-screen OpenTUI interface.
 
 Examples:
-  qwen-agent
-  qwen-agent tui
+  nanogent
+  nanogent tui
 `);
 }
 

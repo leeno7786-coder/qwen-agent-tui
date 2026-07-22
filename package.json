@@ -1,12 +1,14 @@
 {
-  "name": "qwen-agent-tui",
+  "name": "nanogent",
   "version": "1.1.0-alpha.1",
-  "description": "A Claude Code-style terminal agent powered by local/remote OpenAI-compatible runtimes. Built with Bun + OpenTUI.",
+  "description": "Ultra-lightweight, scalable CLI/TUI coding agent optimized for tiny local models & remote runtimes",
   "module": "src/opentui/index.tsx",
   "type": "module",
   "main": "dist/main.js",
   "bin": {
-    "qwen-agent": "dist/main.js"
+    "nanogent": "dist/main.js",
+    "nanogent-tui": "dist/main.js",
+    "nano-agent": "dist/main.js"
   },
   "files": [
     "dist/",

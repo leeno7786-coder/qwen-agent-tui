@@ -1,11 +1,11 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * Entry point: headless subcommands for agents, TUI for interactive use.
  *
- *   qwen-agent              → TUI
- *   qwen-agent tui          → TUI
- *   qwen-agent run --prompt "…"
- *   qwen-agent models|doctor
+ *   nanogent              → TUI
+ *   nanogent tui          → TUI
+ *   nanogent run --prompt "…"
+ *   nanogent models|doctor
  */
 
 import { runCli } from './cli/index';

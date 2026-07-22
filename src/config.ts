@@ -131,7 +131,12 @@ export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
   const configPath = typeof pathOrConfig === 'string' ? pathOrConfig : undefined;
   const candidates = [
     configPath,
+    join(process.cwd(), '.nanogent.json'),
+    join(process.cwd(), 'nanogent.json'),
+    join(homedir(), '.nanogent.json'),
+    join(homedir(), '.nanogent', 'config.json'),
     join(process.cwd(), 'qwen-agent.json'),
+    join(process.cwd(), '.qwen-agent.json'),
     join(homedir(), '.qwen-agent.json'),
   ].filter(Boolean) as string[];
 
@@ -820,4 +825,34 @@ export function getAllConfiguredSkills(): Map<string, boolean> {
   }
 
   return map;
+}
+
+/**
+ * Save configuration updates to .nanogent.json (local or global).
+ * @param updates Object containing key-value pairs to set or update.
+ * @param scope 'global' (user's home directory ~/.nanogent.json) or 'local' (.nanogent.json in workspace/cwd).
+ * @param workspace Optional working directory for local scope.
+ */
+export function saveConfigFile(
+  updates: Record<string, unknown>,
+  scope: 'global' | 'local' = 'global',
+  workspace?: string
+): { targetPath: string; config: Config } {
+  const targetDir = scope === 'local' ? workspace || process.cwd() : homedir();
+  const targetPath = join(targetDir, '.nanogent.json');
+
+  let currentData: Record<string, unknown> = {};
+  if (existsSync(targetPath)) {
+    try {
+      currentData = JSON.parse(readFileSync(targetPath, 'utf-8'));
+    } catch {
+      currentData = {};
+    }
+  }
+
+  const updatedData = { ...currentData, ...updates };
+  writeFileSync(targetPath, JSON.stringify(updatedData, null, 2), 'utf-8');
+
+  const reloadedConfig = loadConfig(workspace);
+  return { targetPath, config: reloadedConfig };
 }

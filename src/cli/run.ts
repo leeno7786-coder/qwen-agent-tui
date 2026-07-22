@@ -51,8 +51,8 @@ export async function cmdRun(argv: string[]): Promise<number> {
   if (!prompt?.trim()) {
     cliError(
       'No prompt provided.',
-      '  qwen-agent run --prompt "your task here"\n' +
-        '  echo "your task" | qwen-agent run --stdin --workspace .'
+      '  nanogent run --prompt "your task here"\n' +
+        '  echo "your task" | nanogent run --stdin --workspace .'
     );
   }
 
