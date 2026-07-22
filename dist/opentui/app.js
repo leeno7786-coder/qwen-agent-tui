@@ -1,0 +1,1535 @@
+import { jsx as _jsx, jsxs as _jsxs } from "@opentui/react/jsx-runtime";
+/** @jsxImportSource @opentui/react */
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useKeyboard } from '@opentui/react';
+import { AgentCore } from '../agent.js';
+import { loadConfig, saveConfigFile } from '../config.js';
+import { NANOAGENT_BANNER } from '../cli/help.js';
+import { getModelCompactionSettings, countTokens } from '../llm.js';
+import { tools } from '../tools/index.js';
+import { saveSession, loadSessions, deleteSession, renameSession, copyToClipboard, exportToMarkdown, autoSaveSession, resumeSession, } from '../store.js';
+import { ChatScreen } from './chat-screen.js';
+import { ErrorBoundary } from './error-boundary.js';
+import { HelpOverlay, HistoryOverlay } from './overlays.js';
+import { SkillsOverlay } from './skills-overlay.js';
+import { ConnectOverlay } from './connect-overlay.js';
+import { StatusBar } from './status-bar.js';
+import { TodoSidebar } from './todo-sidebar.js';
+import { THEMES, DEFAULT_THEME } from './theme.js';
+import { loadSkills, getSkillCommands, getSkill } from '../skills.js';
+import { getProviderBaseURL } from '../providers.js';
+import { formatDoctorReport, formatModelsList, getDoctorReport, getModelsList, } from '../cli/reports.js';
+import { build_memory_graph, get_graph_stats, get_analysis_report } from '../graph/tools.js';
+/**
+ * Simple token estimation function.
+ * This is a rough approximation - in reality, tokenizers vary by model.
+ * @param text - Text to estimate tokens for
+ * @returns Estimated token count
+ */
+function estimateTokenCount(text) {
+    try {
+        return countTokens(text);
+    }
+    catch {
+        /* tokenizer not available */
+    }
+    return Math.ceil(text.length / 4);
+}
+/**
+ * Calculate the approximate token count of the entire conversation.
+ * Accounts for message format overhead (roles, tool_call structure).
+ * @param messages - Array of messages
+ * @returns Total estimated token count
+ */
+function calculateConversationTokenCount(messages) {
+    return messages.reduce((total, message) => {
+        let count = 0;
+        if (message.content) {
+            count += estimateTokenCount(message.content);
+        }
+        if (message.toolCalls) {
+            for (const toolCall of message.toolCalls) {
+                count += estimateTokenCount(toolCall.name || '');
+                if (toolCall.arguments) {
+                    count += estimateTokenCount(typeof toolCall.arguments === 'string'
+                        ? toolCall.arguments
+                        : JSON.stringify(toolCall.arguments));
+                }
+            }
+        }
+        if (message.role === 'tool' && message.content) {
+            count += estimateTokenCount(message.content);
+        }
+        // Per-message format overhead (role label, JSON structure, separators)
+        count += message.role.length + 4;
+        if (message.toolCallId)
+            count += message.toolCallId.length + 10;
+        if (message.toolCalls && message.toolCalls.length > 0)
+            count += message.toolCalls.length * 30;
+        return total + count;
+    }, 0);
+}
+/**
+ * Calculate per-message format overhead tokens (role labels, tool_call structure).
+ * More accurate than counting only content text.
+ */
+function estimateMessageOverhead(m) {
+    let overhead = 0;
+    overhead += m.role.length + 4; // "role: " prefix, "content" wrapper
+    if (m.toolCalls) {
+        overhead += m.toolCalls.length * 50; // tool_call JSON structure overhead
+        for (const tc of m.toolCalls) {
+            overhead += (tc.name?.length || 0) + 2;
+            if (tc.arguments)
+                overhead +=
+                    typeof tc.arguments === 'string'
+                        ? tc.arguments.length / 4
+                        : JSON.stringify(tc.arguments).length / 4;
+        }
+    }
+    if (m.role === 'tool' && m.toolCallId) {
+        overhead += m.toolCallId.length + 20;
+    }
+    return Math.ceil(overhead);
+}
+/**
+ * Calculate the total estimated token count for a conversation.
+ */
+function totalConversationTokens(messages) {
+    return (calculateConversationTokenCount(messages) +
+        messages.reduce((t, m) => t + estimateMessageOverhead(m), 0));
+}
+/**
+ * Generate a summary string from removed messages for compact display.
+ */
+function summarizeRemovedMessages(removed) {
+    const toolCalls = removed.filter((m) => m.toolCalls && m.toolCalls.length > 0);
+    const userMessages = removed.filter((m) => m.role === 'user');
+    const assistantMessages = removed.filter((m) => m.role === 'assistant' && m.content);
+    const parts = [];
+    if (toolCalls.length > 0) {
+        const toolNames = new Set();
+        toolCalls.forEach((tc) => tc.toolCalls?.forEach((t) => toolNames.add(t.name || 'unknown')));
+        parts.push(`Tools used: ${Array.from(toolNames).join(', ')}`);
+    }
+    if (userMessages.length > 0) {
+        const keyRequests = userMessages
+            .slice(-3)
+            .map((m) => m.content.slice(0, 100))
+            .filter(Boolean);
+        if (keyRequests.length > 0) {
+            parts.push(`Recent requests: ${keyRequests.join('; ')}`);
+        }
+    }
+    if (assistantMessages.length > 0) {
+        parts.push(`Completed ${assistantMessages.length} response cycles`);
+    }
+    return parts.length > 0
+        ? `Summary of ${removed.length} earlier messages: ${parts.join('. ')}.`
+        : '';
+}
+/**
+ * Build a compacted message array: system messages + optional summary + kept messages.
+ */
+function buildCompactMessages(agent, removed, kept) {
+    const sys = agent.messages.filter((m) => m.role === 'system');
+    const summary = summarizeRemovedMessages(removed);
+    return [
+        ...sys,
+        ...(summary
+            ? [
+                {
+                    id: Math.random().toString(36).slice(2, 10),
+                    role: 'user',
+                    content: `[Compact: ${removed.length} messages summarized. ${summary}]`,
+                    timestamp: Date.now(),
+                },
+            ]
+            : []),
+        ...kept,
+    ];
+}
+/**
+ * Check if the conversation needs auto-compaction and perform it if necessary.
+ * Uses rolling window approach: keeps recent messages and summarizes older ones.
+ */
+const MAX_MESSAGES_BEFORE_COMPACT = 200;
+function checkAndAutoCompact(agent, setMessages) {
+    try {
+        const settings = getModelCompactionSettings(agent.cfg.model, agent.cfg.maxTokens, {
+            baseURL: agent.cfg.baseURL,
+            smallModelMode: agent.cfg.smallModelMode,
+            modelParamBillions: agent.cfg.modelParamBillions,
+            modelContextLength: agent.cfg.modelContextLength,
+            modelMaxContextLength: agent.cfg.modelMaxContextLength,
+        });
+        const { compactThreshold, keepCount } = settings;
+        if (totalConversationTokens(agent.messages) <= compactThreshold &&
+            agent.messages.length <= MAX_MESSAGES_BEFORE_COMPACT)
+            return;
+        const rest = agent.messages.filter((m) => m.role !== 'system' && !(m.role === 'assistant' && !m.toolCalls && m.content.trim() === ''));
+        const kept = rest.slice(-keepCount);
+        const removed = rest.slice(0, -keepCount);
+        agent.messages = buildCompactMessages(agent, removed, kept);
+        setMessages([...agent.messages]);
+        if (process.env.QWEN_DEBUG_LLM) {
+            console.error(`[auto-compact] ${removed.length} removed, ${kept.length} kept, est -> ~${calculateConversationTokenCount(agent.messages)} tokens`);
+        }
+    }
+    catch (err) {
+        console.error('[auto-compact] compaction failed:', err);
+    }
+}
+export function App({ renderer }) {
+    const [overlay, setOverlay] = useState(null);
+    const [showTodos, setShowTodos] = useState(false);
+    const [mouseEnabled, setMouseEnabled] = useState(true);
+    const [theme, setTheme] = useState(() => {
+        const cfg = loadConfig();
+        return THEMES[cfg.theme || ''] || DEFAULT_THEME;
+    });
+    // Agent state
+    const [messages, setMessages] = useState([]);
+    const [state, setState] = useState('idle');
+    const cfg = loadConfig();
+    const [todos, setTodos] = useState([]);
+    const [toolResults, setToolResults] = useState([]);
+    const [elapsedMs, setElapsedMs] = useState(0);
+    const [currentTool, setCurrentTool] = useState();
+    const [lastUsage, setLastUsage] = useState();
+    const [totalUsage, setTotalUsage] = useState({
+        input_tokens: 0,
+        output_tokens: 0,
+    });
+    const [subAgents, setSubAgents] = useState([]);
+    const [sessions, setSessions] = useState([]);
+    const [currentSessionId, setCurrentSessionId] = useState(null);
+    const [selectedMessageIndex, setSelectedMessageIndex] = useState(null);
+    const [page, setPage] = useState(1);
+    const [paginated, setPaginated] = useState(false);
+    const displayMessageCount = useMemo(() => messages.filter((msg) => msg.role !== 'system' &&
+        msg.role !== 'tool' &&
+        !(msg.role === 'assistant' && !msg.toolCalls?.length && msg.content.trim() === '')).length, [messages]);
+    const [skills, setSkills] = useState(new Map());
+    const [, setSkillCommands] = useState([]);
+    const agentRef = useRef(null);
+    const timerRef = useRef(null);
+    const compactTimerRef = useRef(null);
+    const startTimeRef = useRef(0);
+    const abortControllerRef = useRef(null);
+    useEffect(() => {
+        const cfg = loadConfig();
+        const agent = new AgentCore(cfg);
+        agent.todos = todos;
+        agent.onUpdate = () => {
+            const lastMsg = agent.messages[agent.messages.length - 1];
+            if (process.env.QWEN_DEBUG_LLM) {
+                console.error('[app onUpdate] state:', agent.state, 'lastMsg.role:', lastMsg?.role, 'lastMsg.content:', JSON.stringify(lastMsg?.content?.slice(0, 60)));
+            }
+            setMessages([...agent.messages]);
+            setState(agent.state);
+            setTodos([...agent.todos]);
+            setCurrentTool(agent.currentTool);
+            setLastUsage(agent.lastUsage);
+            setTotalUsage({ ...agent.totalUsage });
+            setSubAgents(agent.getSubAgentSnapshot());
+        };
+        agent.onToolResult = (r) => {
+            setToolResults((prev) => [...prev.slice(-99), r]);
+        };
+        agent.init().then(() => {
+            agentRef.current = agent;
+            setMessages([...agent.messages]);
+        });
+        // Load skills
+        const loadedSkills = loadSkills();
+        setSkills(loadedSkills);
+        setSkillCommands(getSkillCommands(loadedSkills));
+        // Set up skill refresh handler
+        const handleSkillRefresh = () => {
+            const refreshedSkills = loadSkills();
+            setSkills(refreshedSkills);
+            setSkillCommands(getSkillCommands(refreshedSkills));
+        };
+        // Store refresh handler in global scope for skills overlay to call
+        globalThis['__refreshSkills'] = handleSkillRefresh;
+        // Graceful shutdown on SIGINT (Ctrl+C) — cleanup is also handled by main.ts
+        const handleSigint = () => {
+            agent.shutdown().catch(() => { });
+        };
+        process.on('SIGINT', handleSigint);
+        // Show initial welcome banner if no messages exist
+        if (agent.messages.length === 0) {
+            agent.messages.push({
+                id: 'welcome-banner',
+                role: 'assistant',
+                content: `\`\`\`text${NANOAGENT_BANNER}\`\`\`\nWelcome to **NanoAgent**! Type \`/help\` for commands or \`/config\` to manage settings.`,
+                timestamp: Date.now(),
+            });
+            setMessages([...agent.messages]);
+        }
+        // Warn if no API key is configured
+        if (!cfg.apiKey || cfg.apiKey.trim() === '') {
+            agent.messages.push({
+                id: Math.random().toString(36).slice(2, 10),
+                role: 'system',
+                content: '⚠️ No API key configured. Use /connect to select a provider and enter your API key.',
+                timestamp: Date.now(),
+            });
+            setMessages([...agent.messages]);
+        }
+        return () => {
+            process.off('SIGINT', handleSigint);
+            abortControllerRef.current?.abort();
+            if (timerRef.current) {
+                clearInterval(timerRef.current);
+                timerRef.current = null;
+            }
+            if (compactTimerRef.current) {
+                clearInterval(compactTimerRef.current);
+                compactTimerRef.current = null;
+            }
+            // Auto-save session on exit
+            if (agent && agent.messages.length > 0) {
+                autoSaveSession(agent.messages, agent.todos, agent.cfg.workspace);
+            }
+            // Clean up global skill refresh handler
+            delete globalThis['__refreshSkills'];
+        };
+    }, []);
+    useEffect(() => {
+        if (state === 'idle' || state === 'error' || state === 'waiting_for_user') {
+            if (timerRef.current) {
+                clearInterval(timerRef.current);
+                timerRef.current = null;
+            }
+            setElapsedMs(0);
+            return;
+        }
+        if (!timerRef.current) {
+            startTimeRef.current = Date.now();
+            timerRef.current = setInterval(() => {
+                setElapsedMs(Date.now() - startTimeRef.current);
+            }, 500);
+        }
+    }, [state]);
+    useEffect(() => {
+        compactTimerRef.current = setInterval(() => {
+            if (agentRef.current) {
+                checkAndAutoCompact(agentRef.current, setMessages);
+            }
+        }, 10000);
+        return () => {
+            if (compactTimerRef.current) {
+                clearInterval(compactTimerRef.current);
+                compactTimerRef.current = null;
+            }
+        };
+    }, []);
+    // Auto-enable pagination when messages exceed threshold
+    const PAGINATION_THRESHOLD = 100;
+    const MESSAGES_PER_PAGE = 50;
+    useEffect(() => {
+        setPaginated(messages.length > PAGINATION_THRESHOLD);
+    }, [messages.length]);
+    // Reset to page 1 when pagination is disabled
+    useEffect(() => {
+        if (!paginated) {
+            setPage(1);
+        }
+    }, [paginated]);
+    // Auto-save session periodically
+    useEffect(() => {
+        const agent = agentRef.current;
+        if (!agent || agent.messages.length <= 2)
+            return;
+        const timer = setTimeout(() => {
+            const session = {
+                id: 'autosave',
+                messages: agent.messages,
+                todos: agent.todos.filter((t) => !t.done),
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+            };
+            saveSession(session);
+        }, 3000);
+        return () => clearTimeout(timer);
+    }, [messages, todos]);
+    // Global keyboard shortcuts
+    useKeyboard((keyEvent) => {
+        if (overlay) {
+            if (keyEvent.name === 'escape' || keyEvent.name === 'Escape') {
+                setOverlay(null);
+                keyEvent.preventDefault?.();
+            }
+            return;
+        }
+        if (keyEvent.name === 'escape' || keyEvent.name === 'Escape') {
+            const busy = state !== 'idle' && state !== 'error' && state !== 'waiting_for_user';
+            if (busy) {
+                abortControllerRef.current?.abort();
+                keyEvent.preventDefault?.();
+            }
+            return;
+        }
+        if (keyEvent.name === 'f1' || keyEvent.name === 'F1') {
+            setOverlay('help');
+            keyEvent.preventDefault?.();
+        }
+        else if (keyEvent.name === 'f2' || keyEvent.name === 'F2') {
+            const agent = agentRef.current;
+            if (agent) {
+                agent.messages = agent.messages.filter((m) => m.role === 'system');
+                setMessages([...agent.messages]);
+            }
+        }
+        else if (keyEvent.name === 'f4' || keyEvent.name === 'F4') {
+            setShowTodos((s) => !s);
+        }
+        else if (keyEvent.name === 'f5' || keyEvent.name === 'F5') {
+            handleSave();
+        }
+        else if (keyEvent.name === 'f6' || keyEvent.name === 'F6') {
+            setSessions(loadSessions());
+            setOverlay('history');
+        }
+        else if (keyEvent.name === 'f8' || keyEvent.name === 'F8') {
+            setOverlay('skills');
+        }
+        else if (keyEvent.name === 'f7' || keyEvent.name === 'F7') {
+            const next = !mouseEnabled;
+            renderer.useMouse = next;
+            setMouseEnabled(next);
+        }
+        else if (keyEvent.name === 'f9' || keyEvent.name === 'F9') {
+            const names = Object.keys(THEMES);
+            const idx = names.indexOf(theme.name);
+            const next = names[(idx + 1) % names.length];
+            setTheme(THEMES[next]);
+        }
+        else if (keyEvent.name === 'f10' || keyEvent.name === 'F10') {
+            const agent = agentRef.current;
+            if (agent) {
+                autoSaveSession(agent.messages, agent.todos, cfg.workspace);
+            }
+            process.exit(0);
+        }
+        // Ctrl+Up/Down: Navigate message selection
+        if (keyEvent.ctrl) {
+            if (keyEvent.name === 'Up' || keyEvent.name === 'ArrowUp') {
+                const agent = agentRef.current;
+                if (agent && agent.messages.length > 0) {
+                    const nonSystem = agent.messages.filter((m) => m.role !== 'system');
+                    setSelectedMessageIndex((prev) => {
+                        const current = prev !== null ? prev : nonSystem.length - 1;
+                        const newIndex = Math.min(current + 1, nonSystem.length - 1);
+                        return newIndex;
+                    });
+                    keyEvent.preventDefault?.();
+                    keyEvent.stopPropagation?.();
+                }
+            }
+            else if (keyEvent.name === 'Down' || keyEvent.name === 'ArrowDown') {
+                const agent = agentRef.current;
+                if (agent && agent.messages.length > 0) {
+                    setSelectedMessageIndex((prev) => {
+                        const current = prev !== null ? prev : 0;
+                        const newIndex = Math.max(current - 1, 0);
+                        return newIndex;
+                    });
+                    keyEvent.preventDefault?.();
+                    keyEvent.stopPropagation?.();
+                }
+            }
+            else if (keyEvent.name === 'c' || keyEvent.name === 'C') {
+                // Ctrl+C: Copy selected message
+                const agent = agentRef.current;
+                if (agent && selectedMessageIndex !== null) {
+                    const nonSystem = agent.messages.filter((m) => m.role !== 'system');
+                    const selectedMessage = nonSystem[selectedMessageIndex];
+                    if (selectedMessage) {
+                        const success = copyToClipboard(selectedMessage.content);
+                        if (!success) {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'system',
+                                content: `Copied message ${selectedMessage.id.slice(0, 8)} to clipboard.`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        setSelectedMessageIndex(null);
+                    }
+                    keyEvent.preventDefault?.();
+                    keyEvent.stopPropagation?.();
+                }
+            }
+        }
+        // Escape: Clear message selection
+        if ((keyEvent.name === 'escape' || keyEvent.name === 'Escape') &&
+            selectedMessageIndex !== null) {
+            setSelectedMessageIndex(null);
+            keyEvent.preventDefault?.();
+            keyEvent.stopPropagation?.();
+        }
+    });
+    const handleSave = useCallback(() => {
+        const agent = agentRef.current;
+        if (!agent)
+            return;
+        const id = `session-${Date.now()}`;
+        const session = {
+            id,
+            messages: agent.messages,
+            todos: agent.todos.filter((t) => !t.done),
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+        };
+        saveSession(session);
+        setSessions(loadSessions());
+        setCurrentSessionId(id);
+        const msg = {
+            id: Math.random().toString(36).slice(2, 10),
+            role: 'system',
+            content: `Session saved as ${id}.`,
+            timestamp: Date.now(),
+        };
+        agent.messages.push(msg);
+        setMessages([...agent.messages]);
+    }, []);
+    const handleRename = useCallback((newName) => {
+        const agent = agentRef.current;
+        if (!agent)
+            return;
+        const name = newName.trim();
+        if (!name) {
+            agent.messages.push({
+                id: Math.random().toString(36).slice(2, 10),
+                role: 'system',
+                content: 'Usage: /rename [new-name]. Provide a new name for the current session.',
+                timestamp: Date.now(),
+            });
+            setMessages([...agent.messages]);
+            return;
+        }
+        // If we have a current session, rename it
+        if (currentSessionId) {
+            const success = renameSession(currentSessionId, name);
+            if (success) {
+                setCurrentSessionId(name);
+                setSessions(loadSessions());
+                agent.messages.push({
+                    id: Math.random().toString(36).slice(2, 10),
+                    role: 'system',
+                    content: `Session renamed from ${currentSessionId} to ${name}.`,
+                    timestamp: Date.now(),
+                });
+                setMessages([...agent.messages]);
+            }
+            else {
+                agent.messages.push({
+                    id: Math.random().toString(36).slice(2, 10),
+                    role: 'system',
+                    content: `Failed to rename session. Session '${currentSessionId}' not found.`,
+                    timestamp: Date.now(),
+                });
+                setMessages([...agent.messages]);
+            }
+            return;
+        }
+        // Otherwise, save current messages as a new session with the given name
+        const id = name;
+        const session = {
+            id,
+            messages: agent.messages,
+            todos: agent.todos.filter((t) => !t.done),
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+        };
+        saveSession(session);
+        setSessions(loadSessions());
+        setCurrentSessionId(id);
+        agent.messages.push({
+            id: Math.random().toString(36).slice(2, 10),
+            role: 'system',
+            content: `Session saved as ${id}.`,
+            timestamp: Date.now(),
+        });
+        setMessages([...agent.messages]);
+    }, [currentSessionId]);
+    const handleLoad = useCallback((session) => {
+        const agent = agentRef.current;
+        if (!agent)
+            return;
+        agent.messages = session.messages;
+        agent.todos = session.todos;
+        setMessages([...agent.messages]);
+        setTodos([...agent.todos]);
+        setToolResults([]);
+        // Trigger update to sync todo message and refresh UI
+        agent.onUpdate?.();
+        setOverlay(null);
+    }, []);
+    const handleDeleteSession = useCallback((id) => {
+        deleteSession(id);
+        setSessions(loadSessions());
+    }, []);
+    const handleSubmit = useCallback(async (text) => {
+        const agent = agentRef.current;
+        if (!agent || state !== 'idle')
+            return;
+        try {
+            if (text.startsWith('/')) {
+                const command = text.trim().substring(1).split(' ')[0];
+                const args = text
+                    .trim()
+                    .substring(1 + command.length)
+                    .trim();
+                switch (command) {
+                    case 'help':
+                        setOverlay('help');
+                        return;
+                    case 'clear':
+                        if (agent) {
+                            agent.messages = agent.messages.filter((m) => m.role === 'system');
+                            setMessages([...agent.messages]);
+                            setToolResults([]);
+                        }
+                        return;
+                    case 'compact': {
+                        if (!agent)
+                            return;
+                        const before = agent.messages.length;
+                        checkAndAutoCompact(agent, setMessages);
+                        const compacted = before - agent.messages.length;
+                        if (compacted > 0) {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `Manually compacted: ${compacted} messages removed.`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        else {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: 'Compact: no compaction needed — conversation is within context budget.',
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        return;
+                    }
+                    case 'connect':
+                        setOverlay('connect');
+                        return;
+                    case 'doctor': {
+                        const report = await getDoctorReport(agent.cfg);
+                        agent.messages.push({
+                            id: Math.random().toString(36).slice(2, 10),
+                            role: 'assistant',
+                            content: formatDoctorReport(report),
+                            timestamp: Date.now(),
+                        });
+                        setMessages([...agent.messages]);
+                        return;
+                    }
+                    case 'models': {
+                        const models = await getModelsList(undefined, agent.cfg);
+                        agent.messages.push({
+                            id: Math.random().toString(36).slice(2, 10),
+                            role: 'assistant',
+                            content: formatModelsList(models),
+                            timestamp: Date.now(),
+                        });
+                        setMessages([...agent.messages]);
+                        return;
+                    }
+                    case 'auto': {
+                        const task = args.trim();
+                        if (task) {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: 'Autonomous mode enabled. You may iterate tools freely to complete the task.',
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                            // Strip /auto and run the task
+                            await agent.run(task);
+                        }
+                        else {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: 'Usage: /auto [task description] — runs the agent in autonomous mode.',
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        return;
+                    }
+                    case 'todo':
+                        if (args) {
+                            agent.addTodo(args);
+                        }
+                        else {
+                            setShowTodos((s) => !s);
+                        }
+                        return;
+                    case 'skill': {
+                        const skills = loadSkills();
+                        const content = skills.size > 0
+                            ? `Available skills: ${Array.from(skills.keys()).join(', ')}`
+                            : 'No skills loaded.';
+                        agent.messages.push({
+                            id: Math.random().toString(36).slice(2, 10),
+                            role: 'assistant',
+                            content,
+                            timestamp: Date.now(),
+                        });
+                        setMessages([...agent.messages]);
+                        return;
+                    }
+                    case 'save':
+                        handleSave();
+                        return;
+                    case 'load':
+                        setSessions(loadSessions());
+                        setOverlay('history');
+                        return;
+                    case 'cd': {
+                        let target = args.trim();
+                        if ((target.startsWith('"') && target.endsWith('"')) ||
+                            (target.startsWith("'") && target.endsWith("'"))) {
+                            target = target.slice(1, -1).trim();
+                        }
+                        if (!target) {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `Current workspace: ${agent.cfg.workspace}`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                            return;
+                        }
+                        // Use the change_workspace tool instead of direct reconfigure
+                        // This ensures consistent workspace handling across all tools
+                        const changeWorkspaceTool = tools.find((t) => t.name === 'change_workspace');
+                        if (!changeWorkspaceTool) {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `change_workspace tool not found`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                            return;
+                        }
+                        const toolResult = agent.cfg.allowedPaths?.length
+                            ? changeWorkspaceTool.execute({ path: target }, agent.cfg.workspace, agent.cfg)
+                            : changeWorkspaceTool.execute({ path: target }, agent.cfg.workspace);
+                        try {
+                            const result = JSON.parse(toolResult);
+                            if (result.ok && result.workspace) {
+                                void agent.reconfigure({ workspace: result.workspace });
+                                agent.todos = [];
+                                setTodos([]);
+                                agent.messages.push({
+                                    id: Math.random().toString(36).slice(2, 10),
+                                    role: 'assistant',
+                                    content: `Workspace changed to ${result.workspace}`,
+                                    timestamp: Date.now(),
+                                });
+                                setMessages([...agent.messages]);
+                                return;
+                            }
+                            else {
+                                agent.messages.push({
+                                    id: Math.random().toString(36).slice(2, 10),
+                                    role: 'assistant',
+                                    content: `Failed to change workspace: ${result.error || 'Unknown error'}`,
+                                    timestamp: Date.now(),
+                                });
+                                setMessages([...agent.messages]);
+                                return;
+                            }
+                        }
+                        catch {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `Failed to parse workspace change result: ${toolResult}`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                            return;
+                        }
+                    }
+                    case 'theme': {
+                        const tname = args.trim() || '';
+                        const next = THEMES[tname];
+                        if (next) {
+                            setTheme(next);
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `Theme set to ${next.name}.`,
+                                timestamp: Date.now(),
+                            });
+                        }
+                        else {
+                            const names = Object.keys(THEMES).join(', ');
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `Available themes: ${names}`,
+                                timestamp: Date.now(),
+                            });
+                        }
+                        setMessages([...agent.messages]);
+                        return;
+                    }
+                    case 'export': {
+                        if (!agent)
+                            return;
+                        try {
+                            const filePath = exportToMarkdown(agent.messages, args || undefined);
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `Chat exported to ${filePath}`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        catch (err) {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `Failed to export chat: ${err}`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        return;
+                    }
+                    case 'skills':
+                        setOverlay('skills');
+                        return;
+                    case 'reload': {
+                        await agent.reloadFromDisk();
+                        const loadedSkills = loadSkills();
+                        setSkills(loadedSkills);
+                        setSkillCommands(getSkillCommands(loadedSkills));
+                        const ctxNote = agent.cfg.modelContextLength
+                            ? ` · ${Math.round(agent.cfg.modelContextLength / 1000)}k ctx`
+                            : '';
+                        agent.messages.push({
+                            id: Math.random().toString(36).slice(2, 10),
+                            role: 'assistant',
+                            content: `Reloaded config, skills, and LM Studio metadata.\n` +
+                                `model: ${agent.cfg.model}${ctxNote} · small_model_mode: ${agent.cfg.smallModelMode ?? false}\n` +
+                                `${loadedSkills.size} skills loaded. Use /doctor for full health report.`,
+                            timestamp: Date.now(),
+                        });
+                        setMessages([...agent.messages]);
+                        return;
+                    }
+                    case 'sessions': {
+                        // List available sessions
+                        const sessions = loadSessions().filter((s) => !s.id.startsWith('autosave-'));
+                        if (sessions.length > 0) {
+                            const list = sessions
+                                .map((s) => `${new Date(s.updatedAt).toLocaleDateString()} - ${s.id}`)
+                                .join('\n');
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `Available sessions:\n${list}\n\nTo resume: /resume [id]`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        else {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: 'No saved sessions found. Your current session will be auto-saved on exit.',
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        return;
+                    }
+                    case 'new': {
+                        // Start a new session - clear messages and todos
+                        agent.messages = [];
+                        agent.todos = [];
+                        setMessages([]);
+                        setTodos([]);
+                        agent.messages.push({
+                            id: Math.random().toString(36).slice(2, 10),
+                            role: 'assistant',
+                            content: 'Started a new session. Previous conversation cleared.',
+                            timestamp: Date.now(),
+                        });
+                        setMessages([...agent.messages]);
+                        return;
+                    }
+                    case 'delete-session': {
+                        // Delete a saved session
+                        const id = args?.trim();
+                        if (!id) {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: 'Usage: /delete-session [id]. List sessions with /sessions.',
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                            return;
+                        }
+                        const sessions = loadSessions();
+                        const sessionExists = sessions.some((s) => s.id === id);
+                        if (sessionExists) {
+                            deleteSession(id);
+                            setSessions(loadSessions());
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `Session '${id}' deleted.`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        else {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `Session '${id}' not found. Use /sessions to list available sessions.`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        return;
+                    }
+                    case 'resume': {
+                        // Resume latest or specific session
+                        const session = resumeSession(args?.trim());
+                        if (session) {
+                            agent.messages = session.messages;
+                            agent.todos = session.todos;
+                            setMessages([...agent.messages]);
+                            setTodos([...agent.todos]);
+                            setCurrentSessionId(session.id);
+                            agent.onUpdate?.();
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `Resumed session: ${session.id} (${session.messages.length} messages)`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        else {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: args?.trim()
+                                    ? `Session '${args.trim()}' not found.`
+                                    : 'No sessions to resume.',
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        return;
+                    }
+                    case 'rename': {
+                        handleRename(args || '');
+                        return;
+                    }
+                    case 'copy': {
+                        // Copy message content to clipboard by message ID
+                        const targetId = args?.trim();
+                        if (!targetId) {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: 'Usage: /copy [message-id]. Use /copy with a message ID to copy its content to clipboard.',
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                            return;
+                        }
+                        // Find message by ID (full or partial match)
+                        const message = agent.messages.find((m) => m.id.includes(targetId) || m.id === targetId);
+                        if (message) {
+                            const success = copyToClipboard(message.content);
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: success
+                                    ? `Copied message ${message.id.slice(0, 8)} to clipboard.`
+                                    : `Failed to copy to clipboard. Content:\n${message.content.slice(0, 500)}${message.content.length > 500 ? '...' : ''}`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        else {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `Message with ID '${targetId}' not found. Use the full message ID or a unique partial match.`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        return;
+                    }
+                    case 'todos': {
+                        // Show current todos in chat
+                        if (todos.length > 0) {
+                            const todoList = todos
+                                .map((t) => `${t.done ? '✓' : '✗'} ${t.id}: ${t.text}`)
+                                .join('\n');
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `Current Todos:\n${todoList}\n\nUse /todo [text] to add, /clear-todos to remove all.`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        else {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: 'No todos. Add one with /todo [description].',
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        return;
+                    }
+                    case 'clear-todos': {
+                        // Clear all todos
+                        agent.todos = [];
+                        setTodos([]);
+                        agent.messages.push({
+                            id: Math.random().toString(36).slice(2, 10),
+                            role: 'assistant',
+                            content: 'All todos cleared.',
+                            timestamp: Date.now(),
+                        });
+                        setMessages([...agent.messages]);
+                        return;
+                    }
+                    case 'unload': {
+                        // Unload a skill: /unload [name]
+                        const unloadName = args.trim();
+                        if (!unloadName) {
+                            const active = agent.skillManager.activeNames();
+                            if (active.length > 0) {
+                                agent.messages.push({
+                                    id: Math.random().toString(36).slice(2, 10),
+                                    role: 'assistant',
+                                    content: `Active skills: ${active.join(', ')}\nUsage: /unload [skill-name]`,
+                                    timestamp: Date.now(),
+                                });
+                            }
+                            else {
+                                agent.messages.push({
+                                    id: Math.random().toString(36).slice(2, 10),
+                                    role: 'assistant',
+                                    content: 'No active skills to unload.',
+                                    timestamp: Date.now(),
+                                });
+                            }
+                            setMessages([...agent.messages]);
+                            return;
+                        }
+                        const unloaded = agent.skillManager.unload(unloadName, agent.messages, agent.isSmallModel, undefined) ||
+                            agent.skillManager.unload(`skill:${unloadName}`, agent.messages, agent.isSmallModel, undefined);
+                        agent.messages.push({
+                            id: Math.random().toString(36).slice(2, 10),
+                            role: 'assistant',
+                            content: unloaded
+                                ? `Skill "${unloadName}" unloaded.`
+                                : `Skill "${unloadName}" not found in active skills.`,
+                            timestamp: Date.now(),
+                        });
+                        setMessages([...agent.messages]);
+                        return;
+                    }
+                    case 'skill-load': {
+                        // Load a skill: /skill-load [name]
+                        const loadName = args.trim();
+                        if (!loadName) {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: 'Usage: /skill-load [skill-name]. Use /skills to see available skills.',
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                            return;
+                        }
+                        const skill = getSkill(loadName) || skills.get(loadName);
+                        if (skill) {
+                            const loaded = agent.skillManager.load(skill, agent.messages, agent.isSmallModel, undefined);
+                            if (loaded) {
+                                const skillDesc = skill.description || '';
+                                agent.messages.push({
+                                    id: Math.random().toString(36).slice(2, 10),
+                                    role: 'assistant',
+                                    content: `**Skill Loaded: ${skill.name}**\n\n${skillDesc}\n\nWhat would you like to do with this skill?`,
+                                    timestamp: Date.now(),
+                                });
+                            }
+                            else {
+                                agent.messages.push({
+                                    id: Math.random().toString(36).slice(2, 10),
+                                    role: 'assistant',
+                                    content: `Skill "${loadName}" is already loaded.`,
+                                    timestamp: Date.now(),
+                                });
+                            }
+                        }
+                        else {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `Skill "${loadName}" not found. Use /skills to see available skills.`,
+                                timestamp: Date.now(),
+                            });
+                        }
+                        setMessages([...agent.messages]);
+                        return;
+                    }
+                    case 'config':
+                    case 'set': {
+                        const trimmedArgs = args.trim();
+                        const parts = trimmedArgs.split(/\s+/);
+                        const subCommand = command === 'set' ? 'set' : parts[0]?.toLowerCase() || 'show';
+                        if (subCommand === 'show' || !trimmedArgs) {
+                            const currentCfg = agent?.cfg || cfg;
+                            const info = [
+                                '### ⚙️ nanogent Configuration',
+                                '',
+                                `- **Model**: \`${currentCfg.model || 'auto-detect'}\``,
+                                `- **Base URL**: \`${currentCfg.baseURL || 'http://127.0.0.1:1234/v1'}\``,
+                                `- **Provider**: \`${currentCfg.baseURL?.includes('openrouter') ? 'OpenRouter' : 'LM Studio / Local'}\``,
+                                `- **Workspace**: \`${currentCfg.workspace || process.cwd()}\``,
+                                `- **API Key**: ${currentCfg.apiKey ? '`••••••••` (set)' : '*(not set)*'}`,
+                                `- **Temperature**: \`${currentCfg.temperature ?? 0.7}\``,
+                                `- **Max Tokens**: \`${currentCfg.maxTokens ?? 4096}\``,
+                                '',
+                                '**Configuration Files:**',
+                                '- Local: `.nanogent.json` in workspace root',
+                                '- Global: `~/.nanogent.json` in home directory',
+                                '',
+                                '**Usage:**',
+                                '- `/config set model <name>` (set model locally)',
+                                '- `/config set model <name> --global` (set model globally)',
+                                '- `/config set baseURL http://localhost:1234/v1`',
+                                '- `/config reload` (reload from disk)',
+                            ].join('\n');
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: info,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                            return;
+                        }
+                        if (subCommand === 'set') {
+                            const setTokens = command === 'set' ? parts : parts.slice(1);
+                            const isGlobal = setTokens.includes('--global');
+                            const cleanTokens = setTokens.filter((t) => t !== '--global');
+                            const key = cleanTokens[0];
+                            const valueStr = cleanTokens.slice(1).join(' ');
+                            if (!key || !valueStr) {
+                                agent.messages.push({
+                                    id: Math.random().toString(36).slice(2, 10),
+                                    role: 'assistant',
+                                    content: 'Usage: `/config set <key> <value> [--global]`\nExample: `/config set model qwen3.5-2b` or `/set baseURL http://127.0.0.1:1234/v1`',
+                                    timestamp: Date.now(),
+                                });
+                                setMessages([...agent.messages]);
+                                return;
+                            }
+                            let parsedVal = valueStr;
+                            if (valueStr === 'true')
+                                parsedVal = true;
+                            else if (valueStr === 'false')
+                                parsedVal = false;
+                            else if (!isNaN(Number(valueStr)))
+                                parsedVal = Number(valueStr);
+                            const scope = isGlobal ? 'global' : 'local';
+                            const { targetPath, config: newConfig } = saveConfigFile({ [key]: parsedVal }, scope, agent?.cfg?.workspace);
+                            if (agent) {
+                                agent.cfg = newConfig;
+                            }
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `✅ Updated \`${key}\` to \`${String(parsedVal)}\` in **${targetPath}** (${scope}). Config reloaded.`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                            return;
+                        }
+                        if (subCommand === 'reload') {
+                            const reloaded = loadConfig(agent?.cfg?.workspace);
+                            if (agent)
+                                agent.cfg = reloaded;
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: '✅ Configuration reloaded from disk.',
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                            return;
+                        }
+                        return;
+                    }
+                    case 'exit':
+                        // Auto-save before exiting
+                        if (agent) {
+                            autoSaveSession(agent.messages, agent.todos, cfg.workspace);
+                        }
+                        process.exit(0);
+                        return;
+                    case 'graph': {
+                        const sub = args.split(' ')[0].toLowerCase();
+                        const ws = agent?.cfg?.workspace || process.cwd();
+                        if (sub === 'build') {
+                            const result = await build_memory_graph({ workspace: ws });
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `**Memory Graph — Build**\n\n${result.message}\n- **Nodes:** ${result.nodes ?? '—'}\n- **Edges:** ${result.edges ?? '—'}\n- **Time:** ${result.time != null ? `${result.time}ms` : '—'}`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        else if (sub === 'stats') {
+                            const stats = await get_graph_stats({ workspace: ws });
+                            const byType = Object.entries(stats.nodesByType)
+                                .map(([k, v]) => `  ${k}: ${v}`)
+                                .join('\n');
+                            const byLang = Object.entries(stats.nodesByLanguage)
+                                .map(([k, v]) => `  ${k}: ${v}`)
+                                .join('\n');
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `**Memory Graph — Stats**\n\n- **Nodes:** ${stats.nodeCount}\n- **Edges:** ${stats.edgeCount}\n\n**By Type:**\n${byType || '  —'}\n\n**By Language:**\n${byLang || '  —'}`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        else if (sub === 'report') {
+                            const result = await get_analysis_report({ workspace: ws });
+                            if (result.ok && result.report) {
+                                agent.messages.push({
+                                    id: Math.random().toString(36).slice(2, 10),
+                                    role: 'assistant',
+                                    content: result.report,
+                                    timestamp: Date.now(),
+                                });
+                                setMessages([...agent.messages]);
+                            }
+                            else {
+                                agent.messages.push({
+                                    id: Math.random().toString(36).slice(2, 10),
+                                    role: 'assistant',
+                                    content: `Graph report error: ${result.error || 'unknown'}`,
+                                    timestamp: Date.now(),
+                                });
+                                setMessages([...agent.messages]);
+                            }
+                        }
+                        else {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: `**Memory Graph**\n\nUsage:\n  \`/graph build\`   — Build/rebuild the memory graph from codebase\n  \`/graph stats\`   — Show node/edge counts by type and language\n  \`/graph report\`  — Full analysis report with communities, god nodes, and surprising connections`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                        }
+                        return;
+                    }
+                    case 'mcp': {
+                        const states = agent.mcpStates;
+                        const mgr = agent.mcpManager;
+                        if (!states || states.length === 0) {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: 'No MCP servers configured. Add `mcp` to ~/.qwen-agent.json.\n\nExample:\n```json\n"mcp": {\n  "filesystem": {\n    "type": "local",\n    "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]\n  },\n  "remote": {\n    "type": "remote",\n    "url": "https://mcp.example.com/sse"\n  }\n}\n```\n\nYou can also ask me to add an MCP server — just describe what you need and I\'ll use manage_mcp to configure it.',
+                                timestamp: Date.now(),
+                            });
+                        }
+                        else {
+                            const connected = mgr?.connectedCount ?? 0;
+                            const totalTools = mgr?.totalTools ?? 0;
+                            const lines = [
+                                `## MCP Servers (${connected} connected, ${totalTools} tools)`,
+                                '',
+                                ...states.map((s) => {
+                                    const icon = s.status === 'connected' ? '+' : s.status === 'error' ? '!' : '-';
+                                    const info = s.serverInfo
+                                        ? ` (${s.serverInfo.name}${s.serverInfo.version ? ` v${s.serverInfo.version}` : ''})`
+                                        : '';
+                                    const err = s.error ? ` - ${s.error}` : '';
+                                    return `- [${icon}] ${s.name}${info}: ${s.status}, ${s.toolCount} tools${err}`;
+                                }),
+                                '',
+                                'Commands: `/mcp-add`, `/mcp-remove`, or ask me to manage MCP servers.',
+                            ];
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: lines.join('\n'),
+                                timestamp: Date.now(),
+                            });
+                        }
+                        setMessages([...agent.messages]);
+                        return;
+                    }
+                    case 'mcp-add': {
+                        if (!args) {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: 'Usage: `/mcp-add <name> <type> <connection>`\n\nExamples:\n- `/mcp-add filesystem local npx -y @modelcontextprotocol/server-filesystem /home/user/docs`\n- `/mcp-add github remote https://mcp.github.com/sse`\n\nOr just ask me in natural language: "Add an MCP server for reading files in /tmp"',
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                            return;
+                        }
+                        const parts = args.split(/\s+/);
+                        const name = parts[0];
+                        const type = parts[1];
+                        if (type === 'local') {
+                            const cmdParts = parts.slice(2);
+                            if (cmdParts.length === 0) {
+                                agent.messages.push({
+                                    id: Math.random().toString(36).slice(2, 10),
+                                    role: 'assistant',
+                                    content: 'Local servers need a command. Example: `/mcp-add filesystem local npx -y @modelcontextprotocol/server-filesystem /path`',
+                                    timestamp: Date.now(),
+                                });
+                                setMessages([...agent.messages]);
+                                return;
+                            }
+                            const result = await agent.executeToolDirect('manage_mcp', {
+                                action: 'add',
+                                name,
+                                type: 'local',
+                                command: cmdParts,
+                            });
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: result ?? 'Added. Restart to connect.',
+                                timestamp: Date.now(),
+                            });
+                        }
+                        else if (type === 'remote') {
+                            const url = parts[2];
+                            if (!url) {
+                                agent.messages.push({
+                                    id: Math.random().toString(36).slice(2, 10),
+                                    role: 'assistant',
+                                    content: 'Remote servers need a URL. Example: `/mcp-add api remote https://mcp.example.com/sse`',
+                                    timestamp: Date.now(),
+                                });
+                                setMessages([...agent.messages]);
+                                return;
+                            }
+                            const result = await agent.executeToolDirect('manage_mcp', {
+                                action: 'add',
+                                name,
+                                type: 'remote',
+                                url,
+                            });
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: result ?? 'Added. Restart to connect.',
+                                timestamp: Date.now(),
+                            });
+                        }
+                        else {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: "Type must be 'local' or 'remote'. Example: `/mcp-add filesystem local npx -y ...`",
+                                timestamp: Date.now(),
+                            });
+                        }
+                        setMessages([...agent.messages]);
+                        return;
+                    }
+                    case 'mcp-remove': {
+                        if (!args) {
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: 'Usage: `/mcp-remove <server-name>` — e.g. `/mcp-remove filesystem`',
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                            return;
+                        }
+                        const result = await agent.executeToolDirect('manage_mcp', {
+                            action: 'remove',
+                            name: args.trim(),
+                        });
+                        agent.messages.push({
+                            id: Math.random().toString(36).slice(2, 10),
+                            role: 'assistant',
+                            content: result ?? 'Removed. Restart to apply.',
+                            timestamp: Date.now(),
+                        });
+                        setMessages([...agent.messages]);
+                        return;
+                    }
+                    default: {
+                        // Handle skill loading by name: /<skill-name>, /skill:name, /skill [name], or /skills [name]
+                        const cleanSkillName = command.replace(/^skill:/, '');
+                        const targetSkill = getSkill(cleanSkillName) ||
+                            skills.get(cleanSkillName) ||
+                            ((command === 'skills' || command === 'skill') && args
+                                ? getSkill(args.trim().replace(/^skill:/, '')) ||
+                                    skills.get(args.trim().replace(/^skill:/, ''))
+                                : undefined);
+                        if (targetSkill) {
+                            const loaded = agent.skillManager.load(targetSkill, agent.messages, agent.isSmallModel, undefined);
+                            const skillDesc = targetSkill.welcomeMessage || targetSkill.description || '';
+                            agent.messages.push({
+                                id: Math.random().toString(36).slice(2, 10),
+                                role: 'assistant',
+                                content: loaded
+                                    ? `**Skill Loaded: ${targetSkill.name}**\n\n${skillDesc}\n\nWhat would you like to do with this skill?`
+                                    : `Skill "${targetSkill.name}" is already loaded.`,
+                                timestamp: Date.now(),
+                            });
+                            setMessages([...agent.messages]);
+                            return;
+                        }
+                        // Unknown command
+                        agent.messages.push({
+                            id: Math.random().toString(36).slice(2, 10),
+                            role: 'assistant',
+                            content: `Unknown command: /${command}. Type /help for available commands.`,
+                            timestamp: Date.now(),
+                        });
+                        setMessages([...agent.messages]);
+                        return;
+                    }
+                }
+            }
+            abortControllerRef.current?.abort();
+            abortControllerRef.current = new AbortController();
+            const signal = abortControllerRef.current.signal;
+            // Check if auto-compaction is needed before sending
+            if (agent) {
+                checkAndAutoCompact(agent, setMessages);
+            }
+            await agent.run(text, signal);
+        }
+        catch (err) {
+            if (agent) {
+                agent.messages.push({
+                    id: Math.random().toString(36).slice(2, 10),
+                    role: 'assistant',
+                    content: `Command error: ${err instanceof Error ? err.message : String(err)}`,
+                    timestamp: Date.now(),
+                });
+                setMessages([...agent.messages]);
+            }
+        }
+    }, [state, handleSave]);
+    const closeOverlay = useCallback(() => setOverlay(null), []);
+    const handleSkillsChange = useCallback(() => {
+        setSkills(loadSkills());
+        setSkillCommands(getSkillCommands(loadSkills()));
+    }, []);
+    const handleSkillsClose = useCallback(() => {
+        setOverlay(null);
+        setSkills(loadSkills());
+        setSkillCommands(getSkillCommands(loadSkills()));
+    }, []);
+    const handleSkillSelect = useCallback((skillName) => {
+        setOverlay(null);
+        const skill = getSkill(skillName);
+        if (skill && agentRef.current) {
+            // Dispatch the load command to the agent so it triggers the LLM logic
+            agentRef.current.run(`/skill-load ${skill.name}`).catch(console.error);
+        }
+    }, []);
+    const handleConnectSelect = useCallback(async (provider, model, apiKey) => {
+        const agent = agentRef.current;
+        if (agent) {
+            const newConfig = {
+                baseURL: getProviderBaseURL(provider) || agent.cfg.baseURL,
+                model: model.id,
+                modelContextLength: model.contextLength,
+                modelMaxContextLength: model.maxContextLength,
+                modelParamBillions: model.paramBillions,
+            };
+            if (apiKey) {
+                newConfig.apiKey = apiKey;
+            }
+            else if (provider.isLocal) {
+                newConfig.apiKey = 'lm-studio';
+            }
+            await agent.reconfigure(newConfig);
+            const ctxNote = agent.cfg.modelContextLength
+                ? ` · ${Math.round(agent.cfg.modelContextLength / 1000)}k ctx`
+                : '';
+            const paramNote = agent.cfg.modelParamBillions !== undefined ? ` · ~${agent.cfg.modelParamBillions}B` : '';
+            agent.messages.push({
+                id: Math.random().toString(36).slice(2, 10),
+                role: 'assistant',
+                content: `Connected to ${provider.name}: ${model.name} (${model.id})${provider.isLocal ? ' [Local]' : ''}${ctxNote}${paramNote}`,
+                timestamp: Date.now(),
+            });
+            setMessages([...agent.messages]);
+        }
+    }, []);
+    const handleTodoToggle = useCallback((id) => {
+        const agent = agentRef.current;
+        if (agent)
+            agent.toggleTodo(id);
+    }, []);
+    const handleTodoDelete = useCallback((id) => {
+        const agent = agentRef.current;
+        if (agent)
+            agent.removeTodo(id);
+    }, []);
+    const handleCloseTodos = useCallback(() => setShowTodos(false), []);
+    if (overlay === 'help') {
+        return (_jsx(ErrorBoundary, { theme: theme, children: _jsx("box", { flexDirection: "column", flexGrow: 1, minHeight: 0, overflow: "hidden", children: _jsx(HelpOverlay, { theme: theme, onClose: closeOverlay }) }) }));
+    }
+    if (overlay === 'history') {
+        return (_jsx(ErrorBoundary, { theme: theme, children: _jsx("box", { flexDirection: "column", flexGrow: 1, minHeight: 0, overflow: "hidden", children: _jsx(HistoryOverlay, { theme: theme, sessions: sessions, onLoad: handleLoad, onDelete: handleDeleteSession, onClose: closeOverlay }) }) }));
+    }
+    if (overlay === 'skills') {
+        return (_jsx(ErrorBoundary, { theme: theme, children: _jsx("box", { flexDirection: "column", flexGrow: 1, minHeight: 0, overflow: "hidden", children: _jsx(SkillsOverlay, { theme: theme, skills: skills, onSkillsChange: handleSkillsChange, onClose: handleSkillsClose, onSkillSelect: handleSkillSelect }) }) }));
+    }
+    if (overlay === 'connect') {
+        return (_jsx(ErrorBoundary, { theme: theme, children: _jsx("box", { flexDirection: "column", flexGrow: 1, minHeight: 0, overflow: "hidden", children: _jsx(ConnectOverlay, { theme: theme, onClose: closeOverlay, onSelect: handleConnectSelect }) }) }));
+    }
+    return (_jsx(ErrorBoundary, { theme: theme, children: _jsxs("box", { flexDirection: "column", flexGrow: 1, minHeight: 0, overflow: "hidden", children: [_jsx(StatusBar, { state: state, model: agentRef.current?.cfg.model || '', modelRuntime: agentRef.current?.cfg, todoCount: todos.length, currentTool: currentTool, lastUsage: lastUsage, totalUsage: totalUsage, elapsedMs: elapsedMs, theme: theme, mouseEnabled: mouseEnabled, mcpToolCount: agentRef.current?.mcpManager?.totalTools ?? 0 }), _jsxs("box", { flexDirection: "row", flexGrow: 1, minHeight: 0, overflow: "hidden", children: [showTodos && (_jsx(TodoSidebar, { theme: theme, todos: todos, onToggle: handleTodoToggle, onDelete: handleTodoDelete, onClose: handleCloseTodos })), _jsx("box", { flexDirection: "column", flexGrow: 1, flexShrink: 1, flexBasis: 0, minHeight: 0, height: "100%", overflow: "hidden", children: _jsx(ChatScreen, { theme: theme, messages: messages, toolResults: toolResults, state: state, model: agentRef.current?.cfg.model || '', todoCount: todos.length, elapsedMs: elapsedMs, currentTool: currentTool, lastUsage: lastUsage, totalUsage: totalUsage, subAgents: subAgents, onSubmit: handleSubmit, paginated: paginated, page: page, totalPages: paginated ? Math.ceil(displayMessageCount / MESSAGES_PER_PAGE) : 1, onPageChange: setPage, selectedMessageIndex: selectedMessageIndex }) })] })] }) }));
+}
