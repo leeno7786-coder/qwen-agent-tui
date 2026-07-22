@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Entry point: headless subcommands for agents, TUI for interactive use.
  *
@@ -67,6 +67,29 @@ async function main(): Promise<number> {
 
   try {
     const argv = process.argv.slice(2);
+
+    const isTui = argv.length === 0 || argv[0] === 'tui';
+    if (isTui && typeof (globalThis as Record<string, unknown>).Bun === 'undefined') {
+      const { spawnSync } = await import('child_process');
+      const bunCmd = process.platform === 'win32' ? 'bun.exe' : 'bun';
+      try {
+        const check = spawnSync(bunCmd, ['--version'], { stdio: 'ignore' });
+        if (check.status === 0) {
+          const res = spawnSync(bunCmd, [process.argv[1], ...argv], { stdio: 'inherit' });
+          return res.status ?? 0;
+        }
+      } catch {
+        /* Bun binary not on PATH */
+      }
+
+      console.error(
+        '\n⚡ NanoAgent TUI requires Bun runtime for native terminal rendering.\n' +
+          '   Please install Bun from https://bun.sh or run:\n\n' +
+          '     powershell -c "irm bun.sh/install.ps1"  (Windows)\n' +
+          '     curl -fsSL https://bun.sh/install | bash   (macOS/Linux)\n'
+      );
+      return 1;
+    }
 
     if (argv.length === 0) {
       const { runTui } = await import('./opentui/index');
