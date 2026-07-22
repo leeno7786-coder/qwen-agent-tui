@@ -1,6 +1,14 @@
-export function printRootHelp(): void {
-  console.log(`nanogent — coding agent (TUI + headless)
+export const NANOAGENT_BANNER = `
+  _  _                 _                    _   
+ | \\| |__ _ _ _  ___  /_\\  __ _ ___ _ _ | |_ 
+ | .\` / _\` | ' \\/ _ \\/ _ \\/ _\` / -_) ' \\|  _|
+ |_|\\_\\__,_|_||_\\___/_/ \\_\\__, \\___|_||_\\__|
+                          |___/              
+      ⚡ NanoAgent — Tiny Models, Scalable Intelligence ⚡
+`;
 
+export function printRootHelp(): void {
+  console.log(`${NANOAGENT_BANNER}
 Usage:
   nanogent <command> [options]
 

@@ -5,6 +5,7 @@ import { useKeyboard } from '@opentui/react';
 import type { CliRenderer } from '@opentui/core';
 import { AgentCore } from '../agent';
 import { loadConfig, saveConfigFile } from '../config';
+import { NANOAGENT_BANNER } from '../cli/help';
 import { getModelCompactionSettings, countTokens } from '../llm';
 import { tools } from '../tools';
 import {
@@ -360,6 +361,17 @@ export function App({ renderer }: { renderer: CliRenderer }) {
       agent.shutdown().catch(() => {});
     };
     process.on('SIGINT', handleSigint);
+
+    // Show initial welcome banner if no messages exist
+    if (agent.messages.length === 0) {
+      agent.messages.push({
+        id: 'welcome-banner',
+        role: 'assistant',
+        content: `\`\`\`text${NANOAGENT_BANNER}\`\`\`\nWelcome to **NanoAgent**! Type \`/help\` for commands or \`/config\` to manage settings.`,
+        timestamp: Date.now(),
+      });
+      setMessages([...agent.messages]);
+    }
 
     // Warn if no API key is configured
     if (!cfg.apiKey || cfg.apiKey.trim() === '') {
