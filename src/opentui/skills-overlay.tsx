@@ -3,7 +3,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
-import type { Theme } from './theme';
+import type { Theme } from './theme.js';
 import {
   loadSkills,
   saveSkill,
@@ -12,8 +12,8 @@ import {
   getSkillCommands,
   saveSkillConfig,
   getSkillConfig,
-} from '../skills';
-import type { Skill, SkillCommand } from '../types';
+} from '../skills.js';
+import type { Skill, SkillCommand } from '../types.js';
 
 interface SkillsOverlayProps {
   theme: Theme;

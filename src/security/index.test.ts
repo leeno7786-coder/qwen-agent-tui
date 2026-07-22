@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { SecurityManager, createSecurityManager, DEFAULT_SECURITY_CONFIG } from './index';
+import { SecurityManager, createSecurityManager, DEFAULT_SECURITY_CONFIG } from './index.js';
 
 describe('SecurityManager', () => {
   let securityManager: SecurityManager;

@@ -10,7 +10,7 @@ import {
   loadTemplates,
   getSkillCommands,
   getSkillNames,
-} from './skills';
+} from './skills.js';
 
 describe('skills.ts - Skill Management', () => {
   describe('loadSkills', () => {

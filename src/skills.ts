@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 
 import { homedir } from 'os';
 import { join, basename, dirname, extname } from 'path';
 import { fileURLToPath } from 'url';
-import type { Skill, SkillCommand } from './types';
+import type { Skill, SkillCommand } from './types.js';
 
 const SKILL_DIRS = [
   join(process.cwd(), 'skills'),
@@ -21,7 +21,16 @@ const TEMPLATE_DIR = join(
 
 const SKILL_CONFIG_FILE = join(homedir(), '.qwen-agent-tui', 'skill-config.json');
 
-const BUILTIN_SKILL_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'skills');
+// Resolved relative to this compiled module. Under a normal install the bin is
+// dist/main.js and this file compiles to dist/skills.js, so the package root
+// (containing /skills) is one level up from dist.
+const BUILTIN_SKILL_DIR = (() => {
+  const fromBin = dirname(dirname(fileURLToPath(import.meta.url)));
+  const candidate = join(fromBin, 'skills');
+  if (existsSync(candidate)) return candidate;
+  // Running from source tree where compiled output lives elsewhere.
+  return join(process.cwd(), 'skills');
+})();
 
 function ensureSkillDirs(): void {
   for (const dir of SKILL_DIRS) {

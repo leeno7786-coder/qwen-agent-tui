@@ -11,8 +11,8 @@ import {
   MAX_CONCURRENT_SUBAGENTS,
   resolveSubAgentPool,
   type SubAgentResult,
-} from './subagents';
-import type { Config } from './types';
+} from './subagents.js';
+import type { Config } from './types.js';
 
 const mockConfig: Config = {
   model: 'test-model',

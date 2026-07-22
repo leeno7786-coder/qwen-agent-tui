@@ -3,7 +3,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
-import type { Theme } from './theme';
+import type { Theme } from './theme.js';
 import {
   RUNTIME_PROVIDERS,
   getProviderBaseURL,
@@ -12,9 +12,9 @@ import {
   fetchLocalModels,
   fetchOpenRouterModels,
   checkRuntimeHealth,
-} from '../providers';
-import { saveApiKeyToEnv, getApiKey } from '../config';
-import type { RuntimeProvider, ModelInfo } from '../types';
+} from '../providers.js';
+import { saveApiKeyToEnv, getApiKey } from '../config.js';
+import type { RuntimeProvider, ModelInfo } from '../types.js';
 
 interface ConnectOverlayProps {
   theme: Theme;

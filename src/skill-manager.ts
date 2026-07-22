@@ -1,5 +1,5 @@
-import { loadSkills, matchSkillTriggers, getSkill } from './skills';
-import type { Message, Skill } from './types';
+import { loadSkills, matchSkillTriggers, getSkill } from './skills.js';
+import type { Message, Skill } from './types.js';
 
 export class SkillManager {
   activeSkills: Map<string, Skill> = new Map();

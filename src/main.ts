@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * Entry point: headless subcommands for agents, TUI for interactive use.
  *
@@ -8,8 +8,8 @@
  *   nanogent models|doctor
  */
 
-import { runCli } from './cli/index';
-import { printRootHelp } from './cli/help';
+import { runCli } from './cli/index.js';
+import { printRootHelp } from './cli/help.js';
 
 /** Registered cleanup callbacks invoked during graceful shutdown. */
 const cleanupFns: Array<() => void | Promise<void>> = [];
@@ -83,16 +83,17 @@ async function main(): Promise<number> {
       }
 
       console.error(
-        '\n⚡ NanoAgent TUI requires Bun runtime for native terminal rendering.\n' +
-          '   Please install Bun from https://bun.sh or run:\n\n' +
-          '     powershell -c "irm bun.sh/install.ps1"  (Windows)\n' +
-          '     curl -fsSL https://bun.sh/install | bash   (macOS/Linux)\n'
+        '\n⚡ NanoAgent TUI requires the Bun runtime for native terminal rendering.\n' +
+          '   Install it (no build step needed):\n\n' +
+          '     curl -fsSL https://bun.sh/install | bash   (macOS/Linux)\n' +
+          '     powershell -c "irm bun.sh/install.ps1"      (Windows)\n\n' +
+          '   Headless mode works on plain Node.js: try `nanoagent run --prompt "..."`.\n'
       );
       return 1;
     }
 
     if (argv.length === 0) {
-      const { runTui } = await import('./opentui/index');
+      const { runTui } = await import('./opentui/index.js');
       await runTui();
       return 0;
     }
@@ -105,7 +106,7 @@ async function main(): Promise<number> {
     }
 
     if (cmd === 'tui') {
-      const { runTui } = await import('./opentui/index');
+      const { runTui } = await import('./opentui/index.js');
       await runTui();
       return 0;
     }

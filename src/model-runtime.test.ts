@@ -6,7 +6,7 @@ import {
   modelIdsMatch,
   isLMStudioURL,
   lmStudioRestBase,
-} from './model-runtime';
+} from './model-runtime.js';
 
 describe('parseParamBillions', () => {
   it('parses B and M suffixes', () => {

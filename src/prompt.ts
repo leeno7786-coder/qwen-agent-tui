@@ -1,5 +1,5 @@
-import type { Config } from './types';
-import { isSmallModelFromConfig } from './model-runtime';
+import type { Config } from './types.js';
+import { isSmallModelFromConfig } from './model-runtime.js';
 
 export interface PromptContext {
   workspace: string;

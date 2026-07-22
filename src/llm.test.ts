@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { extractDeltaText, isSmallModel, effectiveContextSize } from './llm';
+import { extractDeltaText, isSmallModel, effectiveContextSize } from './llm.js';
 
 const RUNTIME_128K = { contextLength: 128000 };
 

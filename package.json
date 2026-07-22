@@ -2,7 +2,7 @@
   "name": "nanoagent",
   "version": "1.1.0-alpha.1",
   "description": "Ultra-lightweight, scalable CLI/TUI coding agent optimized for tiny local models & remote runtimes",
-  "module": "src/opentui/index.tsx",
+  "module": "dist/opentui/index.js",
   "type": "module",
   "main": "dist/main.js",
   "bin": {
@@ -13,40 +13,49 @@
   },
   "files": [
     "dist/",
-    "src/",
+    "skills/",
     "AGENTS.md",
     "README.md",
     "SECURITY.md"
   ],
   "private": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
-    "start": "bun run src/main.ts",
-    "start:tui": "bun run src/main.ts tui",
-    "start:opentui": "bun run src/main.ts tui",
-    "agent": "bun run src/main.ts run",
+    "start": "node dist/main.js",
+    "start:bun": "bun run src/main.ts",
+    "start:tui": "node dist/main.js tui",
+    "agent": "node dist/main.js run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts,.tsx",
     "format": "prettier --write src",
     "format:check": "prettier --check src",
-    "test": "bun test",
-    "test:security": "bun test src/security/index.test.ts",
-    "self-test": "bun run scripts/self-test.ts",
-    "ci": "bun run typecheck && bun run lint && bun run format:check && bun test && bun run self-test",
-    "build": "bun build src/main.ts --outdir dist --minify --target node",
-    "build:all": "bun build src/main.ts src/opentui/index.tsx --outdir dist --minify --target node",
-    "package": "npm pack",
-    "prepack": "bun run build:all"
+    "test": "node --test",
+    "test:bun": "bun test",
+    "test:security": "node --test src/security/index.test.ts",
+    "self-test": "node dist/main.js run --prompt \"run the built-in self-test\" --workspace .",
+    "ci": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run build",
+    "build": "tsc -p tsconfig.json && chmod +x dist/main.js",
+    "build:bun": "bun build src/main.ts src/opentui/index.tsx --outdir dist --minify --target node",
+    "prepare": "npm run build",
+    "prepack": "npm run build",
+    "package": "npm pack"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/node": "^20.14.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "esbuild": "^0.24.0",
     "eslint": "^9.0.0",
     "prettier": "^3.0.0",
+    "typescript": "^5.6.3",
     "typescript-eslint": "^8.65.0"
-  },
-  "peerDependencies": {
-    "typescript": "^6.0.3"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

@@ -6,7 +6,7 @@
 import { createHash } from 'crypto';
 import { watch, type FSWatcher, existsSync, statSync, readdirSync } from 'fs';
 import { resolve } from 'path';
-import type { Config } from '../types';
+import type { Config } from '../types.js';
 
 /**
  * Cache entry for a tool execution result.

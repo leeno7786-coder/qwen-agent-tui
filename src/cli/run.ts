@@ -1,8 +1,8 @@
 import { parseArgs } from 'util';
 import { resolve } from 'path';
-import { AgentCore } from '../agent';
-import { loadConfig } from '../config';
-import { printRunHelp, cliError } from './help';
+import { AgentCore } from '../agent.js';
+import { loadConfig } from '../config.js';
+import { printRunHelp, cliError } from './help.js';
 
 export interface RunResult {
   ok: boolean;
@@ -41,8 +41,18 @@ export async function cmdRun(argv: string[]): Promise<number> {
   let prompt = values.prompt;
   if (values.stdin) {
     const chunks: Buffer[] = [];
-    for await (const chunk of Bun.stdin.stream()) {
-      chunks.push(Buffer.from(chunk));
+    // Bun exposes Bun.stdin.stream(); on Node we read process.stdin instead.
+    const bunGlobal = (globalThis as Record<string, unknown>).Bun as
+      | { stdin?: { stream?: () => AsyncIterable<Uint8Array> } }
+      | undefined;
+    if (bunGlobal?.stdin?.stream) {
+      for await (const chunk of bunGlobal.stdin.stream()) {
+        chunks.push(Buffer.from(chunk));
+      }
+    } else {
+      for await (const chunk of process.stdin) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
     }
     const fromStdin = Buffer.concat(chunks).toString('utf-8').trim();
     if (fromStdin) prompt = prompt ? `${prompt}\n${fromStdin}` : fromStdin;

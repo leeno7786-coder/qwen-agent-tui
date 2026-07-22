@@ -1,4 +1,4 @@
-import type { SecurityManager } from './security';
+import type { SecurityManager } from './security/index.js';
 
 /**
  * Application configuration shape.

@@ -5,74 +5,54 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write          # create GitHub release
+  id-token: write          # npm provenance (OIDC)
+
 jobs:
-  release:
-    name: Create Release
+  publish:
+    name: Build & publish to npm
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          bun-version: latest
-          
-      - name: Install dependencies
-        run: bun install
-        
-      - name: Run tests
-        run: bun test
-        
-      - name: Get version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-        
-      - name: Create release notes
-        id: release-notes
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies (npm ci)
+        run: npm ci
+
+      - name: Build (tsc -> dist/)
+        run: npm run build
+
+      - name: Pack & inspect tarball
         run: |
-          NOTES=$(git log --pretty=format:"- %s (%h)" --no-merges ${GITHUB_REF}...${GITHUB_REF}^ | head -20)
-          echo "NOTES<<EOF" >> $GITHUB_OUTPUT
-          echo "$NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          
+          npm pack
+          echo "=== tarball contents (top-level) ==="
+          tar tzf nanoagent-*.tgz | sed 's#^package/##' | awk -F/ '{print $1}' | sort | uniq -c
+
+      - name: Publish to npm
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$VERSION" =~ -[0-9A-Za-z.-]+$ ]]; then
+            TAG="next"          # prerelease -> next tag
+          else
+            TAG="latest"        # stable release
+          fi
+          echo "Publishing nanoagent@$VERSION with dist-tag '$TAG'"
+          npm publish --provenance --access public --tag "$TAG"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref }}
-          name: Release v${{ steps.version.outputs.VERSION }}
-          body: |
-            ## qwen-agent-tui v${{ steps.version.outputs.VERSION }}
-            
-            ### What's New
-            
-            ${{ steps.release-notes.outputs.NOTES }}
-            
-            ### Features
-            - Security Hardening: Command validation, file access control, output sanitization
-            - Context Window Management: Dynamic context, compaction, message tracking
-            - Parallel Tools: Parallel execution, advanced caching, new tools
-            
-            ### Recommended Local Model
-            For optimal performance with local models:
-            - **Model**: `Jackrong\Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-GGUF`
-            - **Runtime**: LM Studio
-            - **Base URL**: `http://127.0.0.1:1234/v1`
-            
-            ### Installation
-            ```bash
-            git clone https://github.com/leeno7786-coder/qwen-agent-tui.git
-            cd qwen-agent-tui
-            bun install
-            bun run start
-            ```
-            
-            ### Test Results
-            - All 191 tests passing
-            - Security tests: 52/52 passing
-            - Self-tests: All passing
-          draft: false
-          prerelease: false
+          name: nanoagent ${{ github.ref_name }}
+          generate_release_notes: true
+          files: nanoagent-*.tgz

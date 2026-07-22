@@ -14,8 +14,8 @@ import {
   exportToMarkdown,
   loadInputHistory,
   saveInputHistory,
-} from './store';
-import type { Session, Message } from './types';
+} from './store.js';
+import type { Session, Message } from './types.js';
 
 const createTestMessage = (content: string, role: Message['role'] = 'user'): Message => ({
   id: `msg-${Math.random().toString(36).slice(2, 8)}`,

@@ -4,8 +4,8 @@
  */
 
 import { describe, it, expect } from 'bun:test';
-import { applySubAgentDefaults, MODELS } from './config';
-import type { Config } from './types';
+import { applySubAgentDefaults, MODELS } from './config.js';
+import type { Config } from './types.js';
 
 describe('config.ts - Configuration Management', () => {
   describe('applySubAgentDefaults', () => {

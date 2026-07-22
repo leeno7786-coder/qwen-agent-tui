@@ -3,9 +3,9 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
-import type { Theme } from './theme';
-import { loadSkills, getSkillCommands } from '../skills';
-import type { SkillCommand } from '../types';
+import type { Theme } from './theme.js';
+import { loadSkills, getSkillCommands } from '../skills.js';
+import type { SkillCommand } from '../types.js';
 
 function itemId(index: number): string {
   return `cmd-${index}`;

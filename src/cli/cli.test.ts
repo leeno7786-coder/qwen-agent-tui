@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { runCli } from './index';
+import { runCli } from './index.js';
 
 describe('cli', () => {
   it('prints root help', async () => {

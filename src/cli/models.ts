@@ -1,6 +1,6 @@
 import { parseArgs } from 'util';
-import { printModelsHelp, cliError } from './help';
-import { formatModelsList, getModelsList } from './reports';
+import { printModelsHelp, cliError } from './help.js';
+import { formatModelsList, getModelsList } from './reports.js';
 
 export async function cmdModels(argv: string[]): Promise<number> {
   const { values } = parseArgs({

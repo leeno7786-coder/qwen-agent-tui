@@ -2,8 +2,8 @@
 
 import { createCliRenderer } from '@opentui/core';
 import { createRoot } from '@opentui/react';
-import { loadConfig, getApiKey } from '../config';
-import { App } from './app';
+import { loadConfig, getApiKey } from '../config.js';
+import { App } from './app.js';
 
 /**
  * Interactive TUI — default when you run `bun run start` or `qwen-agent` with no args.
@@ -46,8 +46,4 @@ export async function runTui() {
 
   const appRenderer = await createCliRenderer({ useMouse: true });
   createRoot(appRenderer).render(<App renderer={appRenderer} />);
-}
-
-if (import.meta.main) {
-  runTui().catch(console.error);
 }

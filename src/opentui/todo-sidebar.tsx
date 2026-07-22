@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 
-import type { Todo } from '../types';
-import type { Theme } from './theme';
+import type { Todo } from '../types.js';
+import type { Theme } from './theme.js';
 
 interface TodoSidebarProps {
   theme: Theme;

@@ -4,7 +4,7 @@
  * Tools to query and interact with the memory graph
  */
 
-import { MemoryGraph } from './MemoryGraph';
+import { MemoryGraph } from './MemoryGraph.js';
 import type {
   GraphNode,
   GraphEdge,
@@ -12,7 +12,7 @@ import type {
   GraphQueryResult,
   GraphCommunity,
   GodNode,
-} from './types';
+} from './types.js';
 
 // Global graph instance cache
 const graphCache: Map<string, MemoryGraph> = new Map();

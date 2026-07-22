@@ -3,8 +3,8 @@
 import { useState, useEffect, useRef } from 'react';
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
-import type { Session } from '../types';
-import type { Theme } from './theme';
+import type { Session } from '../types.js';
+import type { Theme } from './theme.js';
 
 /* ─── Help Overlay ─── */
 

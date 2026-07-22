@@ -11,8 +11,8 @@
  * tool result it can synthesise.
  */
 
-import { createClient, streamChat } from './llm';
-import type { ChatMessage } from './llm';
+import { createClient, streamChat } from './llm.js';
+import type { ChatMessage } from './llm.js';
 import {
   tools,
   toOpenAI,
@@ -20,13 +20,13 @@ import {
   type Tool,
   type ToolExecutionHooks,
   type SubAgentProgressEvent,
-} from './tools';
-import { createSecurityManager, type SecurityManager } from './security';
-import { createToolCacheManager, type ToolCacheManager } from './tools/cache';
-import { fetchLMStudioModels } from './model-runtime';
+} from './tools/index.js';
+import { createSecurityManager, type SecurityManager } from './security/index.js';
+import { createToolCacheManager, type ToolCacheManager } from './tools/cache.js';
+import { fetchLMStudioModels } from './model-runtime.js';
 import { access, readdir } from 'fs/promises';
 import { resolve, join, normalize } from 'path';
-import type { Config, SubAgentEndpoint, SubAgentPoolConfig } from './types';
+import type { Config, SubAgentEndpoint, SubAgentPoolConfig } from './types.js';
 
 /** Sub-agent worker context. */
 interface WorkerContext {

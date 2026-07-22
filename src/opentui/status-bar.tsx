@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/react */
 
-import type { AgentState } from '../types';
-import { isSmallModelFromConfig } from '../model-runtime';
-import type { Config } from '../types';
-import type { Theme } from './theme';
+import type { AgentState } from '../types.js';
+import { isSmallModelFromConfig } from '../model-runtime.js';
+import type { Config } from '../types.js';
+import type { Theme } from './theme.js';
 
 const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 

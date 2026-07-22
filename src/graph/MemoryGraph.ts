@@ -21,7 +21,7 @@ import {
   GraphBuildOptions,
   GraphCommunity,
   GodNode,
-} from './types';
+} from './types.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';

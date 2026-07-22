@@ -5,8 +5,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'bun:test';
-import { AgentCore } from './agent';
-import type { Config, Message, AgentState } from './types';
+import { AgentCore } from './agent.js';
+import type { Config, Message, AgentState } from './types.js';
 
 // Default test config - only include properties that exist in Config
 const defaultConfig: Partial<Config> = {

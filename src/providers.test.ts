@@ -16,7 +16,7 @@ import {
   getApiKeyEnvVar,
   checkRuntimeHealth,
   RUNTIME_PROVIDERS,
-} from './providers';
+} from './providers.js';
 
 describe('providers.ts - Provider Resolution', () => {
   describe('getProvider', () => {

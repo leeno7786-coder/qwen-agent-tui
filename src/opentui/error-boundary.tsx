@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 
 import React from 'react';
-import type { Theme } from './theme';
+import type { Theme } from './theme.js';
 
 interface Props {
   children: React.ReactNode;

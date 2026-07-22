@@ -9,7 +9,7 @@ import {
   groupToolsForParallelExecution,
   PARALLEL_SAFE_TOOLS,
   SEQUENTIAL_ONLY_TOOLS,
-} from './index';
+} from './index.js';
 
 describe('Parallel Tool Execution', () => {
   describe('canRunInParallel', () => {

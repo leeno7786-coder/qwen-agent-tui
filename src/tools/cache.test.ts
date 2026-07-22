@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { ToolCacheManager, generateCacheKey, DEFAULT_CACHE_CONFIG } from './cache';
+import { ToolCacheManager, generateCacheKey, DEFAULT_CACHE_CONFIG } from './cache.js';
 
 describe('ToolCacheManager', () => {
   let cache: ToolCacheManager;

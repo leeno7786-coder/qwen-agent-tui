@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { ContextManager, createContextManager, DEFAULT_CONTEXT_CONFIG } from './manager';
-import type { Config, Message } from '../types';
+import { ContextManager, createContextManager, DEFAULT_CONTEXT_CONFIG } from './manager.js';
+import type { Config, Message } from '../types.js';
 
 describe('ContextManager', () => {
   let cfg: Config;

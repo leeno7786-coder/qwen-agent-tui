@@ -1,7 +1,7 @@
-import { printRootHelp } from './help';
-import { cmdRun } from './run';
-import { cmdModels } from './models';
-import { cmdDoctor } from './doctor';
+import { printRootHelp } from './help.js';
+import { cmdRun } from './run.js';
+import { cmdModels } from './models.js';
+import { cmdDoctor } from './doctor.js';
 
 export async function runCli(argv: string[]): Promise<number> {
   const [cmd, ...rest] = argv;

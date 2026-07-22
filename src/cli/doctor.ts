@@ -1,6 +1,6 @@
 import { parseArgs } from 'util';
-import { printDoctorHelp } from './help';
-import { formatDoctorReport, getDoctorReport } from './reports';
+import { printDoctorHelp } from './help.js';
+import { formatDoctorReport, getDoctorReport } from './reports.js';
 
 export async function cmdDoctor(argv: string[]): Promise<number> {
   const { values } = parseArgs({

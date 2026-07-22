@@ -3,13 +3,13 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
-import type { Message, ToolResult, AgentState, ToolCall } from '../types';
-import type { SubAgentProgressEvent } from '../tools';
-import type { SubAgentResult } from '../subagents';
-import { CommandDropdown } from './command-dropdown';
-import { getSyntaxStyle } from './syntax-style';
-import type { Theme } from './theme';
-import { buildToolDisplayBlock, type ToolDisplayBlock } from './tool-display';
+import type { Message, ToolResult, AgentState, ToolCall } from '../types.js';
+import type { SubAgentProgressEvent } from '../tools/index.js';
+import type { SubAgentResult } from '../subagents.js';
+import { CommandDropdown } from './command-dropdown.js';
+import { getSyntaxStyle } from './syntax-style.js';
+import type { Theme } from './theme.js';
+import { buildToolDisplayBlock, type ToolDisplayBlock } from './tool-display.js';
 
 interface ChatScreenProps {
   theme: Theme;

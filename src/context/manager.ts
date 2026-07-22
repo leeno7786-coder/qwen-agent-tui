@@ -3,9 +3,9 @@
  * Prevents context overflow and manages conversation history.
  */
 
-import { countTokens, effectiveContextSize } from '../llm';
-import type { Config, Message } from '../types';
-import { getModelCompactionSettings } from '../llm';
+import { countTokens, effectiveContextSize } from '../llm.js';
+import type { Config, Message } from '../types.js';
+import { getModelCompactionSettings } from '../llm.js';
 
 /**
  * Configuration for context management.

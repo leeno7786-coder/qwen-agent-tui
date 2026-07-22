@@ -1,6 +1,6 @@
-import type { RuntimeProvider, ModelInfo } from './types';
-import { fetchLMStudioModels, isLMStudioURL } from './model-runtime';
-import { isLocalProvider } from './llm';
+import type { RuntimeProvider, ModelInfo } from './types.js';
+import { fetchLMStudioModels, isLMStudioURL } from './model-runtime.js';
+import { isLocalProvider } from './llm.js';
 
 /**
  * Default list of runtime providers (connectors) with their available models.

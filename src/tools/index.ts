@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
-import * as MemoryGraphTools from '../graph/tools';
+import * as MemoryGraphTools from '../graph/tools.js';
 import {
   existsSync,
   mkdirSync,
@@ -11,13 +11,13 @@ import {
 } from 'fs';
 import { basename, dirname, relative, resolve } from 'path';
 
-import type { Config } from '../types';
-import { isSmallModelFromConfig } from '../model-runtime';
+import type { Config } from '../types.js';
+import { isSmallModelFromConfig } from '../model-runtime.js';
 
 // eslint-disable-next-line no-control-regex
 const NULL_BYTE_RE = /\u0000/g;
 const REPLACEMENT_CHAR_RE = /[\uFFFD]/g;
-import { fileChangeDiff } from '../lib/file-diff';
+import { fileChangeDiff } from '../lib/file-diff.js';
 
 /** A tool that the agent can invoke. */
 export interface Tool {
@@ -2148,7 +2148,7 @@ export const tools: Tool[] = [
           exploreWithSubAgent,
           formatSubAgentResults,
           enrichTaskWithContext,
-        } = await import('../subagents');
+        } = await import('../subagents.js');
         const pool = await resolveSubAgentPool(cfg!);
         if (!pool) {
           return JSON.stringify({
@@ -2309,8 +2309,8 @@ export function toOpenAI(allTools: Tool[], cfg?: Config, activeSkills?: Set<stri
 }
 
 // Export cache utilities
-export { ToolCacheManager, createToolCacheManager, globalToolCache } from './cache';
-export type { ToolCacheEntry, ToolCacheConfig } from './cache';
+export { ToolCacheManager, createToolCacheManager, globalToolCache } from './cache.js';
+export type { ToolCacheEntry, ToolCacheConfig } from './cache.js';
 
 // Export parallel execution utilities
 export { PARALLEL_SAFE_TOOLS, SEQUENTIAL_ONLY_TOOLS };

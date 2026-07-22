@@ -5,8 +5,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'bun:test';
-import { AgentCore } from './agent';
-import type { Config } from './types';
+import { AgentCore } from './agent.js';
+import type { Config } from './types.js';
 
 const testConfig: Partial<Config> = {
   model: 'test-model',
@@ -70,7 +70,7 @@ describe('Agent integration', () => {
   });
 
   it('should handle parallel tool grouping correctly', async () => {
-    const { groupToolsForParallelExecution } = await import('./tools');
+    const { groupToolsForParallelExecution } = await import('./tools/index.js');
     const tcs = [
       { name: 'read_file', arguments: '{"path":"test.txt"}', index: 0, id: '1' },
       { name: 'write_file', arguments: '{"path":"test.txt","content":"x"}', index: 1, id: '2' },

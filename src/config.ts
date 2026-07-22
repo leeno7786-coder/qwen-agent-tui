@@ -2,8 +2,8 @@ import { readFileSync, existsSync, statSync, writeFileSync, mkdirSync } from 'fs
 import { homedir } from 'os';
 import { join, resolve } from 'path';
 import { config as dotenvConfig } from 'dotenv';
-import type { Config, SkillConfig } from './types';
-import { isSmallModel } from './llm';
+import type { Config, SkillConfig } from './types.js';
+import { isSmallModel } from './llm.js';
 
 /**
  * Derive sub-agent availability and defaults from the resolved config.

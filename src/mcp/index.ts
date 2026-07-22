@@ -7,8 +7,8 @@ import type {
   McpServerState,
   McpLocalServerConfig,
   McpRemoteServerConfig,
-} from '../types';
-import type { Tool } from '../tools';
+} from '../types.js';
+import type { Tool } from '../tools/index.js';
 
 /**
  * Interpolates {env:VAR} and {file:path} placeholders in a string value.

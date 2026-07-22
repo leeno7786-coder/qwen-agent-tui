@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import { createRequire } from 'module';
-import type { Config } from './types';
-import type { StreamChunk } from './streaming';
+import type { Config } from './types.js';
+import type { StreamChunk } from './streaming.js';
 
 /**
  * Custom error that preserves the HTTP status code through retry re-throws.

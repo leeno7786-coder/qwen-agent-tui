@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { homedir } from 'os';
 import { join } from 'path';
 import { createRequire } from 'module';
-import type { Todo, Session, Message } from './types';
+import type { Todo, Session, Message } from './types.js';
 
 const requireOptional = createRequire(import.meta.url);
 const DATA_DIR = join(homedir(), '.qwen-agent-tui');

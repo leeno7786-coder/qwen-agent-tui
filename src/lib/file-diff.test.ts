@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { fileChangeDiff, formatLineChangeSummary } from './file-diff';
+import { fileChangeDiff, formatLineChangeSummary } from './file-diff.js';
 
 describe('file-diff', () => {
   it('counts added lines for new content', () => {

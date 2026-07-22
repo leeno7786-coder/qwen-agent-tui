@@ -3,11 +3,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useKeyboard } from '@opentui/react';
 import type { CliRenderer } from '@opentui/core';
-import { AgentCore } from '../agent';
-import { loadConfig, saveConfigFile } from '../config';
-import { NANOAGENT_BANNER } from '../cli/help';
-import { getModelCompactionSettings, countTokens } from '../llm';
-import { tools } from '../tools';
+import { AgentCore } from '../agent.js';
+import { loadConfig, saveConfigFile } from '../config.js';
+import { NANOAGENT_BANNER } from '../cli/help.js';
+import { getModelCompactionSettings, countTokens } from '../llm.js';
+import { tools } from '../tools/index.js';
 import {
   saveSession,
   loadSessions,
@@ -17,7 +17,7 @@ import {
   exportToMarkdown,
   autoSaveSession,
   resumeSession,
-} from '../store';
+} from '../store.js';
 import type {
   Message,
   AgentState,
@@ -29,26 +29,26 @@ import type {
   Config,
   RuntimeProvider,
   ModelInfo,
-} from '../types';
-import type { SubAgentProgressEvent } from '../tools';
-import type { SubAgentResult } from '../subagents';
-import { ChatScreen } from './chat-screen';
-import { ErrorBoundary } from './error-boundary';
-import { HelpOverlay, HistoryOverlay } from './overlays';
-import { SkillsOverlay } from './skills-overlay';
-import { ConnectOverlay } from './connect-overlay';
-import { StatusBar } from './status-bar';
-import { TodoSidebar } from './todo-sidebar';
-import { THEMES, DEFAULT_THEME, type Theme } from './theme';
-import { loadSkills, getSkillCommands, getSkill } from '../skills';
-import { getProviderBaseURL } from '../providers';
+} from '../types.js';
+import type { SubAgentProgressEvent } from '../tools/index.js';
+import type { SubAgentResult } from '../subagents.js';
+import { ChatScreen } from './chat-screen.js';
+import { ErrorBoundary } from './error-boundary.js';
+import { HelpOverlay, HistoryOverlay } from './overlays.js';
+import { SkillsOverlay } from './skills-overlay.js';
+import { ConnectOverlay } from './connect-overlay.js';
+import { StatusBar } from './status-bar.js';
+import { TodoSidebar } from './todo-sidebar.js';
+import { THEMES, DEFAULT_THEME, type Theme } from './theme.js';
+import { loadSkills, getSkillCommands, getSkill } from '../skills.js';
+import { getProviderBaseURL } from '../providers.js';
 import {
   formatDoctorReport,
   formatModelsList,
   getDoctorReport,
   getModelsList,
-} from '../cli/reports';
-import { build_memory_graph, get_graph_stats, get_analysis_report } from '../graph/tools';
+} from '../cli/reports.js';
+import { build_memory_graph, get_graph_stats, get_analysis_report } from '../graph/tools.js';
 
 /**
  * Simple token estimation function.

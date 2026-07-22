@@ -11,7 +11,7 @@
  * - Automatic detection of existing graphs
  */
 
-export { MemoryGraph } from './MemoryGraph';
+export { MemoryGraph } from './MemoryGraph.js';
 export type {
   GraphNode,
   GraphEdge,
@@ -22,7 +22,7 @@ export type {
   GraphIndexOptions,
   NodeType,
   EdgeType,
-} from './types';
+} from './types.js';
 export {
   getMemoryGraph,
   build_memory_graph,
@@ -42,4 +42,4 @@ export {
   list_classes,
   clear_graph_cache,
   get_graph,
-} from './tools';
+} from './tools.js';

@@ -1,5 +1,5 @@
-import type { Config, ModelInfo } from './types';
-import { isLocalProvider, isSmallModel } from './llm';
+import type { Config, ModelInfo } from './types.js';
+import { isLocalProvider, isSmallModel } from './llm.js';
 
 /** Resolved capabilities from LM Studio (or future local runtimes). */
 export interface ModelRuntimeInfo {

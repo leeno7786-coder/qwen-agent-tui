@@ -1,5 +1,5 @@
-import { createClient, chat, streamChat, isLocalProvider } from './llm';
-import type { ChatMessage } from './llm';
+import { createClient, chat, streamChat, isLocalProvider } from './llm.js';
+import type { ChatMessage } from './llm.js';
 import {
   toOpenAI,
   type ToolExecutionHooks,
@@ -9,27 +9,27 @@ import {
   registerExternalTools,
   getAllTools,
   findTool,
-} from './tools';
-import type { SubAgentProgressEvent } from './tools';
-import { detectContext } from './context';
-import { SkillManager } from './skill-manager';
-import { loadSkills } from './skills';
-import { buildSystemPrompt } from './prompt';
-import { enrichConfigWithRuntime, isSmallModelFromConfig } from './model-runtime';
-import { loadConfig, applySubAgentDefaults } from './config';
-import type { Config, Message, ToolResult, AgentState, Todo } from './types';
-import { subAgentAvailable } from './tools';
+} from './tools/index.js';
+import type { SubAgentProgressEvent } from './tools/index.js';
+import { detectContext } from './context.js';
+import { SkillManager } from './skill-manager.js';
+import { loadSkills } from './skills.js';
+import { buildSystemPrompt } from './prompt.js';
+import { enrichConfigWithRuntime, isSmallModelFromConfig } from './model-runtime.js';
+import { loadConfig, applySubAgentDefaults } from './config.js';
+import type { Config, Message, ToolResult, AgentState, Todo } from './types.js';
+import { subAgentAvailable } from './tools/index.js';
 import {
   resolveSubAgentPool,
   exploreWithSubAgent,
   formatSubAgentResults,
   type SubAgentResult,
-} from './subagents';
-import { ContextManager, createContextManager } from './context/manager';
-import { SecurityManager, createSecurityManager } from './security';
-import { McpManager, createMcpManager } from './mcp';
-import { autoSaveSession } from './store';
-import type { McpServerState } from './types';
+} from './subagents.js';
+import { ContextManager, createContextManager } from './context/manager.js';
+import { SecurityManager, createSecurityManager } from './security/index.js';
+import { McpManager, createMcpManager } from './mcp/index.js';
+import { autoSaveSession } from './store.js';
+import type { McpServerState } from './types.js';
 
 /**
  * Detached background sub-agent handle.
@@ -947,7 +947,7 @@ export class AgentCore {
         }
         // Enrich only the worker task with shared context (workspace root +
         // listing). The model sees it; the TUI stream shows `handle.prompt`.
-        const { enrichTaskWithContext } = await import('./subagents');
+        const { enrichTaskWithContext } = await import('./subagents.js');
         const task = await enrichTaskWithContext(prompt, this.cfg, focusPath);
         handle.result = await exploreWithSubAgent(
           this.cfg,

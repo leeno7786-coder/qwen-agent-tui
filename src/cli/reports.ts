@@ -1,8 +1,8 @@
-import type { Config, ModelInfo } from '../types';
-import { loadConfig, validateConfig } from '../config';
-import { checkRuntimeHealth, fetchLocalModels, RUNTIME_PROVIDERS } from '../providers';
-import { enrichConfigWithRuntime, isSmallModelFromConfig } from '../model-runtime';
-import { isLocalProvider } from '../llm';
+import type { Config, ModelInfo } from '../types.js';
+import { loadConfig, validateConfig } from '../config.js';
+import { checkRuntimeHealth, fetchLocalModels, RUNTIME_PROVIDERS } from '../providers.js';
+import { enrichConfigWithRuntime, isSmallModelFromConfig } from '../model-runtime.js';
+import { isLocalProvider } from '../llm.js';
 
 export interface DoctorReport {
   ok: boolean;
