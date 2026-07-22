@@ -5,7 +5,7 @@ node_modules
 out
 # dist is prebuilt and shipped so the package runs even if `prepare` is blocked
 dist
-!dist/
+!dist/**
 *.tgz
 # Built release tarball (kept for convenience; remove if you prefer to gitignore)
 !nanoagent-*.tgz
