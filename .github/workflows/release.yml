@@ -53,7 +53,7 @@ jobs:
             TAG="latest"        # stable release
           fi
           echo "Publishing @leeno7786-coder/nanoagent@$VERSION with dist-tag '$TAG'"
-          npm publish --provenance --access public --tag "$TAG"
+          npm publish --access public --tag "$TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
