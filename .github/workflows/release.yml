@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag to publish (must exist)'
+        required: false
+        default: ''
 
 permissions:
   contents: write          # create GitHub release
@@ -39,13 +45,14 @@ jobs:
 
       - name: Publish to npm
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          REF="${{ github.event.inputs.tag != '' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}"
+          VERSION="${REF#refs/tags/v}"
           if [[ "$VERSION" =~ -[0-9A-Za-z.-]+$ ]]; then
             TAG="next"          # prerelease -> next tag
           else
             TAG="latest"        # stable release
           fi
-          echo "Publishing nanoagent@$VERSION with dist-tag '$TAG'"
+          echo "Publishing @leeno7786-coder/nanoagent@$VERSION with dist-tag '$TAG'"
           npm publish --provenance --access public --tag "$TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
