@@ -1,5 +1,5 @@
 {
-  "name": "@omegaaillc112/nanoagent",
+  "name": "@omegaaillc/nanoagent",
   "version": "1.0.0",
   "description": "Ultra-lightweight, scalable CLI/TUI coding agent optimized for tiny local models & remote runtimes",
   "module": "dist/opentui/index.js",
