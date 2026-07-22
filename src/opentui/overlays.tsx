@@ -31,20 +31,26 @@ export function HelpOverlay({ theme, onClose }: HelpOverlayProps) {
       minHeight={0}
       backgroundColor={theme.bgPanel}
     >
-      <text fg={theme.headerFg}>Agent — Help</text>
+      <text fg={theme.headerFg}>NanoAgent — Help &amp; Reference</text>
       <text fg={theme.mutedFg}>Esc to close</text>
       <text> </text>
 
       <text fg={theme.userFg}>Commands:</text>
       <text fg={theme.agentFg}> /new Start a new session (clear all)</text>
       <text fg={theme.agentFg}> /clear Clear chat history</text>
-      <text fg={theme.agentFg}> /compact Compact conversation</text>
-      <text fg={theme.agentFg}> /auto ... Autonomous mode</text>
-      <text fg={theme.agentFg}> /todo Toggle todo sidebar</text>
-      <text fg={theme.agentFg}></text>
-      <text fg={theme.agentFg}> /todo add ... Add a todo</text>
+      <text fg={theme.agentFg}> /compact Compact conversation context</text>
+      <text fg={theme.agentFg}> /auto ... Autonomous subagent mode</text>
+      <text fg={theme.agentFg}>
+        {' '}
+        /config [show|set|reload] Show or edit configuration (.nanogent.json)
+      </text>
+      <text fg={theme.agentFg}>
+        {' '}
+        /set &lt;key&gt; &lt;val&gt; [--global] Quick-set config options (model, baseURL, etc)
+      </text>
+      <text fg={theme.agentFg}> /todo Toggle todo sidebar (/todo add ...)</text>
       <text fg={theme.agentFg}> /skill List loaded skills</text>
-      <text fg={theme.agentFg}> /skills Manage skills (F8) - create, enable, disable</text>
+      <text fg={theme.agentFg}> /skills Manage skills (F8) — create, enable, disable</text>
       <text fg={theme.agentFg}> /sessions List saved sessions</text>
       <text fg={theme.agentFg}> /resume [id] Resume latest or specific session</text>
       <text fg={theme.agentFg}> /rename [name] Rename current session</text>
@@ -52,17 +58,23 @@ export function HelpOverlay({ theme, onClose }: HelpOverlayProps) {
       <text fg={theme.agentFg}> /save [name] Save conversation</text>
       <text fg={theme.agentFg}> /load Load a saved conversation</text>
       <text fg={theme.agentFg}> /reload Reload config, skills, and LM Studio metadata</text>
-      <text fg={theme.agentFg}> /theme [name] Switch theme</text>
+      <text fg={theme.agentFg}> /theme [name] Switch color theme</text>
       <text fg={theme.agentFg}>
         {' '}
-        /connect Connect a provider - browse runtimes, enter API keys, select models
+        /connect Connect provider — browse runtimes, enter API keys, select models
       </text>
-      <text fg={theme.agentFg}> /doctor Config + LM Studio health (same as CLI doctor)</text>
-      <text fg={theme.agentFg}> /models List models, context, load state (same as CLI models)</text>
+      <text fg={theme.agentFg}> /doctor Health check (config + LM Studio / local runtimes)</text>
+      <text fg={theme.agentFg}> /models List local models, context, load state</text>
       <text fg={theme.agentFg}> /graph [sub] Memory graph — build|stats|report</text>
-      <text fg={theme.agentFg}> /cd [path] Change the workspace for tools</text>
-      <text fg={theme.agentFg}> /allow [path] Approve extra tool access outside the workspace</text>
-      <text fg={theme.agentFg}> /export Export chat to markdown</text>
+      <text fg={theme.agentFg}> /mcp List connected Model Context Protocol servers</text>
+      <text fg={theme.agentFg}>
+        {' '}
+        /mcp-add &lt;name&gt; &lt;local|remote&gt; &lt;cmd|url&gt; Add MCP server
+      </text>
+      <text fg={theme.agentFg}> /mcp-remove &lt;name&gt; Remove MCP server</text>
+      <text fg={theme.agentFg}> /cd [path] Change workspace directory</text>
+      <text fg={theme.agentFg}> /allow [path] Approve extra tool access outside workspace</text>
+      <text fg={theme.agentFg}> /export Export chat to markdown file</text>
       <text fg={theme.agentFg}> /exit Quit (auto-saves session)</text>
       <text> </text>
 
@@ -74,21 +86,16 @@ export function HelpOverlay({ theme, onClose }: HelpOverlayProps) {
       <text fg={theme.mutedFg}> F5 Save session</text>
       <text fg={theme.mutedFg}> F6 Load session</text>
       <text fg={theme.mutedFg}> F7 Toggle mouse capture</text>
+      <text fg={theme.mutedFg}> F8 Skills overlay</text>
       <text fg={theme.mutedFg}> F9 Cycle theme</text>
       <text fg={theme.mutedFg}> F10 Exit</text>
       <text> </text>
 
-      <text fg={theme.userFg}>Scrolling:</text>
-      <text fg={theme.mutedFg}> ↑ / ↓ Scroll line by line</text>
-      <text fg={theme.mutedFg}> Shift+↑/↓ Scroll page by page</text>
-      <text fg={theme.mutedFg}> Mouse wheel Scroll (terminal dependent)</text>
-      <text> </text>
-      <text fg={theme.userFg}>Input:</text>
-      <text> </text>
-      <text fg={theme.userFg}>Headless CLI (same app, other terminal):</text>
-      <text fg={theme.mutedFg}> bun run start This TUI (default)</text>
-      <text fg={theme.mutedFg}> bun run src/main.ts run -p "task" -w .</text>
-      <text fg={theme.mutedFg}> bun run src/main.ts doctor --json</text>
+      <text fg={theme.userFg}>CLI Execution (headless or scripts):</text>
+      <text fg={theme.mutedFg}> nanogent Interactive TUI (default)</text>
+      <text fg={theme.mutedFg}> nanogent run -p "task" -w . Run single task</text>
+      <text fg={theme.mutedFg}> nanogent doctor --json Health check report</text>
+      <text fg={theme.mutedFg}> nanogent models List available local/remote models</text>
       <text> </text>
       <text fg={theme.userFg}>Input:</text>
       <text fg={theme.mutedFg}> Shift+Enter Multi-line input</text>
