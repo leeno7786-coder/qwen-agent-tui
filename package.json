@@ -1,9 +1,21 @@
 {
   "name": "qwen-agent-tui",
   "version": "1.1.0-alpha.1",
+  "description": "A Claude Code-style terminal agent powered by local/remote OpenAI-compatible runtimes. Built with Bun + OpenTUI.",
   "module": "src/opentui/index.tsx",
   "type": "module",
-  "private": true,
+  "main": "dist/main.js",
+  "bin": {
+    "qwen-agent": "dist/main.js"
+  },
+  "files": [
+    "dist/",
+    "src/",
+    "AGENTS.md",
+    "README.md",
+    "SECURITY.md"
+  ],
+  "private": false,
   "scripts": {
     "start": "bun run src/main.ts",
     "start:tui": "bun run src/main.ts tui",
