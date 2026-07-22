@@ -6,6 +6,7 @@
   "type": "module",
   "main": "dist/main.js",
   "bin": {
+    "nanoagent": "dist/main.js",
     "nanogent": "dist/main.js",
     "nanogent-tui": "dist/main.js",
     "nano-agent": "dist/main.js"
