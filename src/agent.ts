@@ -1,29 +1,35 @@
-import { createClient, chat, streamChat, isLocalProvider } from "./llm";
-import type { ChatMessage } from "./llm";
-import { toOpenAI, type ToolExecutionHooks, ToolCacheManager, createToolCacheManager, groupToolsForParallelExecution, registerExternalTools, getAllTools, findTool } from "./tools";
-import type { SubAgentProgressEvent } from "./tools";
-import { detectContext } from "./context";
-import { SkillManager } from "./skill-manager";
-import { loadSkills } from "./skills";
-import { buildSystemPrompt } from "./prompt";
+import { createClient, chat, streamChat, isLocalProvider } from './llm';
+import type { ChatMessage } from './llm';
 import {
-  enrichConfigWithRuntime,
-  isSmallModelFromConfig,
-} from "./model-runtime";
-import { loadConfig, applySubAgentDefaults } from "./config";
-import type { Config, Message, ToolResult, AgentState, Todo } from "./types";
-import { subAgentAvailable } from "./tools";
+  toOpenAI,
+  type ToolExecutionHooks,
+  ToolCacheManager,
+  createToolCacheManager,
+  groupToolsForParallelExecution,
+  registerExternalTools,
+  getAllTools,
+  findTool,
+} from './tools';
+import type { SubAgentProgressEvent } from './tools';
+import { detectContext } from './context';
+import { SkillManager } from './skill-manager';
+import { loadSkills } from './skills';
+import { buildSystemPrompt } from './prompt';
+import { enrichConfigWithRuntime, isSmallModelFromConfig } from './model-runtime';
+import { loadConfig, applySubAgentDefaults } from './config';
+import type { Config, Message, ToolResult, AgentState, Todo } from './types';
+import { subAgentAvailable } from './tools';
 import {
   resolveSubAgentPool,
   exploreWithSubAgent,
   formatSubAgentResults,
   type SubAgentResult,
-} from "./subagents";
-import { ContextManager, createContextManager } from "./context/manager";
-import { SecurityManager, createSecurityManager } from "./security";
-import { McpManager, createMcpManager } from "./mcp";
-import { autoSaveSession } from "./store";
-import type { McpServerState } from "./types";
+} from './subagents';
+import { ContextManager, createContextManager } from './context/manager';
+import { SecurityManager, createSecurityManager } from './security';
+import { McpManager, createMcpManager } from './mcp';
+import { autoSaveSession } from './store';
+import type { McpServerState } from './types';
 
 /**
  * Detached background sub-agent handle.
@@ -37,7 +43,7 @@ interface BackgroundSubAgent {
   id: string;
   prompt: string;
   focusPath?: string;
-  status: "running" | "done" | "error";
+  status: 'running' | 'done' | 'error';
   /** Accumulated streamed progress events (full live transcript). */
   log?: SubAgentProgressEvent[];
   result?: SubAgentResult;
@@ -54,7 +60,7 @@ export class AgentCore {
   private client: ReturnType<typeof createClient>;
   cfg: Config;
   public messages: Message[] = [];
-  public state: AgentState = "idle";
+  public state: AgentState = 'idle';
   public todos: Todo[] = [];
   public currentTool?: {
     name: string;
@@ -80,7 +86,9 @@ export class AgentCore {
   /** Whether the current model is a small/quantized model (stored from init). */
   private _smallModel: boolean = false;
   /** Public accessor for small model flag (used by TUI skill operations). */
-  get isSmallModel(): boolean { return this._smallModel; }
+  get isSmallModel(): boolean {
+    return this._smallModel;
+  }
   /** Skills manager — load, unload, and sync skill prompts. */
   public skillManager: SkillManager = new SkillManager();
   /** Tool execution cache manager. */
@@ -107,7 +115,7 @@ export class AgentCore {
     id: string;
     prompt: string;
     focusPath?: string;
-    status: "running" | "done" | "error";
+    status: 'running' | 'done' | 'error';
     log?: SubAgentProgressEvent[];
     result?: SubAgentResult;
   }> {
@@ -120,7 +128,6 @@ export class AgentCore {
       result: h.result,
     }));
   }
-
 
   /**
    * @param cfg - Agent configuration.
@@ -147,30 +154,31 @@ export class AgentCore {
     this.mcpManager = createMcpManager(cfg.mcp);
   }
 
-   /**
+  /**
    * Reconfigure the agent (refreshes LM Studio model metadata when model/URL changes).
    */
   async reconfigure(newCfg: Partial<Config>) {
-    const modelChanged =
-      newCfg.model !== undefined || newCfg.baseURL !== undefined;
-const workspaceChanged = newCfg.workspace !== undefined;
+    const modelChanged = newCfg.model !== undefined || newCfg.baseURL !== undefined;
+    const workspaceChanged = newCfg.workspace !== undefined;
 
     this.cfg = { ...this.cfg, ...newCfg };
     applySubAgentDefaults(this.cfg);
-    
-     // Update cache configuration if relevant options changed
-    if (newCfg.toolCacheEnabled !== undefined || 
-        newCfg.toolCacheTtlMs !== undefined || 
-        newCfg.toolCacheMaxSize !== undefined ||
-        workspaceChanged) {
+
+    // Update cache configuration if relevant options changed
+    if (
+      newCfg.toolCacheEnabled !== undefined ||
+      newCfg.toolCacheTtlMs !== undefined ||
+      newCfg.toolCacheMaxSize !== undefined ||
+      workspaceChanged
+    ) {
       this.toolCache = createToolCacheManager(this.cfg, this.cfg.workspace);
     }
-    
+
     // Clear cache if workspace changed
     if (workspaceChanged) {
       this.toolCache.clear();
     }
-    
+
     // Update context manager if model changed
     if (modelChanged) {
       this.contextManager.updateModel(this.cfg);
@@ -188,12 +196,14 @@ const workspaceChanged = newCfg.workspace !== undefined;
     this.cfg.securityManager = this.securityManager;
 
     // Update security config if relevant options changed
-    if (newCfg.securityEnabled !== undefined ||
-        newCfg.securityValidateCommands !== undefined ||
-        newCfg.securityValidateFileAccess !== undefined ||
-        newCfg.securitySanitizeOutput !== undefined ||
-        newCfg.securityMaxFileSize !== undefined ||
-        newCfg.securityMaxBatchFiles !== undefined) {
+    if (
+      newCfg.securityEnabled !== undefined ||
+      newCfg.securityValidateCommands !== undefined ||
+      newCfg.securityValidateFileAccess !== undefined ||
+      newCfg.securitySanitizeOutput !== undefined ||
+      newCfg.securityMaxFileSize !== undefined ||
+      newCfg.securityMaxBatchFiles !== undefined
+    ) {
       this.securityManager.updateConfig({
         enabled: this.cfg.securityEnabled,
         validateCommands: this.cfg.securityValidateCommands,
@@ -216,7 +226,7 @@ const workspaceChanged = newCfg.workspace !== undefined;
     this.client = createClient(this.cfg);
   }
 
-   /**
+  /**
    * Reload config from disk and refresh LM Studio model metadata.
    * Keeps the current in-session workspace (e.g. after /cd).
    */
@@ -242,7 +252,7 @@ const workspaceChanged = newCfg.workspace !== undefined;
       workspace,
     };
     applySubAgentDefaults(this.cfg);
-    
+
     // Recreate cache manager with new config
     this.toolCache = createToolCacheManager(this.cfg);
 
@@ -265,7 +275,13 @@ const workspaceChanged = newCfg.workspace !== undefined;
       const mcpTools = this.mcpManager.getTools();
       registerExternalTools(mcpTools);
       if (process.env.QWEN_DEBUG_LLM) {
-        console.error("[QWEN_DEBUG] MCP:", this.mcpManager.connectedCount, "servers,", this.mcpManager.totalTools, "tools");
+        console.error(
+          '[QWEN_DEBUG] MCP:',
+          this.mcpManager.connectedCount,
+          'servers,',
+          this.mcpManager.totalTools,
+          'tools'
+        );
       }
     }
 
@@ -280,9 +296,13 @@ const workspaceChanged = newCfg.workspace !== undefined;
       }
     }
 
-    const skillInfos = allSkills.size > 0
-      ? Array.from(allSkills.values()).map(s => ({ name: s.name, desc: (s.description || "").slice(0, 120) }))
-      : undefined;
+    const skillInfos =
+      allSkills.size > 0
+        ? Array.from(allSkills.values()).map((s) => ({
+            name: s.name,
+            desc: (s.description || '').slice(0, 120),
+          }))
+        : undefined;
 
     let system = buildSystemPrompt(this.cfg, {
       workspace: this.cfg.workspace,
@@ -296,41 +316,39 @@ const workspaceChanged = newCfg.workspace !== undefined;
       const param =
         this.cfg.modelParamBillions !== undefined
           ? ` · ~${this.cfg.modelParamBillions}B params`
-          : "";
+          : '';
       system += `\n\n## Runtime\n${ctxK}k context loaded${param}.`;
     }
     if (subAgentAvailable(this.cfg) && !this._smallModel) {
       const subBase = this.cfg.subAgentBaseURL ?? this.cfg.baseURL;
-      const providerName = subBase.toLowerCase().includes("mistral.ai")
-        ? "Mistral"
-        : subBase.toLowerCase().includes("openrouter.ai")
-          ? "OpenRouter"
+      const providerName = subBase.toLowerCase().includes('mistral.ai')
+        ? 'Mistral'
+        : subBase.toLowerCase().includes('openrouter.ai')
+          ? 'OpenRouter'
           : isLocalProvider(subBase)
-            ? "Local"
-            : "Cloud";
+            ? 'Local'
+            : 'Cloud';
       system += `\nSub-agents: ${providerName} \`${this.cfg.subAgentModel}\` — explore_subagent (emit up to 4 in one message for parallel dispatch). Give each a NARROW task with specific file paths. They batch-read files and report structured findings. Sub-agent dispatches are synchronous — when explore_subagent returns, the batch is done. Synthesize immediately.`;
     }
     if (this.mcpManager.totalTools > 0) {
       const serverNames = this.mcpStates
-        .filter((s) => s.status === "connected")
+        .filter((s) => s.status === 'connected')
         .map((s) => `${s.name} (${s.toolCount} tools)`)
-        .join(", ");
+        .join(', ');
       system += `\nMCP tools connected: ${serverNames}. MCP tool names are prefixed with "mcp_<server>_".`;
     }
-    this.messages = [
-      { id: "system-base", role: "system", content: system, timestamp: now() },
-    ];
+    this.messages = [{ id: 'system-base', role: 'system', content: system, timestamp: now() }];
     this.syncTodoMessage();
     this.skillManager.syncSkillMessages(this.messages, this._smallModel);
 
     // Debug: log model detection info
     if (process.env.QWEN_DEBUG_LLM) {
-      console.error("[QWEN_DEBUG] agent init:", {
+      console.error('[QWEN_DEBUG] agent init:', {
         model: this.cfg.model,
         smallModelMode: this.cfg.smallModelMode,
         modelParamBillions: this.cfg.modelParamBillions,
         _smallModel: this._smallModel,
-        promptPreview: system.substring(0, 100) + "...",
+        promptPreview: system.substring(0, 100) + '...',
       });
     }
   }
@@ -340,30 +358,35 @@ const workspaceChanged = newCfg.workspace !== undefined;
    * @param userText - Raw user input.
    */
   async run(userText: string, signal?: AbortSignal) {
-    this.setState("thinking");
+    this.setState('thinking');
 
     this.roundCounter++;
 
     // Auto-load skills matching user input triggers
-    if (!userText.trim().startsWith("/")) {
-      const autoLoaded = this.skillManager.autoLoad(userText, this.messages, this._smallModel, this.onUpdate);
+    if (!userText.trim().startsWith('/')) {
+      const autoLoaded = this.skillManager.autoLoad(
+        userText,
+        this.messages,
+        this._smallModel,
+        this.onUpdate
+      );
       if (autoLoaded.length > 0) {
-        const names = autoLoaded.map(s => s.name).join(", ");
+        const names = autoLoaded.map((s) => s.name).join(', ');
         this.addAssistantMessage(`Auto-loaded skills: ${names} — these are now active in context.`);
       }
     }
 
     // Guided skill creation
-    if (userText.trim().startsWith("/create-skill")) {
+    if (userText.trim().startsWith('/create-skill')) {
       this.addAssistantMessage(
         this._smallModel
           ? "Let's create a custom skill. Provide:\n1. What the skill does\n2. Slash command (e.g. /py-format)\n3. Which tools it needs\n4. Description and prompt"
           : "🔧 Let's create a custom skill together.\n" +
-        "1. What should the skill do? (e.g., 'format Python code', 'review PRs')\n" +
-        "2. What slash command should users type? (e.g., `/py-format`, `/pr-review`)\n" +
-        "3. Which tools does it need? (e.g., `write_file`, `bash`, `grep_search`)\n" +
-        "4. Give me a short description and example prompt.\n" +
-        "I'll generate a complete, ready-to-use `.json` skill file for you."
+              "1. What should the skill do? (e.g., 'format Python code', 'review PRs')\n" +
+              '2. What slash command should users type? (e.g., `/py-format`, `/pr-review`)\n' +
+              '3. Which tools does it need? (e.g., `write_file`, `bash`, `grep_search`)\n' +
+              '4. Give me a short description and example prompt.\n' +
+              "I'll generate a complete, ready-to-use `.json` skill file for you."
       );
       return;
     }
@@ -374,147 +397,170 @@ const workspaceChanged = newCfg.workspace !== undefined;
 
     let skipUserMessage = false;
 
-    if (trimmed.startsWith("/skill:") || trimmed.startsWith("/skill-load ")) {
-      const isLoad = trimmed.startsWith("/skill-load ");
-      const prefixLength = isLoad ? "/skill-load ".length : "/skill:".length;
+    if (trimmed.startsWith('/skill:') || trimmed.startsWith('/skill-load ')) {
+      const isLoad = trimmed.startsWith('/skill-load ');
+      const prefixLength = isLoad ? '/skill-load '.length : '/skill:'.length;
       const skillName = trimmed.substring(prefixLength).trim().split(/\s+/)[0];
       const skill = SkillManager.getByName(skillName);
       if (skill && sm.load(skill, this.messages, this._smallModel, this.onUpdate)) {
         this.addUserMessage(userText);
-        this.addUserMessage(`[System Notice: The skill "${skill.name}" has just been activated. Please review its context, introduce yourself according to this skill's persona or capabilities, summarize what you can do, and proceed to work or ask the user for clarifying questions.]`);
+        this.addUserMessage(
+          `[System Notice: The skill "${skill.name}" has just been activated. Please review its context, introduce yourself according to this skill's persona or capabilities, summarize what you can do, and proceed to work or ask the user for clarifying questions.]`
+        );
         skipUserMessage = true;
       } else if (skill) {
         this.addAssistantMessage(`Skill "${skillName}" is already loaded.`);
-        this.setState("idle");
+        this.setState('idle');
         return;
       } else {
         this.addAssistantMessage(`Skill "${skillName}" not found.`);
-        this.setState("idle");
+        this.setState('idle');
         return;
       }
     }
 
-    if (trimmed.startsWith("/unload ")) {
-      const name = trimmed.replace("/unload ", "").trim().split(/\s+/)[0];
-      const unloaded = sm.unload(name, this.messages, this._smallModel, this.onUpdate) ||
+    if (trimmed.startsWith('/unload ')) {
+      const name = trimmed.replace('/unload ', '').trim().split(/\s+/)[0];
+      const unloaded =
+        sm.unload(name, this.messages, this._smallModel, this.onUpdate) ||
         sm.unload(`skill:${name}`, this.messages, this._smallModel, this.onUpdate);
-      this.addAssistantMessage(unloaded ? `Skill "${name}" unloaded.` : `Skill "${name}" not found in active skills.`);
+      this.addAssistantMessage(
+        unloaded ? `Skill "${name}" unloaded.` : `Skill "${name}" not found in active skills.`
+      );
       return;
     }
 
-    if (trimmed === "/skills" || trimmed === "/skill") {
+    if (trimmed === '/skills' || trimmed === '/skill') {
       const all = sm.getAllWithStatus();
-      const lines = ["## Available Skills", ""];
+      const lines = ['## Available Skills', ''];
       for (const s of all) {
-        lines.push(`- /skill:${s.name} — ${s.description}${s.active ? " (active)" : ""}`);
+        lines.push(`- /skill:${s.name} — ${s.description}${s.active ? ' (active)' : ''}`);
       }
-      this.addAssistantMessage(lines.join("\n"));
+      this.addAssistantMessage(lines.join('\n'));
       return;
     }
 
-    if (trimmed === "/subagents") {
+    if (trimmed === '/subagents') {
       const pool = await resolveSubAgentPool(this.cfg);
       if (!pool) {
         this.addAssistantMessage(
-          "No remote sub-agent pool configured. Set `subagents` in ~/.qwen-agent.json or set REMOTE_LMSTUDIO_URL."
+          'No remote sub-agent pool configured. Set `subagents` in ~/.qwen-agent.json or set REMOTE_LMSTUDIO_URL.'
         );
       } else {
         const lines = [
           `## Remote Sub-agents (${pool.endpoints.length} endpoints)`,
-          "",
-          ...pool.endpoints.map(
-            (e) => `- ${e.name}: \`${e.model}\` @ ${e.baseURL}`
-          ),
-          "",
+          '',
+          ...pool.endpoints.map((e) => `- ${e.name}: \`${e.model}\` @ ${e.baseURL}`),
+          '',
           `Concurrency cap: ${this.maxBackgroundSubAgents}`,
         ];
         if (this.backgroundSubAgents.size > 0) {
           lines.push(
-            "",
+            '',
             `Running: ${[...this.backgroundSubAgents.values()]
               .map((h) => `${h.id} (${h.status})`)
-              .join(", ")}`
+              .join(', ')}`
           );
         }
-        this.addAssistantMessage(lines.join("\n"));
+        this.addAssistantMessage(lines.join('\n'));
       }
-      this.setState("idle");
+      this.setState('idle');
       return;
     }
 
-    if (trimmed === "/mcp") {
+    if (trimmed === '/mcp') {
       if (this.mcpStates.length === 0) {
         this.addAssistantMessage(
-          "No MCP servers configured. Add `mcp` to ~/.qwen-agent.json.\n\n" +
-          "Example:\n```json\n\"mcp\": {\n  \"filesystem\": {\n    \"type\": \"local\",\n    \"command\": [\"npx\", \"-y\", \"@modelcontextprotocol/server-filesystem\", \"/path/to/dir\"]\n  },\n  \"remote\": {\n    \"type\": \"remote\",\n    \"url\": \"https://mcp.example.com/sse\"\n  }\n}\n```\n\nYou can also ask me to add an MCP server — just describe what you need and I'll use manage_mcp to configure it."
+          'No MCP servers configured. Add `mcp` to ~/.qwen-agent.json.\n\n' +
+            'Example:\n```json\n"mcp": {\n  "filesystem": {\n    "type": "local",\n    "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]\n  },\n  "remote": {\n    "type": "remote",\n    "url": "https://mcp.example.com/sse"\n  }\n}\n```\n\nYou can also ask me to add an MCP server — just describe what you need and I\'ll use manage_mcp to configure it.'
         );
       } else {
         const lines = [
           `## MCP Servers (${this.mcpManager.connectedCount} connected, ${this.mcpManager.totalTools} tools)`,
-          "",
+          '',
           ...this.mcpStates.map((s) => {
-            const icon = s.status === "connected" ? "+" : s.status === "error" ? "!" : "-";
-            const info = s.serverInfo ? ` (${s.serverInfo.name}${s.serverInfo.version ? ` v${s.serverInfo.version}` : ""})` : "";
-            const err = s.error ? ` - ${s.error}` : "";
+            const icon = s.status === 'connected' ? '+' : s.status === 'error' ? '!' : '-';
+            const info = s.serverInfo
+              ? ` (${s.serverInfo.name}${s.serverInfo.version ? ` v${s.serverInfo.version}` : ''})`
+              : '';
+            const err = s.error ? ` - ${s.error}` : '';
             return `- [${icon}] ${s.name}${info}: ${s.status}, ${s.toolCount} tools${err}`;
           }),
-          "",
-          "Commands: `/mcp-add`, `/mcp-remove`, or ask me to manage MCP servers.",
+          '',
+          'Commands: `/mcp-add`, `/mcp-remove`, or ask me to manage MCP servers.',
         ];
-        this.addAssistantMessage(lines.join("\n"));
+        this.addAssistantMessage(lines.join('\n'));
       }
-      this.setState("idle");
+      this.setState('idle');
       return;
     }
 
-    if (trimmed === "/mcp-add" || trimmed.startsWith("/mcp-add ")) {
-      const input = trimmed.slice("/mcp-add".length).trim();
+    if (trimmed === '/mcp-add' || trimmed.startsWith('/mcp-add ')) {
+      const input = trimmed.slice('/mcp-add'.length).trim();
       if (!input) {
         this.addAssistantMessage(
-          "Usage: `/mcp-add <name> <type> <connection>`\n\n" +
-          "Examples:\n" +
-          "- `/mcp-add filesystem local npx -y @modelcontextprotocol/server-filesystem /home/user/docs`\n" +
-          "- `/mcp-add github remote https://mcp.github.com/sse`\n\n" +
-          "Or just ask me in natural language: \"Add an MCP server for reading files in /tmp\""
+          'Usage: `/mcp-add <name> <type> <connection>`\n\n' +
+            'Examples:\n' +
+            '- `/mcp-add filesystem local npx -y @modelcontextprotocol/server-filesystem /home/user/docs`\n' +
+            '- `/mcp-add github remote https://mcp.github.com/sse`\n\n' +
+            'Or just ask me in natural language: "Add an MCP server for reading files in /tmp"'
         );
       } else {
         // Parse: name type [...args]
         const parts = input.split(/\s+/);
         const name = parts[0];
         const type = parts[1];
-        if (type === "local") {
+        if (type === 'local') {
           const command = parts.slice(2);
           if (command.length === 0) {
-            this.addAssistantMessage("Local servers need a command. Example: `/mcp-add filesystem local npx -y @modelcontextprotocol/server-filesystem /path`");
+            this.addAssistantMessage(
+              'Local servers need a command. Example: `/mcp-add filesystem local npx -y @modelcontextprotocol/server-filesystem /path`'
+            );
           } else {
-            const toolResult = await this.executeToolDirect("manage_mcp", { action: "add", name, type: "local", command });
-            this.addAssistantMessage(toolResult ?? "Added. Restart to connect.");
+            const toolResult = await this.executeToolDirect('manage_mcp', {
+              action: 'add',
+              name,
+              type: 'local',
+              command,
+            });
+            this.addAssistantMessage(toolResult ?? 'Added. Restart to connect.');
           }
-        } else if (type === "remote") {
+        } else if (type === 'remote') {
           const url = parts[2];
           if (!url) {
-            this.addAssistantMessage("Remote servers need a URL. Example: `/mcp-add api remote https://mcp.example.com/sse`");
+            this.addAssistantMessage(
+              'Remote servers need a URL. Example: `/mcp-add api remote https://mcp.example.com/sse`'
+            );
           } else {
-            const toolResult = await this.executeToolDirect("manage_mcp", { action: "add", name, type: "remote", url });
-            this.addAssistantMessage(toolResult ?? "Added. Restart to connect.");
+            const toolResult = await this.executeToolDirect('manage_mcp', {
+              action: 'add',
+              name,
+              type: 'remote',
+              url,
+            });
+            this.addAssistantMessage(toolResult ?? 'Added. Restart to connect.');
           }
         } else {
-          this.addAssistantMessage("Type must be 'local' or 'remote'. Example: `/mcp-add filesystem local npx -y ...`");
+          this.addAssistantMessage(
+            "Type must be 'local' or 'remote'. Example: `/mcp-add filesystem local npx -y ...`"
+          );
         }
       }
-      this.setState("idle");
+      this.setState('idle');
       return;
     }
 
-    if (trimmed === "/mcp-remove" || trimmed.startsWith("/mcp-remove ")) {
-      const name = trimmed.slice("/mcp-remove".length).trim();
+    if (trimmed === '/mcp-remove' || trimmed.startsWith('/mcp-remove ')) {
+      const name = trimmed.slice('/mcp-remove'.length).trim();
       if (!name) {
-        this.addAssistantMessage("Usage: `/mcp-remove <server-name>` — e.g. `/mcp-remove filesystem`");
+        this.addAssistantMessage(
+          'Usage: `/mcp-remove <server-name>` — e.g. `/mcp-remove filesystem`'
+        );
       } else {
-        const toolResult = await this.executeToolDirect("manage_mcp", { action: "remove", name });
-        this.addAssistantMessage(toolResult ?? "Removed. Restart to apply.");
+        const toolResult = await this.executeToolDirect('manage_mcp', { action: 'remove', name });
+        this.addAssistantMessage(toolResult ?? 'Removed. Restart to apply.');
       }
-      this.setState("idle");
+      this.setState('idle');
       return;
     }
 
@@ -527,8 +573,8 @@ const workspaceChanged = newCfg.workspace !== undefined;
 
     for (let i = 0; i < this.cfg.maxIterations; i++) {
       if (signal?.aborted) {
-        this.addAssistantMessage("Request cancelled.");
-        this.setState("idle");
+        this.addAssistantMessage('Request cancelled.');
+        this.setState('idle');
         return;
       }
 
@@ -542,18 +588,23 @@ const workspaceChanged = newCfg.workspace !== undefined;
 
       let assistantMsg: Message;
 
-       if (this.streaming) {
-         // Streaming mode: create partial message, fill it in as chunks arrive
-         assistantMsg = {
-           id: rnd(),
-           role: "assistant",
-           content: "",
-           timestamp: now(),
-         };
-         this.messages.push(assistantMsg);
+      if (this.streaming) {
+        // Streaming mode: create partial message, fill it in as chunks arrive
+        assistantMsg = {
+          id: rnd(),
+          role: 'assistant',
+          content: '',
+          timestamp: now(),
+        };
+        this.messages.push(assistantMsg);
 
         try {
-          const activeSkills = new Set(this.skillManager.getAllWithStatus().filter(s => s.active).map(s => s.name));
+          const activeSkills = new Set(
+            this.skillManager
+              .getAllWithStatus()
+              .filter((s) => s.active)
+              .map((s) => s.name)
+          );
           const stream = streamChat(
             this.client,
             this.cfg,
@@ -574,32 +625,41 @@ const workspaceChanged = newCfg.workspace !== undefined;
 
             // DEBUG: trace every chunk
             if (process.env.QWEN_DEBUG_LLM) {
-              console.error("[QWEN_DEBUG] agent chunk:", JSON.stringify(chunk.content), "reasoning:", JSON.stringify(chunk.reasoningContent), "toolCalls:", chunk.toolCalls?.length);
+              console.error(
+                '[QWEN_DEBUG] agent chunk:',
+                JSON.stringify(chunk.content),
+                'reasoning:',
+                JSON.stringify(chunk.reasoningContent),
+                'toolCalls:',
+                chunk.toolCalls?.length
+              );
             }
 
             if (chunk.reasoningContent) {
-              assistantMsg.reasoningContent = (assistantMsg.reasoningContent || "") + chunk.reasoningContent;
+              assistantMsg.reasoningContent =
+                (assistantMsg.reasoningContent || '') + chunk.reasoningContent;
             }
 
-            const rawChunkText = chunk.content || "";
+            const rawChunkText = chunk.content || '';
             if (rawChunkText) {
               let textToProcess = rawChunkText;
 
-              if (!inThinkTag && textToProcess.includes("<think>")) {
-                const parts = textToProcess.split("<think>");
+              if (!inThinkTag && textToProcess.includes('<think>')) {
+                const parts = textToProcess.split('<think>');
                 assistantMsg.content += parts[0];
                 inThinkTag = true;
-                textToProcess = parts.slice(1).join("<think>");
+                textToProcess = parts.slice(1).join('<think>');
               }
 
               if (inThinkTag) {
-                if (textToProcess.includes("</think>")) {
-                  const parts = textToProcess.split("</think>");
-                  assistantMsg.reasoningContent = (assistantMsg.reasoningContent || "") + parts[0];
+                if (textToProcess.includes('</think>')) {
+                  const parts = textToProcess.split('</think>');
+                  assistantMsg.reasoningContent = (assistantMsg.reasoningContent || '') + parts[0];
                   inThinkTag = false;
-                  assistantMsg.content += parts.slice(1).join("</think>");
+                  assistantMsg.content += parts.slice(1).join('</think>');
                 } else {
-                  assistantMsg.reasoningContent = (assistantMsg.reasoningContent || "") + textToProcess;
+                  assistantMsg.reasoningContent =
+                    (assistantMsg.reasoningContent || '') + textToProcess;
                 }
               } else {
                 assistantMsg.content += textToProcess;
@@ -608,18 +668,22 @@ const workspaceChanged = newCfg.workspace !== undefined;
 
             if (chunk.toolCalls && chunk.toolCalls.length > 0) {
               hasToolCalls = true;
-              toolCallBuffers = chunk.toolCalls.map((tc: { id: string; name: string; arguments: string }) => ({
-                id: tc.id,
-                name: tc.name,
-                arguments: tc.arguments,
-              }));
+              toolCallBuffers = chunk.toolCalls.map(
+                (tc: { id: string; name: string; arguments: string }) => ({
+                  id: tc.id,
+                  name: tc.name,
+                  arguments: tc.arguments,
+                })
+              );
             }
 
             this.onUpdate?.();
             iterResult = await iter.next();
           }
 
-          const streamUsage = (iterResult.value as { usage?: { input_tokens: number; output_tokens: number } })?.usage;
+          const streamUsage = (
+            iterResult.value as { usage?: { input_tokens: number; output_tokens: number } }
+          )?.usage;
           if (streamUsage) {
             this.lastUsage = streamUsage;
             this.totalUsage.input_tokens += streamUsage.input_tokens;
@@ -635,39 +699,47 @@ const workspaceChanged = newCfg.workspace !== undefined;
           // Add a minimal preface so the UI shows streaming text above the tool call list.
           if (
             assistantMsg.toolCalls?.length &&
-            assistantMsg.content.trim() === "" &&
+            assistantMsg.content.trim() === '' &&
             !assistantMsg.reasoningContent
           ) {
             const first = assistantMsg.toolCalls[0];
             const toolNames = assistantMsg.toolCalls
               .map((t) => t.name)
               .slice(0, 3)
-              .join(", ");
+              .join(', ');
             assistantMsg.content =
               toolNames.length > 0
                 ? `I will use ${toolNames} to gather the needed context.`
-                : `I will use a tool (${first?.name || "tool"}) to gather the needed context.`;
+                : `I will use a tool (${first?.name || 'tool'}) to gather the needed context.`;
           }
 
           // Now that streaming is complete, add the message to history context
           this.contextManager.addMessage(assistantMsg);
 
-          if (!assistantMsg.toolCalls && assistantMsg.content.trim() === "" && !assistantMsg.reasoningContent) {
+          if (
+            !assistantMsg.toolCalls &&
+            assistantMsg.content.trim() === '' &&
+            !assistantMsg.reasoningContent
+          ) {
             this.messages = this.messages.filter((m) => m.id !== assistantMsg.id);
-            this.setState("idle");
+            this.setState('idle');
             this.onUpdate?.();
             return;
           }
 
           // Reasoning-only: model was just thinking, loop back for actual content
-          if (!assistantMsg.toolCalls && assistantMsg.content.trim() === "" && assistantMsg.reasoningContent) {
+          if (
+            !assistantMsg.toolCalls &&
+            assistantMsg.content.trim() === '' &&
+            assistantMsg.reasoningContent
+          ) {
             reasoningOnlyStreak++;
             if (reasoningOnlyStreak >= MAX_REASONING_ONLY) {
               this.addAssistantMessage(
                 `Model produced ${MAX_REASONING_ONLY} reasoning-only responses without tool calls. ` +
-                `Try rephrasing your request or switching to a model that supports tool calling.`
+                  `Try rephrasing your request or switching to a model that supports tool calling.`
               );
-              this.setState("error");
+              this.setState('error');
               this.onUpdate?.();
               return;
             }
@@ -676,7 +748,7 @@ const workspaceChanged = newCfg.workspace !== undefined;
 
           if (!assistantMsg.toolCalls || assistantMsg.toolCalls.length === 0) {
             reasoningOnlyStreak = 0;
-            this.setState("idle");
+            this.setState('idle');
             this.onUpdate?.();
             return;
           }
@@ -685,63 +757,68 @@ const workspaceChanged = newCfg.workspace !== undefined;
           const status = e.status || e.status_code;
           const msg = e.message || String(err);
           if (status === 401) {
-            const envVar = this.cfg.baseURL?.includes("mistral.ai")
-              ? "MISTRAL_API_KEY"
-              : this.cfg.baseURL?.includes("openrouter.ai")
-                ? "OPENROUTER_API_KEY"
-                : "your API key";
+            const envVar = this.cfg.baseURL?.includes('mistral.ai')
+              ? 'MISTRAL_API_KEY'
+              : this.cfg.baseURL?.includes('openrouter.ai')
+                ? 'OPENROUTER_API_KEY'
+                : 'your API key';
             assistantMsg.content = `${msg}\n\nMake sure ${envVar} is set correctly in your environment or use /connect to update it.`;
           } else {
-            assistantMsg.content = `API error (${status || "unknown"}): ${msg}`;
+            assistantMsg.content = `API error (${status || 'unknown'}): ${msg}`;
           }
           // Add the error message to history so it's visible
           this.messages.push(assistantMsg);
           this.contextManager.addMessage(assistantMsg);
-          this.setState("error");
+          this.setState('error');
           this.onUpdate?.();
           return;
         }
-       } else {
-         // Non-streaming mode
-         let response: Awaited<ReturnType<typeof chat>>;
-         
-         // Check and compact context if needed
-         this.checkAndCompactContext();
-         
-         try {
-           const activeSkills = new Set(this.skillManager.getAllWithStatus().filter(s => s.active).map(s => s.name));
-            response = await chat(
-              this.client,
-              this.cfg,
-              this.toChatMessages(),
-              toOpenAI(getAllTools(), this.cfg, activeSkills),
-              signal
-           );
+      } else {
+        // Non-streaming mode
+        let response: Awaited<ReturnType<typeof chat>>;
+
+        // Check and compact context if needed
+        this.checkAndCompactContext();
+
+        try {
+          const activeSkills = new Set(
+            this.skillManager
+              .getAllWithStatus()
+              .filter((s) => s.active)
+              .map((s) => s.name)
+          );
+          response = await chat(
+            this.client,
+            this.cfg,
+            this.toChatMessages(),
+            toOpenAI(getAllTools(), this.cfg, activeSkills),
+            signal
+          );
         } catch (err: unknown) {
           const e = err as { status?: number; status_code?: number; message?: string };
           const status = e.status || e.status_code;
           const msg = e.message || String(err);
           if (status === 401) {
-            const envVar = this.cfg.baseURL?.includes("mistral.ai")
-              ? "MISTRAL_API_KEY"
-              : this.cfg.baseURL?.includes("openrouter.ai")
-                ? "OPENROUTER_API_KEY"
-                : "your API key";
+            const envVar = this.cfg.baseURL?.includes('mistral.ai')
+              ? 'MISTRAL_API_KEY'
+              : this.cfg.baseURL?.includes('openrouter.ai')
+                ? 'OPENROUTER_API_KEY'
+                : 'your API key';
             this.addAssistantMessage(
               `${msg}\n\nMake sure ${envVar} is set correctly in your environment or use /connect to update it.`
             );
           } else {
-            this.addAssistantMessage(`API error (${status || "unknown"}): ${msg}`);
+            this.addAssistantMessage(`API error (${status || 'unknown'}): ${msg}`);
           }
-          this.setState("error");
+          this.setState('error');
           return;
         }
 
         const msg = response.message;
         assistantMsg = {
           id: rnd(),
-          role: "assistant",
-          content: msg.content || "",
+          role: 'assistant',
+          content: msg.content || '',
           reasoningContent: msg.reasoning_content || undefined,
           timestamp: now(),
         };
@@ -751,26 +828,26 @@ const workspaceChanged = newCfg.workspace !== undefined;
             name: tc.function.name,
             arguments: tc.function.arguments,
           }));
-         }
-         this.messages.push(assistantMsg);
-         this.contextManager.addMessage(assistantMsg);
+        }
+        this.messages.push(assistantMsg);
+        this.contextManager.addMessage(assistantMsg);
 
-         if (!msg.tool_calls || msg.tool_calls.length === 0) {
+        if (!msg.tool_calls || msg.tool_calls.length === 0) {
           // If reasoning-only (no content, no tools), loop back instead of stopping
           if (!msg.content && msg.reasoning_content) {
             reasoningOnlyStreak++;
             if (reasoningOnlyStreak >= MAX_REASONING_ONLY) {
               this.addAssistantMessage(
                 `Model produced ${MAX_REASONING_ONLY} reasoning-only responses without tool calls. ` +
-                `Try rephrasing your request or switching to a model that supports tool calling.`
+                  `Try rephrasing your request or switching to a model that supports tool calling.`
               );
-              this.setState("error");
+              this.setState('error');
               this.onUpdate?.();
               return;
             }
             continue;
           }
-          this.setState("idle");
+          this.setState('idle');
           if (response.usage) {
             this.lastUsage = response.usage;
             this.totalUsage.input_tokens += response.usage.input_tokens;
@@ -782,31 +859,31 @@ const workspaceChanged = newCfg.workspace !== undefined;
 
       // Abort gate: if signal fired during the LLM call, stop here
       if (signal?.aborted) {
-        this.addAssistantMessage("Request cancelled.");
-        this.setState("idle");
+        this.addAssistantMessage('Request cancelled.');
+        this.setState('idle');
         this.onUpdate?.();
         return;
       }
 
-        // Execute tools (shared between streaming and non-streaming)
-        const tcs = assistantMsg.toolCalls || [];
-        
-        // Group tools for parallel execution
-        const { parallel, sequential } = groupToolsForParallelExecution(tcs);
-        
-        // Execute parallel tools first
-        if (parallel.length > 0) {
-          await this.executeToolsParallel(parallel, signal);
-        }
-        
-        // Execute sequential tools
-        for (const tc of sequential) {
-          await this.executeToolSequential(tc, signal);
-        }
+      // Execute tools (shared between streaming and non-streaming)
+      const tcs = assistantMsg.toolCalls || [];
+
+      // Group tools for parallel execution
+      const { parallel, sequential } = groupToolsForParallelExecution(tcs);
+
+      // Execute parallel tools first
+      if (parallel.length > 0) {
+        await this.executeToolsParallel(parallel, signal);
       }
 
-    this.addAssistantMessage("Max iterations reached without completion.");
-    this.setState("error");
+      // Execute sequential tools
+      for (const tc of sequential) {
+        await this.executeToolSequential(tc, signal);
+      }
+    }
+
+    this.addAssistantMessage('Max iterations reached without completion.');
+    this.setState('error');
   }
 
   /**
@@ -841,7 +918,7 @@ const workspaceChanged = newCfg.workspace !== undefined;
       // never shows up in the chat.
       prompt,
       focusPath,
-      status: "running",
+      status: 'running',
       promise,
       resolve: resolveFn,
       reject: rejectFn,
@@ -854,22 +931,23 @@ const workspaceChanged = newCfg.workspace !== undefined;
       try {
         const pool = await resolveSubAgentPool(this.cfg);
         if (!pool) {
-          handle.status = "error";
+          handle.status = 'error';
           handle.result = {
             name: id,
-            model: "",
-            baseURL: "",
+            model: '',
+            baseURL: '',
             ok: false,
-            output: "",
+            output: '',
             durationMs: 0,
-            error: "No remote sub-agent pool configured. Set subagents in ~/.qwen-agent.json or REMOTE_LMSTUDIO_URL.",
+            error:
+              'No remote sub-agent pool configured. Set subagents in ~/.qwen-agent.json or REMOTE_LMSTUDIO_URL.',
             toolCalls: 0,
           };
           return;
         }
         // Enrich only the worker task with shared context (workspace root +
         // listing). The model sees it; the TUI stream shows `handle.prompt`.
-        const { enrichTaskWithContext } = await import("./subagents");
+        const { enrichTaskWithContext } = await import('./subagents');
         const task = await enrichTaskWithContext(prompt, this.cfg, focusPath);
         handle.result = await exploreWithSubAgent(
           this.cfg,
@@ -879,16 +957,16 @@ const workspaceChanged = newCfg.workspace !== undefined;
           undefined,
           this.buildSubAgentHooks(id)
         );
-        handle.status = handle.result.ok ? "done" : "error";
+        handle.status = handle.result.ok ? 'done' : 'error';
       } catch (e: unknown) {
         const err = e as { message?: string };
-        handle.status = "error";
+        handle.status = 'error';
         handle.result = {
           name: id,
-          model: "",
-          baseURL: "",
+          model: '',
+          baseURL: '',
           ok: false,
-          output: "",
+          output: '',
           durationMs: 0,
           error: err.message || String(e),
           toolCalls: 0,
@@ -898,14 +976,14 @@ const workspaceChanged = newCfg.workspace !== undefined;
       }
     })().catch((err) => {
       // Catch any errors that escape the async IIFE
-      console.error("Background sub-agent error:", err);
-      handle.status = "error";
+      console.error('Background sub-agent error:', err);
+      handle.status = 'error';
       handle.result = {
         name: id,
-        model: "",
-        baseURL: "",
+        model: '',
+        baseURL: '',
         ok: false,
-        output: "",
+        output: '',
         durationMs: 0,
         error: err instanceof Error ? err.message : String(err),
         toolCalls: 0,
@@ -917,7 +995,7 @@ const workspaceChanged = newCfg.workspace !== undefined;
       ok: true,
       launched: true,
       id,
-      note: "Sub-agent running in background. Its result will be collected automatically before the next synthesis turn.",
+      note: 'Sub-agent running in background. Its result will be collected automatically before the next synthesis turn.',
     });
   }
 
@@ -945,7 +1023,7 @@ const workspaceChanged = newCfg.workspace !== undefined;
     if (this.backgroundSubAgents.size === 0) return;
 
     const handles = [...this.backgroundSubAgents.values()];
-    
+
     // Use Promise.allSettled to handle rejections gracefully
     const settledResults = await Promise.allSettled(handles.map((h) => h.promise));
 
@@ -956,26 +1034,26 @@ const workspaceChanged = newCfg.workspace !== undefined;
           return handles[index].result;
         } else {
           // For rejected promises, create an error result
-          console.error("Background sub-agent failed:", result.reason);
+          console.error('Background sub-agent failed:', result.reason);
           return {
             ok: false,
             error: result.reason instanceof Error ? result.reason.message : String(result.reason),
-            output: "",
+            output: '',
             durationMs: 0,
           } as SubAgentResult;
         }
       })
       .filter((r): r is SubAgentResult => !!r);
-    
+
     const formatted = formatSubAgentResults(results);
 
     // Emit one consolidated tool result message per batch.
     this.messages.push({
       id: rnd(),
-      role: "tool",
+      role: 'tool',
       content: formatted,
       timestamp: now(),
-      toolCallId: `bg-${handles.map((h) => h.id).join(",")}`,
+      toolCallId: `bg-${handles.map((h) => h.id).join(',')}`,
     });
 
     // Always clear the background sub-agents map, even on errors
@@ -1027,31 +1105,34 @@ const workspaceChanged = newCfg.workspace !== undefined;
     return tool.execute(args, this.cfg.workspace, configWithSecurity);
   }
 
-  private async executeToolSequential(tc: { name: string; arguments: string; id: string }, signal?: AbortSignal): Promise<void> {
+  private async executeToolSequential(
+    tc: { name: string; arguments: string; id: string },
+    signal?: AbortSignal
+  ): Promise<void> {
     const tool = findTool(tc.name);
-    
+
     this.currentTool = { name: tc.name, args: tc.arguments };
-    this.setState("executing_tool");
+    this.setState('executing_tool');
 
     const start = performance.now();
     let output: string;
     let wasCached = false;
-    
+
     try {
       const args = this.parseToolArgs(tc);
-      
+
       // Check cache first
       const cached = this.toolCache.get(tc.name, args, this.cfg.workspace);
       if (cached) {
         output = cached.result;
         wasCached = true;
         const duration = cached.duration;
-        
+
         this.addToolMessage(output, tc.id);
-        
+
         // Handle special tool results even for cached responses
         this.handleSpecialToolResults(tc.name, output, tc.id);
-        
+
         const finalOutput = output;
         this.onToolResult?.({
           toolCallId: tc.id,
@@ -1063,27 +1144,31 @@ const workspaceChanged = newCfg.workspace !== undefined;
         this.currentTool = undefined;
         return;
       }
-      
+
       // Create config with security manager
       const configWithSecurity = {
         ...this.cfg,
         securityManager: this.securityManager,
       };
-      
+
       if (tool?.executeAsync) {
         const subHooks: ToolExecutionHooks | undefined =
-          tc.name === "explore_subagent"
+          tc.name === 'explore_subagent'
             ? {
                 onSubAgentProgress: (progress) => {
                   const saId = progress.agent || `sa-sync-${tc.id}`;
                   let handle = this.backgroundSubAgents.get(saId);
                   if (!handle) {
                     let pPrompt = tc.arguments;
-                    try { pPrompt = JSON.parse(tc.arguments).prompt || tc.arguments; } catch { /* not JSON */ }
+                    try {
+                      pPrompt = JSON.parse(tc.arguments).prompt || tc.arguments;
+                    } catch {
+                      /* not JSON */
+                    }
                     handle = {
                       id: saId,
                       prompt: progress.task || pPrompt,
-                      status: "running",
+                      status: 'running',
                       promise: Promise.resolve(),
                       resolve: () => {},
                       reject: () => {},
@@ -1092,17 +1177,17 @@ const workspaceChanged = newCfg.workspace !== undefined;
                   }
                   handle.log = handle.log ?? [];
                   if (handle.log.length < 200) handle.log.push(progress);
-                  if (progress.type === "subagent_done") {
-                    handle.status = progress.ok ? "done" : "error";
+                  if (progress.type === 'subagent_done') {
+                    handle.status = progress.ok ? 'done' : 'error';
                     handle.result = {
                       name: saId,
                       model: progress.model,
-                      baseURL: "",
+                      baseURL: '',
                       ok: progress.ok ?? false,
-                      output: progress.output ?? "",
+                      output: progress.output ?? '',
                       durationMs: 0,
                       toolCalls: progress.toolCalls ?? 0,
-                      error: progress.ok ? undefined : (progress.output || "sub-agent failed"),
+                      error: progress.ok ? undefined : progress.output || 'sub-agent failed',
                     };
                   }
                   this.currentTool = {
@@ -1137,7 +1222,7 @@ const workspaceChanged = newCfg.workspace !== undefined;
       });
     }
     const duration = performance.now() - start;
-    
+
     // Cache successful results
     if (!wasCached && tool) {
       try {
@@ -1149,13 +1234,13 @@ const workspaceChanged = newCfg.workspace !== undefined;
         }
       } catch (e) {
         // If we can't parse the output or it's not a valid success, don't cache it
-        console.debug("Tool output not cached due to invalid format:", e);
+        console.debug('Tool output not cached due to invalid format:', e);
       }
     }
 
     this.messages.push({
       id: rnd(),
-      role: "tool",
+      role: 'tool',
       content: output,
       timestamp: now(),
       toolCallId: tc.id,
@@ -1181,20 +1266,26 @@ const workspaceChanged = newCfg.workspace !== undefined;
     parallelTools: Array<{ name: string; arguments: string; index: number; id: string }>,
     signal?: AbortSignal
   ): Promise<void> {
-    this.setState("executing_tool");
+    this.setState('executing_tool');
 
-    const results: Array<{ index: number; id: string; output: string; duration: number; wasCached: boolean }> = [];
-    
+    const results: Array<{
+      index: number;
+      id: string;
+      output: string;
+      duration: number;
+      wasCached: boolean;
+    }> = [];
+
     // Execute all parallel tools concurrently
     const promises = parallelTools.map(async (tc) => {
       const tool = findTool(tc.name);
       const toolStart = performance.now();
       let output: string;
       let wasCached = false;
-      
+
       try {
         const args = this.parseToolArgs(tc);
-        
+
         // Check cache first
         const cached = this.toolCache.get(tc.name, args, this.cfg.workspace);
         if (cached) {
@@ -1202,17 +1293,17 @@ const workspaceChanged = newCfg.workspace !== undefined;
           wasCached = true;
           return { index: tc.index, id: tc.id, output, duration: cached.duration, wasCached };
         }
-        
-         // Execute the tool
+
+        // Execute the tool
         // Create config with security manager
         const configWithSecurity = {
           ...this.cfg,
           securityManager: this.securityManager,
         };
-        
+
         if (tool?.executeAsync) {
           const subHooks: ToolExecutionHooks | undefined =
-            tc.name === "explore_subagent"
+            tc.name === 'explore_subagent'
               ? {
                   onSubAgentProgress: (progress) => {
                     const saId = progress.agent || `sa-sync-${tc.id}`;
@@ -1221,11 +1312,13 @@ const workspaceChanged = newCfg.workspace !== undefined;
                       let pPrompt = tc.arguments;
                       try {
                         pPrompt = JSON.parse(tc.arguments).prompt || tc.arguments;
-                      } catch { /* not JSON */ }
+                      } catch {
+                        /* not JSON */
+                      }
                       handle = {
                         id: saId,
                         prompt: progress.task || pPrompt,
-                        status: "running",
+                        status: 'running',
                         promise: Promise.resolve(),
                         resolve: () => {},
                         reject: () => {},
@@ -1235,8 +1328,8 @@ const workspaceChanged = newCfg.workspace !== undefined;
                     }
                     handle.log = handle.log ?? [];
                     if (handle.log.length < 200) handle.log.push(progress);
-                    if (progress.type === "subagent_done") {
-                      handle.status = progress.ok ? "done" : "error";
+                    if (progress.type === 'subagent_done') {
+                      handle.status = progress.ok ? 'done' : 'error';
                     }
                     this.currentTool = {
                       name: tc.name,
@@ -1257,9 +1350,9 @@ const workspaceChanged = newCfg.workspace !== undefined;
         } else {
           output = tool
             ? tool.execute(args, this.cfg.workspace, configWithSecurity)
-            : JSON.stringify({ ok: false, error: "Unknown tool" });
+            : JSON.stringify({ ok: false, error: 'Unknown tool' });
         }
-        
+
         // Cache successful results
         if (tool) {
           try {
@@ -1271,22 +1364,34 @@ const workspaceChanged = newCfg.workspace !== undefined;
             }
           } catch (e) {
             // If we can't parse the output or it's not a valid success, don't cache it
-            console.debug("Parallel tool output not cached due to invalid format:", e);
+            console.debug('Parallel tool output not cached due to invalid format:', e);
           }
         }
-        
-        return { index: tc.index, id: tc.id, output, duration: performance.now() - toolStart, wasCached };
+
+        return {
+          index: tc.index,
+          id: tc.id,
+          output,
+          duration: performance.now() - toolStart,
+          wasCached,
+        };
       } catch (e: unknown) {
         // Log the full error including stack trace for debugging
         const pErr = e as { message?: string };
         console.error(`Parallel tool execution error [${tc.name}]:`, e);
-        return { index: tc.index, id: tc.id, output: JSON.stringify({ ok: false, error: pErr.message || String(e) }), duration: performance.now() - toolStart, wasCached: false };
+        return {
+          index: tc.index,
+          id: tc.id,
+          output: JSON.stringify({ ok: false, error: pErr.message || String(e) }),
+          duration: performance.now() - toolStart,
+          wasCached: false,
+        };
       }
     });
-    
+
     // Wait for all parallel tools to complete
     const settledResults = await Promise.allSettled(promises);
-    
+
     // Process results in original order
     for (const index of settledResults.keys()) {
       const result = settledResults[index];
@@ -1301,33 +1406,33 @@ const workspaceChanged = newCfg.workspace !== undefined;
           id: originalTc?.id ?? '',
           output: JSON.stringify({ ok: false, error: result.reason?.message || 'Unknown error' }),
           duration: 0,
-          wasCached: false
+          wasCached: false,
         });
       }
     }
-    
+
     // Sort by original index to maintain order
     results.sort((a, b) => a.index - b.index);
-    
-     // Add messages in order
-     for (const result of results) {
-       this.addToolMessage(result.output, result.id);
-       
-       // Handle special tool results
-       const tc = parallelTools.find(t => t.id === result.id);
-       if (tc) {
-         this.handleSpecialToolResults(tc.name, result.output, tc.id);
-       }
-      
+
+    // Add messages in order
+    for (const result of results) {
+      this.addToolMessage(result.output, result.id);
+
+      // Handle special tool results
+      const tc = parallelTools.find((t) => t.id === result.id);
+      if (tc) {
+        this.handleSpecialToolResults(tc.name, result.output, tc.id);
+      }
+
       this.onToolResult?.({
         toolCallId: result.id,
-        name: parallelTools.find(t => t.id === result.id)?.name || '',
+        name: parallelTools.find((t) => t.id === result.id)?.name || '',
         output: result.output,
         duration: result.duration,
         cached: result.wasCached,
       });
     }
-    
+
     this.currentTool = undefined;
   }
 
@@ -1336,7 +1441,7 @@ const workspaceChanged = newCfg.workspace !== undefined;
    */
   private handleSpecialToolResults(toolName: string, output: string, _toolCallId: string): void {
     // Intercept change_workspace results to sync agent state
-    if (toolName === "change_workspace") {
+    if (toolName === 'change_workspace') {
       try {
         const result = JSON.parse(output);
         if (result.ok && result.workspace) {
@@ -1361,12 +1466,12 @@ const workspaceChanged = newCfg.workspace !== undefined;
     }
 
     // Intercept manage_todos results to sync agent state
-    if (toolName === "manage_todos") {
+    if (toolName === 'manage_todos') {
       try {
         const result = JSON.parse(output);
         if (result.ok) {
           const lastMsg = this.messages[this.messages.length - 1];
-          if (result.action === "add" && result.text) {
+          if (result.action === 'add' && result.text) {
             if (result.id) {
               this.todos.push({
                 id: result.id,
@@ -1381,21 +1486,21 @@ const workspaceChanged = newCfg.workspace !== undefined;
             if (lastMsg && newTodo) {
               lastMsg.content = JSON.stringify({
                 ok: true,
-                action: "add",
+                action: 'add',
                 id: newTodo.id,
                 text: newTodo.text,
               });
             }
             this.syncTodoMessage();
             this.onUpdate?.();
-          } else if (result.action === "complete") {
+          } else if (result.action === 'complete') {
             const target = this.todos.find((t) => t.id === result.id);
             if (target) {
               this.toggleTodo(result.id);
               if (lastMsg) {
                 lastMsg.content = JSON.stringify({
                   ok: true,
-                  action: "complete",
+                  action: 'complete',
                   id: result.id,
                   text: target.text,
                 });
@@ -1404,19 +1509,19 @@ const workspaceChanged = newCfg.workspace !== undefined;
               if (lastMsg) {
                 lastMsg.content = JSON.stringify({
                   ok: false,
-                  action: "complete",
+                  action: 'complete',
                   error: `Todo id=${result.id} not found`,
                 });
               }
             }
-          } else if (result.action === "remove") {
+          } else if (result.action === 'remove') {
             const target = this.todos.find((t) => t.id === result.id);
             if (target) {
               this.removeTodo(result.id);
               if (lastMsg) {
                 lastMsg.content = JSON.stringify({
                   ok: true,
-                  action: "remove",
+                  action: 'remove',
                   id: result.id,
                   text: target.text,
                 });
@@ -1425,16 +1530,16 @@ const workspaceChanged = newCfg.workspace !== undefined;
               if (lastMsg) {
                 lastMsg.content = JSON.stringify({
                   ok: false,
-                  action: "remove",
+                  action: 'remove',
                   error: `Todo id=${result.id} not found`,
                 });
               }
             }
-          } else if (result.action === "list") {
+          } else if (result.action === 'list') {
             if (lastMsg) {
               lastMsg.content = JSON.stringify({
                 ok: true,
-                action: "list",
+                action: 'list',
                 count: this.todos.length,
                 todos: this.todos.map((t) => ({ id: t.id, text: t.text, done: t.done })),
               });
@@ -1452,9 +1557,9 @@ const workspaceChanged = newCfg.workspace !== undefined;
     const pending = this.todos.filter((t) => !t.done);
     const done = this.todos.filter((t) => t.done);
     if (pending.length === 0 && done.length === 0) {
-      return "Current todo list: (empty — no todos yet)";
+      return 'Current todo list: (empty — no todos yet)';
     }
-    let text = "Current todo list (use the id in manage_todos):\n";
+    let text = 'Current todo list (use the id in manage_todos):\n';
     for (const t of pending) {
       text += `  - [ ] id=${t.id} | ${t.text}\n`;
     }
@@ -1466,16 +1571,14 @@ const workspaceChanged = newCfg.workspace !== undefined;
 
   /** Sync the dedicated todo system message for internal tracking (filtered out before sending to LLM). */
   private syncTodoMessage() {
-    const idx = this.messages.findIndex(
-      (m) => m.role === "system" && m.id === "system-todos"
-    );
+    const idx = this.messages.findIndex((m) => m.role === 'system' && m.id === 'system-todos');
     const content = this.buildTodoContext();
     if (idx >= 0) {
       this.messages[idx].content = content;
     } else {
       this.messages.unshift({
-        id: "system-todos",
-        role: "system",
+        id: 'system-todos',
+        role: 'system',
         content,
         timestamp: now(),
       });
@@ -1493,33 +1596,33 @@ const workspaceChanged = newCfg.workspace !== undefined;
     // because Qwen's Jinja template requires system messages at the beginning.
     const messagesToSend = this.messages.filter(
       (m) =>
-        !(m.role === "system" && m.id === "system-todos") &&
-        !(m.role === "system" && m.id !== "system-base") &&
-        !(m.role === "assistant" && !m.toolCalls && !m.reasoningContent && m.content.trim() === "")
+        !(m.role === 'system' && m.id === 'system-todos') &&
+        !(m.role === 'system' && m.id !== 'system-base') &&
+        !(m.role === 'assistant' && !m.toolCalls && !m.reasoningContent && m.content.trim() === '')
     );
 
     return messagesToSend.map((m) => {
-      if (m.role === "tool") {
+      if (m.role === 'tool') {
         return {
-          role: "tool" as const,
+          role: 'tool' as const,
           content: m.content,
           tool_call_id: m.toolCallId!,
         };
       }
-      if (m.role === "assistant" && m.toolCalls) {
+      if (m.role === 'assistant' && m.toolCalls) {
         return {
-          role: "assistant" as const,
+          role: 'assistant' as const,
           content: m.content,
           tool_calls: m.toolCalls.map((tc) => ({
             id: tc.id,
-            type: "function" as const,
+            type: 'function' as const,
             function: { name: tc.name, arguments: tc.arguments },
           })),
         };
       }
-      if (m.role === "assistant" && m.reasoningContent) {
+      if (m.role === 'assistant' && m.reasoningContent) {
         return {
-          role: "assistant" as const,
+          role: 'assistant' as const,
           content: m.content,
         };
       }
@@ -1531,7 +1634,7 @@ const workspaceChanged = newCfg.workspace !== undefined;
   private addAssistantMessage(content: string) {
     const msg: Message = {
       id: rnd(),
-      role: "assistant",
+      role: 'assistant',
       content,
       timestamp: now(),
     };
@@ -1546,7 +1649,7 @@ const workspaceChanged = newCfg.workspace !== undefined;
   private addUserMessage(content: string): void {
     const msg: Message = {
       id: rnd(),
-      role: "user",
+      role: 'user',
       content,
       timestamp: now(),
     };
@@ -1561,7 +1664,7 @@ const workspaceChanged = newCfg.workspace !== undefined;
   private addToolMessage(content: string, toolCallId?: string): void {
     const msg: Message = {
       id: rnd(),
-      role: "tool",
+      role: 'tool',
       content,
       timestamp: now(),
       toolCallId,
@@ -1581,7 +1684,7 @@ const workspaceChanged = newCfg.workspace !== undefined;
     }
 
     const result = this.contextManager.compact();
-    
+
     if (result.removedCount > 0) {
       // Add a system message about compaction
       if (result.summary) {
@@ -1589,7 +1692,7 @@ const workspaceChanged = newCfg.workspace !== undefined;
       }
       return true;
     }
-    
+
     return false;
   }
 
@@ -1632,11 +1735,10 @@ const workspaceChanged = newCfg.workspace !== undefined;
     try {
       this.mcpManager?.disconnectAll();
     } catch (err) {
-      console.warn("MCP disconnect error during shutdown:", err);
+      console.warn('MCP disconnect error during shutdown:', err);
     }
     this.backgroundSubAgents.clear();
   }
-
 }
 
 function rnd() {

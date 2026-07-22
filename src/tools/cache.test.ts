@@ -3,11 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'bun:test';
-import {
-  ToolCacheManager,
-  generateCacheKey,
-  DEFAULT_CACHE_CONFIG,
-} from './cache';
+import { ToolCacheManager, generateCacheKey, DEFAULT_CACHE_CONFIG } from './cache';
 
 describe('ToolCacheManager', () => {
   let cache: ToolCacheManager;
@@ -73,7 +69,7 @@ describe('ToolCacheManager', () => {
       expect(shortTtlCache.get('read_file', args, '/workspace')).toBeDefined();
 
       // Wait for TTL to expire
-      await new Promise(resolve => setTimeout(resolve, 60));
+      await new Promise((resolve) => setTimeout(resolve, 60));
 
       // Should be expired now
       expect(shortTtlCache.get('read_file', args, '/workspace')).toBeUndefined();
@@ -112,7 +108,7 @@ describe('ToolCacheManager', () => {
       const stats = cache.getStats();
       expect(stats.hits).toBe(2);
       expect(stats.misses).toBe(1); // Only 1 miss because write_file is excluded and doesn't count
-      expect(stats.hitRate).toBeCloseTo(2/3);
+      expect(stats.hitRate).toBeCloseTo(2 / 3);
     });
 
     it('should report correct cache size', () => {

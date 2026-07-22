@@ -1,12 +1,18 @@
 /**
  * Memory Graph Tools
- * 
+ *
  * Tools to query and interact with the memory graph
  */
 
 import { MemoryGraph } from './MemoryGraph';
-import type { GraphNode, GraphEdge, GraphQuery, GraphQueryResult, GraphCommunity, GodNode } from './types';
-
+import type {
+  GraphNode,
+  GraphEdge,
+  GraphQuery,
+  GraphQueryResult,
+  GraphCommunity,
+  GodNode,
+} from './types';
 
 // Global graph instance cache
 const graphCache: Map<string, MemoryGraph> = new Map();
@@ -65,26 +71,26 @@ export async function build_memory_graph(args: { workspace?: string }): Promise<
   time?: number;
 }> {
   const workspace = args.workspace || process.cwd();
-  
+
   try {
     const graph = await getMemoryGraph(workspace);
     const startTime = Date.now();
-    
+
     await graph.build();
-    
+
     const stats = graph.getStats();
-    
+
     return {
       ok: true,
       message: `Memory graph built successfully`,
       nodes: stats.nodeCount,
       edges: stats.edgeCount,
-      time: Date.now() - startTime
+      time: Date.now() - startTime,
     };
   } catch (err: unknown) {
     return {
       ok: false,
-      message: `Failed to build memory graph: ${(err as { message?: string }).message}`
+      message: `Failed to build memory graph: ${(err as { message?: string }).message}`,
     };
   }
 }
@@ -97,7 +103,7 @@ export async function query_memory_graph(args: {
   query: GraphQuery;
 }): Promise<GraphQueryResult> {
   const workspace = args.workspace || process.cwd();
-  
+
   try {
     const graph = await getMemoryGraph(workspace);
     return graph.query(args.query);
@@ -109,8 +115,8 @@ export async function query_memory_graph(args: {
       stats: {
         nodeCount: 0,
         edgeCount: 0,
-        queryTime: 0
-      }
+        queryTime: 0,
+      },
     };
   }
 }
@@ -125,7 +131,7 @@ export async function get_graph_stats(args: { workspace?: string }): Promise<{
   nodesByLanguage: Record<string, number>;
 }> {
   const workspace = args.workspace || process.cwd();
-  
+
   try {
     const graph = await getMemoryGraph(workspace);
     return graph.getStats();
@@ -134,7 +140,7 @@ export async function get_graph_stats(args: { workspace?: string }): Promise<{
       nodeCount: 0,
       edgeCount: 0,
       nodesByType: {},
-      nodesByLanguage: {}
+      nodesByLanguage: {},
     };
   }
 }
@@ -148,13 +154,13 @@ export async function search_nodes_by_type(args: {
   limit?: number;
 }): Promise<GraphNode[]> {
   const workspace = args.workspace || process.cwd();
-  
+
   try {
     const graph = await getMemoryGraph(workspace);
     const result = graph.query({
       type: 'node',
       query: { type: args.type },
-      limit: args.limit || 50
+      limit: args.limit || 50,
     });
     return result.nodes;
   } catch {
@@ -171,13 +177,13 @@ export async function search_nodes_by_name(args: {
   limit?: number;
 }): Promise<GraphNode[]> {
   const workspace = args.workspace || process.cwd();
-  
+
   try {
     const graph = await getMemoryGraph(workspace);
     const result = graph.query({
       type: 'node',
       query: { name: args.name },
-      limit: args.limit || 50
+      limit: args.limit || 50,
     });
     return result.nodes;
   } catch {
@@ -194,13 +200,13 @@ export async function search_nodes_by_path(args: {
   limit?: number;
 }): Promise<GraphNode[]> {
   const workspace = args.workspace || process.cwd();
-  
+
   try {
     const graph = await getMemoryGraph(workspace);
     const result = graph.query({
       type: 'node',
       query: { path: args.path },
-      limit: args.limit || 50
+      limit: args.limit || 50,
     });
     return result.nodes;
   } catch {
@@ -217,15 +223,15 @@ export async function find_dependencies(args: {
   maxDepth?: number;
 }): Promise<GraphNode[]> {
   const workspace = args.workspace || process.cwd();
-  
+
   try {
     const graph = await getMemoryGraph(workspace);
     const result = graph.query({
       type: 'semantic',
       query: {
-        relatedTo: args.nodeId
+        relatedTo: args.nodeId,
       },
-      limit: args.maxDepth ? (args.maxDepth * 10) : 50
+      limit: args.maxDepth ? args.maxDepth * 10 : 50,
     });
     return result.nodes;
   } catch {
@@ -243,7 +249,7 @@ export async function find_path(args: {
   maxDepth?: number;
 }): Promise<string[][]> {
   const workspace = args.workspace || process.cwd();
-  
+
   try {
     const graph = await getMemoryGraph(workspace);
     const result = graph.query({
@@ -251,8 +257,8 @@ export async function find_path(args: {
       query: {
         from: args.from,
         to: args.to,
-        maxDepth: args.maxDepth || 5
-      }
+        maxDepth: args.maxDepth || 5,
+      },
     });
     return result.paths;
   } catch {
@@ -269,13 +275,13 @@ export async function pattern_search(args: {
   limit?: number;
 }): Promise<GraphNode[]> {
   const workspace = args.workspace || process.cwd();
-  
+
   try {
     const graph = await getMemoryGraph(workspace);
     const result = graph.query({
       type: 'pattern',
       query: args.pattern,
-      limit: args.limit || 50
+      limit: args.limit || 50,
     });
     return result.nodes;
   } catch {
@@ -291,16 +297,16 @@ export async function get_file_info(args: {
   path: string;
 }): Promise<GraphNode | null> {
   const workspace = args.workspace || process.cwd();
-  
+
   try {
     const graph = await getMemoryGraph(workspace);
     const result = graph.query({
       type: 'node',
       query: {
         type: 'file',
-        path: args.path
+        path: args.path,
       },
-      limit: 1
+      limit: 1,
     });
     return result.nodes[0] || null;
   } catch {
@@ -317,7 +323,7 @@ export async function get_function_info(args: {
   path?: string;
 }): Promise<GraphNode[]> {
   const workspace = args.workspace || process.cwd();
-  
+
   try {
     const graph = await getMemoryGraph(workspace);
     const result = graph.query({
@@ -325,9 +331,9 @@ export async function get_function_info(args: {
       query: {
         type: 'function',
         name: args.name,
-        ...(args.path && { path: args.path })
+        ...(args.path && { path: args.path }),
       },
-      limit: 10
+      limit: 10,
     });
     return result.nodes;
   } catch {
@@ -344,7 +350,7 @@ export async function get_class_info(args: {
   path?: string;
 }): Promise<GraphNode[]> {
   const workspace = args.workspace || process.cwd();
-  
+
   try {
     const graph = await getMemoryGraph(workspace);
     const result = graph.query({
@@ -352,9 +358,9 @@ export async function get_class_info(args: {
       query: {
         type: 'class',
         name: args.name,
-        ...(args.path && { path: args.path })
+        ...(args.path && { path: args.path }),
       },
-      limit: 10
+      limit: 10,
     });
     return result.nodes;
   } catch {
@@ -370,13 +376,13 @@ export async function list_files(args: {
   limit?: number;
 }): Promise<GraphNode[]> {
   const workspace = args.workspace || process.cwd();
-  
+
   try {
     const graph = await getMemoryGraph(workspace);
     const result = graph.query({
       type: 'node',
       query: { type: 'file' },
-      limit: args.limit || 100
+      limit: args.limit || 100,
     });
     return result.nodes;
   } catch {
@@ -392,13 +398,13 @@ export async function list_functions(args: {
   limit?: number;
 }): Promise<GraphNode[]> {
   const workspace = args.workspace || process.cwd();
-  
+
   try {
     const graph = await getMemoryGraph(workspace);
     const result = graph.query({
       type: 'node',
       query: { type: 'function' },
-      limit: args.limit || 100
+      limit: args.limit || 100,
     });
     return result.nodes;
   } catch {
@@ -414,13 +420,13 @@ export async function list_classes(args: {
   limit?: number;
 }): Promise<GraphNode[]> {
   const workspace = args.workspace || process.cwd();
-  
+
   try {
     const graph = await getMemoryGraph(workspace);
     const result = graph.query({
       type: 'node',
       query: { type: 'class' },
-      limit: args.limit || 100
+      limit: args.limit || 100,
     });
     return result.nodes;
   } catch {
@@ -485,7 +491,11 @@ export async function get_god_nodes(args: {
 export async function get_surprising_connections(args: {
   workspace?: string;
   limit?: number;
-}): Promise<{ ok: boolean; connections: Array<{ edge: GraphEdge; sourceCommunity: number; targetCommunity: number }>; error?: string }> {
+}): Promise<{
+  ok: boolean;
+  connections: Array<{ edge: GraphEdge; sourceCommunity: number; targetCommunity: number }>;
+  error?: string;
+}> {
   const workspace = args.workspace || process.cwd();
   try {
     const graph = await getMemoryGraph(workspace);

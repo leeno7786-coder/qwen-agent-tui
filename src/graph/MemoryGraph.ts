@@ -1,11 +1,11 @@
 /**
  * Memory Graph System
- * 
+ *
  * A knowledge graph that stores information about the codebase:
  * - Files, functions, classes, variables, types
  * - Dependencies and relationships between them
  * - Concepts and documentation
- * 
+ *
  * Features:
  * - Build graph from source code
  * - Load/save existing graphs
@@ -13,7 +13,15 @@
  * - Incremental updates
  */
 
-import { GraphNode, GraphEdge, GraphQuery, GraphQueryResult, GraphBuildOptions, GraphCommunity, GodNode } from './types';
+import {
+  GraphNode,
+  GraphEdge,
+  GraphQuery,
+  GraphQueryResult,
+  GraphBuildOptions,
+  GraphCommunity,
+  GodNode,
+} from './types';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -48,17 +56,9 @@ export class MemoryGraph {
       includeDependencies: true,
       includeCode: false,
       maxFileSize: 1024 * 1024, // 1MB
-      excludedPaths: [
-        'node_modules',
-        'dist',
-        'build',
-        '.git',
-        '.qwen-graph',
-        '*.lock',
-        '*.log'
-      ],
+      excludedPaths: ['node_modules', 'dist', 'build', '.git', '.qwen-graph', '*.lock', '*.log'],
       includedPaths: ['src', 'tests', 'lib'],
-      ...options
+      ...options,
     };
 
     this.nodes = new Map();
@@ -67,7 +67,7 @@ export class MemoryGraph {
       byType: new Map(),
       byPath: new Map(),
       byName: new Map(),
-      byLanguage: new Map()
+      byLanguage: new Map(),
     };
   }
 
@@ -86,7 +86,7 @@ export class MemoryGraph {
   static async load(workspace: string): Promise<MemoryGraph | null> {
     const graphDir = join(workspace, GRAPH_DIRECTORY);
     const graphFile = join(graphDir, GRAPH_FILE);
-    
+
     if (!existsSync(graphFile)) {
       return null;
     }
@@ -94,12 +94,12 @@ export class MemoryGraph {
     try {
       const data = JSON.parse(readFileSync(graphFile, 'utf-8'));
       const graph = new MemoryGraph(workspace);
-      
+
       // Load nodes
       for (const node of data.nodes || []) {
         graph.addNode(node);
       }
-      
+
       // Load edges
       for (const edge of data.edges || []) {
         graph.addEdge(edge);
@@ -121,7 +121,7 @@ export class MemoryGraph {
   static async create(workspace: string, options: GraphBuildOptions = {}): Promise<MemoryGraph> {
     // Check if graph exists and is up to date
     const existingGraph = await MemoryGraph.load(workspace);
-    if (existingGraph && await existingGraph.isUpToDate()) {
+    if (existingGraph && (await existingGraph.isUpToDate())) {
       return existingGraph;
     }
 
@@ -135,7 +135,7 @@ export class MemoryGraph {
    */
   async isUpToDate(): Promise<boolean> {
     const hashFile = join(this.graphDir, HASH_FILE);
-    
+
     if (!existsSync(hashFile)) {
       return false;
     }
@@ -214,9 +214,11 @@ export class MemoryGraph {
 
         if (stat.isDirectory()) {
           // Skip excluded directories (match name exactly or as a path segment)
-          if (this.options.excludedPaths?.some(p =>
-            item === p || normPath.includes(`/${p}/`) || normPath.endsWith(`/${p}`)
-          )) {
+          if (
+            this.options.excludedPaths?.some(
+              (p) => item === p || normPath.includes(`/${p}/`) || normPath.endsWith(`/${p}`)
+            )
+          ) {
             continue;
           }
 
@@ -225,15 +227,17 @@ export class MemoryGraph {
             files.push(...this.findFiles(fullPath));
           } else {
             // Only recurse if this directory is (or is under) an included path
-            if (this.options.includedPaths.some(p =>
-              item === p || normPath.includes(`/${p}/`) || normPath.endsWith(`/${p}`)
-            )) {
+            if (
+              this.options.includedPaths.some(
+                (p) => item === p || normPath.includes(`/${p}/`) || normPath.endsWith(`/${p}`)
+              )
+            ) {
               files.push(...this.findFiles(fullPath));
             }
           }
         } else if (stat.isFile()) {
           // Skip excluded files
-          if (this.options.excludedPaths?.some(p => item === p || item.endsWith(p))) {
+          if (this.options.excludedPaths?.some((p) => item === p || item.endsWith(p))) {
             continue;
           }
 
@@ -264,7 +268,7 @@ export class MemoryGraph {
       byType: new Map(),
       byPath: new Map(),
       byName: new Map(),
-      byLanguage: new Map()
+      byLanguage: new Map(),
     };
 
     // Find and process all files
@@ -273,10 +277,10 @@ export class MemoryGraph {
 
     for (const file of files) {
       try {
-      await this.processFile(file);
-    } catch (err: unknown) {
-      console.warn(`Error processing file ${file}:`, (err as { message?: string }).message);
-    }
+        await this.processFile(file);
+      } catch (err: unknown) {
+        console.warn(`Error processing file ${file}:`, (err as { message?: string }).message);
+      }
     }
 
     // Build indexes
@@ -306,10 +310,10 @@ export class MemoryGraph {
       language,
       metadata: {
         size: statSync(filePath).size,
-        mtime: statSync(filePath).mtimeMs
+        mtime: statSync(filePath).mtimeMs,
       },
       createdAt: Date.now(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
     };
     this.addNode(fileNode);
 
@@ -358,7 +362,7 @@ export class MemoryGraph {
       go: 'go',
       rs: 'rust',
       php: 'php',
-      rb: 'ruby'
+      rb: 'ruby',
     };
     return languageMap[ext || ''] || 'unknown';
   }
@@ -413,7 +417,11 @@ export class MemoryGraph {
     return this.options.includeCode ? node.getText(sf) : undefined;
   }
 
-  private processTSImport(node: ts.ImportDeclaration, fileNode: GraphNode, sf: ts.SourceFile): void {
+  private processTSImport(
+    node: ts.ImportDeclaration,
+    fileNode: GraphNode,
+    sf: ts.SourceFile
+  ): void {
     const modulePath = (node.moduleSpecifier as ts.StringLiteral).text;
     const clause = node.importClause;
     if (!clause) return;
@@ -434,7 +442,13 @@ export class MemoryGraph {
     }
   }
 
-  private addImportNode(name: string, modulePath: string, fileNode: GraphNode, node: ts.Node, sf: ts.SourceFile): void {
+  private addImportNode(
+    name: string,
+    modulePath: string,
+    fileNode: GraphNode,
+    node: ts.Node,
+    sf: ts.SourceFile
+  ): void {
     const importNode: GraphNode = {
       id: `import:${fileNode.id}:${name}`,
       type: 'module',
@@ -444,7 +458,7 @@ export class MemoryGraph {
       language: fileNode.language,
       metadata: { importedFrom: modulePath, file: fileNode.id },
       createdAt: Date.now(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
     };
     this.addNode(importNode);
     this.addEdge({
@@ -452,11 +466,15 @@ export class MemoryGraph {
       source: fileNode.id,
       target: importNode.id,
       type: 'imports',
-      createdAt: Date.now()
+      createdAt: Date.now(),
     });
   }
 
-  private processTSExport(node: ts.ExportDeclaration, fileNode: GraphNode, sf: ts.SourceFile): void {
+  private processTSExport(
+    node: ts.ExportDeclaration,
+    fileNode: GraphNode,
+    sf: ts.SourceFile
+  ): void {
     if (!node.moduleSpecifier || !node.exportClause) return;
     if (!ts.isNamedExports(node.exportClause)) return;
 
@@ -466,7 +484,11 @@ export class MemoryGraph {
     }
   }
 
-  private processTSExportDefault(node: ts.ExportAssignment, fileNode: GraphNode, sf: ts.SourceFile): void {
+  private processTSExportDefault(
+    node: ts.ExportAssignment,
+    fileNode: GraphNode,
+    sf: ts.SourceFile
+  ): void {
     const fn: GraphNode = {
       id: `function:${fileNode.id}:default`,
       type: 'function',
@@ -476,10 +498,16 @@ export class MemoryGraph {
       language: fileNode.language,
       code: this.tsCode(node, sf),
       createdAt: Date.now(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
     };
     this.addNode(fn);
-    this.addEdge({ id: `edge:${fileNode.id}:${fn.id}`, source: fileNode.id, target: fn.id, type: 'part_of', createdAt: Date.now() });
+    this.addEdge({
+      id: `edge:${fileNode.id}:${fn.id}`,
+      source: fileNode.id,
+      target: fn.id,
+      type: 'part_of',
+      createdAt: Date.now(),
+    });
   }
 
   private processTSClass(node: ts.ClassDeclaration, fileNode: GraphNode, sf: ts.SourceFile): void {
@@ -493,10 +521,16 @@ export class MemoryGraph {
       language: fileNode.language,
       code: this.tsCode(node, sf),
       createdAt: Date.now(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
     };
     this.addNode(classNode);
-    this.addEdge({ id: `edge:${fileNode.id}:${classNode.id}`, source: fileNode.id, target: classNode.id, type: 'part_of', createdAt: Date.now() });
+    this.addEdge({
+      id: `edge:${fileNode.id}:${classNode.id}`,
+      source: fileNode.id,
+      target: classNode.id,
+      type: 'part_of',
+      createdAt: Date.now(),
+    });
 
     if (node.heritageClauses) {
       for (const clause of node.heritageClauses) {
@@ -504,13 +538,25 @@ export class MemoryGraph {
           for (const t of clause.types) {
             const p = t.expression.getText(sf);
             this.addHeritageRef(`class:${fileNode.id}:${p}`, 'class', p, fileNode, node, sf);
-            this.addEdge({ id: `edge:${classNode.id}:extends:${p}`, source: classNode.id, target: `class:${fileNode.id}:${p}`, type: 'extends', createdAt: Date.now() });
+            this.addEdge({
+              id: `edge:${classNode.id}:extends:${p}`,
+              source: classNode.id,
+              target: `class:${fileNode.id}:${p}`,
+              type: 'extends',
+              createdAt: Date.now(),
+            });
           }
         } else if (clause.token === ts.SyntaxKind.ImplementsKeyword) {
           for (const t of clause.types) {
             const p = t.expression.getText(sf);
             this.addHeritageRef(`type:${fileNode.id}:${p}`, 'type', p, fileNode, node, sf);
-            this.addEdge({ id: `edge:${classNode.id}:implements:${p}`, source: classNode.id, target: `type:${fileNode.id}:${p}`, type: 'implements', createdAt: Date.now() });
+            this.addEdge({
+              id: `edge:${classNode.id}:implements:${p}`,
+              source: classNode.id,
+              target: `type:${fileNode.id}:${p}`,
+              type: 'implements',
+              createdAt: Date.now(),
+            });
           }
         }
       }
@@ -530,10 +576,16 @@ export class MemoryGraph {
             code: this.tsCode(m, sf),
             metadata: { class: className },
             createdAt: Date.now(),
-            updatedAt: Date.now()
+            updatedAt: Date.now(),
           };
           this.addNode(fn);
-          this.addEdge({ id: `edge:${classNode.id}:${fn.id}`, source: classNode.id, target: fn.id, type: 'part_of', createdAt: Date.now() });
+          this.addEdge({
+            id: `edge:${classNode.id}:${fn.id}`,
+            source: classNode.id,
+            target: fn.id,
+            type: 'part_of',
+            createdAt: Date.now(),
+          });
           this.extractCalls(m, fn, fileNode, sf);
         }
 
@@ -549,30 +601,55 @@ export class MemoryGraph {
             code: this.tsCode(m, sf),
             metadata: { class: className },
             createdAt: Date.now(),
-            updatedAt: Date.now()
+            updatedAt: Date.now(),
           };
           this.addNode(pv);
-          this.addEdge({ id: `edge:${classNode.id}:${pv.id}`, source: classNode.id, target: pv.id, type: 'part_of', createdAt: Date.now() });
+          this.addEdge({
+            id: `edge:${classNode.id}:${pv.id}`,
+            source: classNode.id,
+            target: pv.id,
+            type: 'part_of',
+            createdAt: Date.now(),
+          });
         }
       }
     }
   }
 
-  private addHeritageRef(id: string, type: GraphNode['type'], name: string, fileNode: GraphNode, node: ts.Node, sf: ts.SourceFile): void {
+  private addHeritageRef(
+    id: string,
+    type: GraphNode['type'],
+    name: string,
+    fileNode: GraphNode,
+    node: ts.Node,
+    sf: ts.SourceFile
+  ): void {
     if (this.nodes.has(id)) return;
     this.addNode({
-      id, type, name,
+      id,
+      type,
+      name,
       path: fileNode.path,
       line: this.tsLine(node, sf),
       language: fileNode.language,
       metadata: { external: true },
       createdAt: Date.now(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
     });
-    this.addEdge({ id: `edge:${fileNode.id}:${id}`, source: fileNode.id, target: id, type: 'part_of', createdAt: Date.now() });
+    this.addEdge({
+      id: `edge:${fileNode.id}:${id}`,
+      source: fileNode.id,
+      target: id,
+      type: 'part_of',
+      createdAt: Date.now(),
+    });
   }
 
-  private processTSFunction(node: ts.FunctionLikeDeclaration, fileNode: GraphNode, sf: ts.SourceFile): void {
+  private processTSFunction(
+    node: ts.FunctionLikeDeclaration,
+    fileNode: GraphNode,
+    sf: ts.SourceFile
+  ): void {
     const funcName = (node.name as ts.Identifier | undefined)?.text;
     if (!funcName) return;
 
@@ -585,19 +662,31 @@ export class MemoryGraph {
       language: fileNode.language,
       code: this.tsCode(node, sf),
       createdAt: Date.now(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
     };
     this.addNode(fn);
-    this.addEdge({ id: `edge:${fileNode.id}:${fn.id}`, source: fileNode.id, target: fn.id, type: 'part_of', createdAt: Date.now() });
+    this.addEdge({
+      id: `edge:${fileNode.id}:${fn.id}`,
+      source: fileNode.id,
+      target: fn.id,
+      type: 'part_of',
+      createdAt: Date.now(),
+    });
     this.extractCalls(node, fn, fileNode, sf);
   }
 
-  private processTSVariables(node: ts.VariableStatement, fileNode: GraphNode, sf: ts.SourceFile): void {
+  private processTSVariables(
+    node: ts.VariableStatement,
+    fileNode: GraphNode,
+    sf: ts.SourceFile
+  ): void {
     for (const decl of node.declarationList.declarations) {
       if (!decl.name || !ts.isIdentifier(decl.name)) continue;
 
       const varName = decl.name.text;
-      const isFunction = decl.initializer && (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer));
+      const isFunction =
+        decl.initializer &&
+        (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer));
       const type: 'function' | 'variable' = isFunction ? 'function' : 'variable';
       const prefix = isFunction ? 'function' : 'variable';
       const line = this.tsLine(decl, sf);
@@ -611,10 +700,16 @@ export class MemoryGraph {
         language: fileNode.language,
         code: this.tsCode(decl, sf),
         createdAt: Date.now(),
-        updatedAt: Date.now()
+        updatedAt: Date.now(),
       };
       this.addNode(n);
-      this.addEdge({ id: `edge:${fileNode.id}:${n.id}`, source: fileNode.id, target: n.id, type: 'part_of', createdAt: Date.now() });
+      this.addEdge({
+        id: `edge:${fileNode.id}:${n.id}`,
+        source: fileNode.id,
+        target: n.id,
+        type: 'part_of',
+        createdAt: Date.now(),
+      });
 
       if (decl.initializer && ts.isFunctionLike(decl.initializer)) {
         this.extractCalls(decl.initializer as ts.FunctionLikeDeclaration, n, fileNode, sf);
@@ -639,10 +734,16 @@ export class MemoryGraph {
       code: this.tsCode(node, sf),
       metadata: { tsType: subType },
       createdAt: Date.now(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
     };
     this.addNode(tn);
-    this.addEdge({ id: `edge:${fileNode.id}:${tn.id}`, source: fileNode.id, target: tn.id, type: 'part_of', createdAt: Date.now() });
+    this.addEdge({
+      id: `edge:${fileNode.id}:${tn.id}`,
+      source: fileNode.id,
+      target: tn.id,
+      type: 'part_of',
+      createdAt: Date.now(),
+    });
 
     if (ts.isInterfaceDeclaration(node) && node.heritageClauses) {
       for (const clause of node.heritageClauses) {
@@ -650,7 +751,13 @@ export class MemoryGraph {
           for (const t of clause.types) {
             const p = t.expression.getText(sf);
             this.addHeritageRef(`type:${fileNode.id}:${p}`, 'type', p, fileNode, node, sf);
-            this.addEdge({ id: `edge:${tn.id}:extends:${p}`, source: tn.id, target: `type:${fileNode.id}:${p}`, type: 'extends', createdAt: Date.now() });
+            this.addEdge({
+              id: `edge:${tn.id}:extends:${p}`,
+              source: tn.id,
+              target: `type:${fileNode.id}:${p}`,
+              type: 'extends',
+              createdAt: Date.now(),
+            });
           }
         }
       }
@@ -668,13 +775,23 @@ export class MemoryGraph {
       code: this.tsCode(node, sf),
       metadata: { tsType: 'enum' },
       createdAt: Date.now(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
     };
     this.addNode(en);
-    this.addEdge({ id: `edge:${fileNode.id}:${en.id}`, source: fileNode.id, target: en.id, type: 'part_of', createdAt: Date.now() });
+    this.addEdge({
+      id: `edge:${fileNode.id}:${en.id}`,
+      source: fileNode.id,
+      target: en.id,
+      type: 'part_of',
+      createdAt: Date.now(),
+    });
   }
 
-  private processTSModule(node: ts.ModuleDeclaration, fileNode: GraphNode, sf: ts.SourceFile): void {
+  private processTSModule(
+    node: ts.ModuleDeclaration,
+    fileNode: GraphNode,
+    sf: ts.SourceFile
+  ): void {
     const mn: GraphNode = {
       id: `concept:${fileNode.id}:${node.name.text}`,
       type: 'concept',
@@ -684,14 +801,25 @@ export class MemoryGraph {
       language: fileNode.language,
       code: this.tsCode(node, sf),
       createdAt: Date.now(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
     };
     this.addNode(mn);
-    this.addEdge({ id: `edge:${fileNode.id}:${mn.id}`, source: fileNode.id, target: mn.id, type: 'part_of', createdAt: Date.now() });
+    this.addEdge({
+      id: `edge:${fileNode.id}:${mn.id}`,
+      source: fileNode.id,
+      target: mn.id,
+      type: 'part_of',
+      createdAt: Date.now(),
+    });
   }
 
-  private extractCalls(container: ts.Node, parentNode: GraphNode, fileNode: GraphNode, sf: ts.SourceFile): void {
-    ts.forEachChild(container, child => {
+  private extractCalls(
+    container: ts.Node,
+    parentNode: GraphNode,
+    fileNode: GraphNode,
+    sf: ts.SourceFile
+  ): void {
+    ts.forEachChild(container, (child) => {
       if (ts.isCallExpression(child)) {
         const callee = child.expression;
         let calledName: string | undefined;
@@ -705,8 +833,11 @@ export class MemoryGraph {
         if (calledName) {
           const targetId = `function:${fileNode.id}:${calledName}`;
           const altTargetId = `variable:${fileNode.id}:${calledName}`;
-          const actualTarget = this.nodes.has(targetId) ? targetId :
-            this.nodes.has(altTargetId) ? altTargetId : undefined;
+          const actualTarget = this.nodes.has(targetId)
+            ? targetId
+            : this.nodes.has(altTargetId)
+              ? altTargetId
+              : undefined;
           if (actualTarget) {
             this.addEdge({
               id: `edge:${parentNode.id}:calls:${calledName}`,
@@ -714,7 +845,7 @@ export class MemoryGraph {
               target: actualTarget,
               type: 'calls',
               metadata: { line: this.tsLine(child, sf) },
-              createdAt: Date.now()
+              createdAt: Date.now(),
             });
           }
         }
@@ -729,7 +860,7 @@ export class MemoryGraph {
   private processJsonFile(filePath: string, content: string, fileNode: GraphNode): void {
     try {
       const data = JSON.parse(content);
-      
+
       if (data && typeof data === 'object') {
         for (const [key, value] of Object.entries(data)) {
           const node: GraphNode = {
@@ -740,19 +871,19 @@ export class MemoryGraph {
             path: fileNode.path,
             metadata: {
               value: value,
-              configType: typeof value
+              configType: typeof value,
             },
             createdAt: Date.now(),
-            updatedAt: Date.now()
+            updatedAt: Date.now(),
           };
           this.addNode(node);
-          
+
           this.addEdge({
             id: `edge:${fileNode.id}:${node.id}`,
             source: fileNode.id,
             target: node.id,
             type: 'part_of',
-            createdAt: Date.now()
+            createdAt: Date.now(),
           });
         }
       }
@@ -776,7 +907,7 @@ export class MemoryGraph {
       if (headerMatch) {
         const level = headerMatch[1].length;
         const title = headerMatch[2];
-        
+
         const conceptNode: GraphNode = {
           id: `concept:${fileNode.id}:${title.replace(/\s+/g, '-').toLowerCase()}`,
           type: 'concept',
@@ -786,19 +917,19 @@ export class MemoryGraph {
           line: lineNum,
           metadata: {
             level,
-            file: fileNode.id
+            file: fileNode.id,
           },
           createdAt: Date.now(),
-          updatedAt: Date.now()
+          updatedAt: Date.now(),
         };
         this.addNode(conceptNode);
-        
+
         this.addEdge({
           id: `edge:${fileNode.id}:${conceptNode.id}`,
           source: fileNode.id,
           target: conceptNode.id,
           type: 'part_of',
-          createdAt: Date.now()
+          createdAt: Date.now(),
         });
       }
     }
@@ -820,7 +951,7 @@ export class MemoryGraph {
         if (match) {
           const key = match[1];
           const value = match[2];
-          
+
           const node: GraphNode = {
             id: `config:${fileNode.id}:${key}`,
             type: 'concept',
@@ -830,19 +961,19 @@ export class MemoryGraph {
             line: lineNum,
             metadata: {
               value,
-              configType: 'yaml'
+              configType: 'yaml',
             },
             createdAt: Date.now(),
-            updatedAt: Date.now()
+            updatedAt: Date.now(),
           };
           this.addNode(node);
-          
+
           this.addEdge({
             id: `edge:${fileNode.id}:${node.id}`,
             source: fileNode.id,
             target: node.id,
             type: 'part_of',
-            createdAt: Date.now()
+            createdAt: Date.now(),
           });
         }
       }
@@ -934,7 +1065,7 @@ export class MemoryGraph {
       version: this.version,
       lastUpdated: this.lastUpdated,
       nodes: Array.from(this.nodes.values()),
-      edges: Array.from(this.edges.values())
+      edges: Array.from(this.edges.values()),
     };
 
     writeFileSync(join(this.graphDir, GRAPH_FILE), JSON.stringify(graphData, null, 2));
@@ -958,8 +1089,8 @@ export class MemoryGraph {
       stats: {
         nodeCount: this.nodes.size,
         edgeCount: this.edges.size,
-        queryTime: 0
-      }
+        queryTime: 0,
+      },
     };
 
     switch (query.type) {
@@ -1092,7 +1223,7 @@ export class MemoryGraph {
   private findPaths(fromId: string, toId: string, maxDepth: number): string[][] {
     const paths: string[][] = [];
     const queue: { current: string; path: string[]; depth: number }[] = [
-      { current: fromId, path: [fromId], depth: 0 }
+      { current: fromId, path: [fromId], depth: 0 },
     ];
     const visited = new Set<string>();
 
@@ -1115,7 +1246,7 @@ export class MemoryGraph {
           queue.push({
             current: edge.target,
             path: [...path, edge.target],
-            depth: depth + 1
+            depth: depth + 1,
           });
         }
       }
@@ -1198,7 +1329,7 @@ export class MemoryGraph {
       nodeCount: this.nodes.size,
       edgeCount: this.edges.size,
       nodesByType,
-      nodesByLanguage
+      nodesByLanguage,
     };
   }
 
@@ -1212,7 +1343,7 @@ export class MemoryGraph {
       byType: new Map(),
       byPath: new Map(),
       byName: new Map(),
-      byLanguage: new Map()
+      byLanguage: new Map(),
     };
   }
 
@@ -1254,7 +1385,7 @@ export class MemoryGraph {
     return {
       nodes: Array.from(this.nodes.values()),
       edges: Array.from(this.edges.values()),
-      stats: this.getStats()
+      stats: this.getStats(),
     };
   }
 
@@ -1306,7 +1437,9 @@ export class MemoryGraph {
 
     // Initialize: each node in its own community
     const community = new Map<string, number>();
-    nodeIds.forEach((id, i) => { community.set(id, i); });
+    nodeIds.forEach((id, i) => {
+      community.set(id, i);
+    });
 
     // Precompute degrees
     const degree = new Map<string, number>();
@@ -1353,7 +1486,7 @@ export class MemoryGraph {
         for (const [nc, k_i_in_new] of commWeight) {
           if (nc === nodeComm) continue;
           const sumTot_new = sumTot.get(nc) || 0;
-          const gainAdd = (k_i_in_new / m) - (sumTot_new * k_i) / (2 * m * m);
+          const gainAdd = k_i_in_new / m - (sumTot_new * k_i) / (2 * m * m);
           const totalGain = gainRemove + gainAdd;
 
           if (totalGain > bestGain) {
@@ -1425,7 +1558,7 @@ export class MemoryGraph {
 
     const communities: GraphCommunity[] = [];
     for (const [commId, nodeIds] of commNodes) {
-      const nodes = nodeIds.map(id => this.nodes.get(id)!).filter(Boolean);
+      const nodes = nodeIds.map((id) => this.nodes.get(id)!).filter(Boolean);
       let internalEdges = 0;
       let externalEdges = 0;
       for (const [, edge] of this.edges) {
@@ -1441,9 +1574,10 @@ export class MemoryGraph {
         nodes,
         internalEdges,
         externalEdges,
-        density: nodeIds.length > 1 ? (2 * internalEdges) / (nodeIds.length * (nodeIds.length - 1)) : 0,
+        density:
+          nodeIds.length > 1 ? (2 * internalEdges) / (nodeIds.length * (nodeIds.length - 1)) : 0,
         topNodeIds: nodeIds.slice(0, 10),
-        nodeIds
+        nodeIds,
       };
       communities.push(community);
     }
@@ -1482,9 +1616,12 @@ export class MemoryGraph {
   /**
    * Get surprising connections: edges that connect different communities
    */
-  getSurprisingConnections(limit: number = 20): Array<{ edge: GraphEdge; sourceCommunity: number; targetCommunity: number }> {
+  getSurprisingConnections(
+    limit: number = 20
+  ): Array<{ edge: GraphEdge; sourceCommunity: number; targetCommunity: number }> {
     this.detectCommunities();
-    const results: Array<{ edge: GraphEdge; sourceCommunity: number; targetCommunity: number }> = [];
+    const results: Array<{ edge: GraphEdge; sourceCommunity: number; targetCommunity: number }> =
+      [];
 
     for (const [, edge] of this.edges) {
       const sNode = this.nodes.get(edge.source);
@@ -1500,7 +1637,14 @@ export class MemoryGraph {
 
     // Sort by edge type interestingness
     results.sort((a, b) => {
-      const rank: Record<string, number> = { calls: 5, imports: 4, extends: 3, implements: 2, part_of: 1, uses: 1 };
+      const rank: Record<string, number> = {
+        calls: 5,
+        imports: 4,
+        extends: 3,
+        implements: 2,
+        part_of: 1,
+        uses: 1,
+      };
       return (rank[b.edge.type] || 0) - (rank[a.edge.type] || 0);
     });
 
@@ -1524,7 +1668,9 @@ export class MemoryGraph {
     lines.push(`- **Nodes**: ${stats.nodeCount}`);
     lines.push(`- **Edges**: ${stats.edgeCount}`);
     lines.push(`- **Communities**: ${communities.length}`);
-    lines.push(`- **Graph Density**: ${stats.nodeCount > 1 ? ((2 * stats.edgeCount) / (stats.nodeCount * (stats.nodeCount - 1)) * 100).toFixed(2) : 0}%`);
+    lines.push(
+      `- **Graph Density**: ${stats.nodeCount > 1 ? (((2 * stats.edgeCount) / (stats.nodeCount * (stats.nodeCount - 1))) * 100).toFixed(2) : 0}%`
+    );
     lines.push('');
 
     lines.push('## Nodes by Type');
@@ -1550,7 +1696,9 @@ export class MemoryGraph {
     lines.push('| Rank | Node | Type | Degree | In | Out |');
     lines.push('|------|------|------|--------|----|-----|');
     godNodes.forEach((gn, i) => {
-      lines.push(`| ${i + 1} | ${gn.node.name} | ${gn.node.type} | ${gn.degree} | ${gn.inDegree} | ${gn.outDegree} |`);
+      lines.push(
+        `| ${i + 1} | ${gn.node.name} | ${gn.node.type} | ${gn.degree} | ${gn.inDegree} | ${gn.outDegree} |`
+      );
     });
     lines.push('');
 
@@ -1566,7 +1714,7 @@ export class MemoryGraph {
       lines.push('');
       if (comm.topNodeIds.length > 0) {
         lines.push('Top nodes:');
-        comm.topNodeIds.slice(0, 8).forEach(id => {
+        comm.topNodeIds.slice(0, 8).forEach((id) => {
           const node = this.nodes.get(id);
           if (node) {
             lines.push(`- \`${node.name}\` (${node.type})`);
@@ -1581,10 +1729,12 @@ export class MemoryGraph {
       lines.push('');
       lines.push('| Source | Target | Type | Communities |');
       lines.push('|--------|--------|------|-------------|');
-      surprising.forEach(sc => {
+      surprising.forEach((sc) => {
         const sName = this.nodes.get(sc.edge.source)?.name || sc.edge.source;
         const tName = this.nodes.get(sc.edge.target)?.name || sc.edge.target;
-        lines.push(`| ${sName} | ${tName} | ${sc.edge.type} | ${sc.sourceCommunity} → ${sc.targetCommunity} |`);
+        lines.push(
+          `| ${sName} | ${tName} | ${sc.edge.type} | ${sc.sourceCommunity} → ${sc.targetCommunity} |`
+        );
       });
       lines.push('');
     }

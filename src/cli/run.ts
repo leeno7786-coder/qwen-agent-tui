@@ -1,8 +1,8 @@
-import { parseArgs } from "util";
-import { resolve } from "path";
-import { AgentCore } from "../agent";
-import { loadConfig } from "../config";
-import { printRunHelp, cliError } from "./help";
+import { parseArgs } from 'util';
+import { resolve } from 'path';
+import { AgentCore } from '../agent';
+import { loadConfig } from '../config';
+import { printRunHelp, cliError } from './help';
 
 export interface RunResult {
   ok: boolean;
@@ -17,17 +17,17 @@ export async function cmdRun(argv: string[]): Promise<number> {
   const { values } = parseArgs({
     args: argv,
     options: {
-      prompt: { type: "string", short: "p" },
-      stdin: { type: "boolean", default: false },
-      workspace: { type: "string", short: "w" },
-      model: { type: "string", short: "m" },
-      "base-url": { type: "string" },
-      "max-rounds": { type: "string" },
-      "max-iterations": { type: "string" },
-      json: { type: "boolean", default: false },
-      quiet: { type: "boolean", default: false },
-      verbose: { type: "boolean", default: false },
-      help: { type: "boolean", short: "h", default: false },
+      prompt: { type: 'string', short: 'p' },
+      stdin: { type: 'boolean', default: false },
+      workspace: { type: 'string', short: 'w' },
+      model: { type: 'string', short: 'm' },
+      'base-url': { type: 'string' },
+      'max-rounds': { type: 'string' },
+      'max-iterations': { type: 'string' },
+      json: { type: 'boolean', default: false },
+      quiet: { type: 'boolean', default: false },
+      verbose: { type: 'boolean', default: false },
+      help: { type: 'boolean', short: 'h', default: false },
     },
     allowPositionals: false,
     strict: true,
@@ -44,35 +44,35 @@ export async function cmdRun(argv: string[]): Promise<number> {
     for await (const chunk of Bun.stdin.stream()) {
       chunks.push(Buffer.from(chunk));
     }
-    const fromStdin = Buffer.concat(chunks).toString("utf-8").trim();
+    const fromStdin = Buffer.concat(chunks).toString('utf-8').trim();
     if (fromStdin) prompt = prompt ? `${prompt}\n${fromStdin}` : fromStdin;
   }
 
   if (!prompt?.trim()) {
     cliError(
-      "No prompt provided.",
-      "  qwen-agent run --prompt \"your task here\"\n" +
-        "  echo \"your task\" | qwen-agent run --stdin --workspace ."
+      'No prompt provided.',
+      '  qwen-agent run --prompt "your task here"\n' +
+        '  echo "your task" | qwen-agent run --stdin --workspace .'
     );
   }
 
   const cfg = loadConfig();
   if (values.workspace) cfg.workspace = resolve(values.workspace);
   if (values.model) cfg.model = values.model;
-  if (values["base-url"]) cfg.baseURL = values["base-url"];
-  if (values["max-iterations"]) {
-    const n = parseInt(values["max-iterations"], 10);
+  if (values['base-url']) cfg.baseURL = values['base-url'];
+  if (values['max-iterations']) {
+    const n = parseInt(values['max-iterations'], 10);
     if (!Number.isNaN(n)) cfg.maxIterations = n;
   }
 
   const agent = new AgentCore(cfg);
-  if (values["max-rounds"]) {
-    const n = parseInt(values["max-rounds"], 10);
+  if (values['max-rounds']) {
+    const n = parseInt(values['max-rounds'], 10);
     if (!Number.isNaN(n)) agent.maxRounds = n;
   }
   agent.streaming = false;
 
-  const toolCalls: RunResult["tool_calls"] = [];
+  const toolCalls: RunResult['tool_calls'] = [];
 
   if (values.verbose) {
     agent.onToolResult = (r) => {
@@ -86,10 +86,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
 
   const lastAssistant = [...agent.messages]
     .reverse()
-    .find((m) => m.role === "assistant" && m.content.trim());
+    .find((m) => m.role === 'assistant' && m.content.trim());
 
-  const answer = lastAssistant?.content?.trim() || "";
-  const ok = agent.state !== "error" && answer.length > 0;
+  const answer = lastAssistant?.content?.trim() || '';
+  const ok = agent.state !== 'error' && answer.length > 0;
 
   const result: RunResult = {
     ok,

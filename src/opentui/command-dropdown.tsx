@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/react */
 
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import type { ScrollBoxRenderable } from "@opentui/core";
-import { useKeyboard } from "@opentui/react";
-import type { Theme } from "./theme";
-import { loadSkills, getSkillCommands } from "../skills";
-import type { SkillCommand } from "../types";
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import type { ScrollBoxRenderable } from '@opentui/core';
+import { useKeyboard } from '@opentui/react';
+import type { Theme } from './theme';
+import { loadSkills, getSkillCommands } from '../skills';
+import type { SkillCommand } from '../types';
 
 function itemId(index: number): string {
   return `cmd-${index}`;
@@ -17,30 +17,28 @@ interface Command {
 }
 
 const BUILTIN_COMMANDS: Command[] = [
-  { name: "/help", description: "Show help (F1)" },
-  { name: "/clear", description: "Clear chat (F2)" },
-  { name: "/compact", description: "Compact conversation" },
-  { name: "/auto", description: "Autonomous mode (F3)" },
-  { name: "/todo", description: "Todo sidebar (F4)" },
-  { name: "/save", description: "Save session (F5)" },
-  { name: "/load", description: "Load session (F6)" },
-  { name: "/cd", description: "Change tool workspace" },
-  { name: "/allow", description: "Approve extra tool path" },
-  { name: "/export", description: "Export chat to markdown" },
-  { name: "/skills", description: "Manage skills (F8)" },
-  { name: "/reload", description: "Reload configuration" },
-  { name: "/theme", description: "Switch theme" },
-  { name: "/connect", description: "Connect a runtime provider" },
-  { name: "/doctor", description: "Health check (config + LM Studio)" },
-  { name: "/models", description: "List local models and context" },
-  { name: "/graph", description: "Build/query memory graph — /graph build|stats|report" },
-  { name: "/mcp", description: "List connected MCP servers" },
-  { name: "/mcp-add", description: "Add an MCP server" },
-  { name: "/mcp-remove", description: "Remove an MCP server" },
-  { name: "/exit", description: "Quit (F10)" },
+  { name: '/help', description: 'Show help (F1)' },
+  { name: '/clear', description: 'Clear chat (F2)' },
+  { name: '/compact', description: 'Compact conversation' },
+  { name: '/auto', description: 'Autonomous mode (F3)' },
+  { name: '/todo', description: 'Todo sidebar (F4)' },
+  { name: '/save', description: 'Save session (F5)' },
+  { name: '/load', description: 'Load session (F6)' },
+  { name: '/cd', description: 'Change tool workspace' },
+  { name: '/allow', description: 'Approve extra tool path' },
+  { name: '/export', description: 'Export chat to markdown' },
+  { name: '/skills', description: 'Manage skills (F8)' },
+  { name: '/reload', description: 'Reload configuration' },
+  { name: '/theme', description: 'Switch theme' },
+  { name: '/connect', description: 'Connect a runtime provider' },
+  { name: '/doctor', description: 'Health check (config + LM Studio)' },
+  { name: '/models', description: 'List local models and context' },
+  { name: '/graph', description: 'Build/query memory graph — /graph build|stats|report' },
+  { name: '/mcp', description: 'List connected MCP servers' },
+  { name: '/mcp-add', description: 'Add an MCP server' },
+  { name: '/mcp-remove', description: 'Remove an MCP server' },
+  { name: '/exit', description: 'Quit (F10)' },
 ];
-
-
 
 interface CommandDropdownProps {
   inputValue: string;
@@ -59,7 +57,7 @@ export function CommandDropdown({
 }: CommandDropdownProps) {
   const [selected, setSelected] = useState(0);
   const scrollRef = useRef<ScrollBoxRenderable>(null);
-  const open = inputValue.startsWith("/");
+  const open = inputValue.startsWith('/');
   const filterText = inputValue.toLowerCase();
 
   // Load skill commands
@@ -76,35 +74,34 @@ export function CommandDropdown({
   }, [loadedSkillCommands]);
 
   // Group commands: built-in first, then skill commands
-  const filtered = open
-    ? allCommands.filter((c) => c.name.toLowerCase().includes(filterText))
-    : [];
+  const filtered = open ? allCommands.filter((c) => c.name.toLowerCase().includes(filterText)) : [];
 
   // Separate built-in and skill commands for display
-  const filteredBuiltin = filtered.filter(c =>
-    BUILTIN_COMMANDS.some(bc => bc.name === c.name)
-  );
-  const filteredSkills = filtered.filter(c =>
-    !BUILTIN_COMMANDS.some(bc => bc.name === c.name)
-  );
+  const filteredBuiltin = filtered.filter((c) => BUILTIN_COMMANDS.some((bc) => bc.name === c.name));
+  const filteredSkills = filtered.filter((c) => !BUILTIN_COMMANDS.some((bc) => bc.name === c.name));
 
   // Combine for display with headers
   const displayItems = useMemo(() => {
-    const items: Array<{ type: "header" | "command"; name: string; description: string; isSkill?: boolean }> = [];
+    const items: Array<{
+      type: 'header' | 'command';
+      name: string;
+      description: string;
+      isSkill?: boolean;
+    }> = [];
 
     if (filteredBuiltin.length > 0) {
-      items.push({ type: "header", name: "Built-in Commands", description: "" });
-      filteredBuiltin.forEach(c => {
-        items.push({ type: "command", name: c.name, description: c.description });
+      items.push({ type: 'header', name: 'Built-in Commands', description: '' });
+      filteredBuiltin.forEach((c) => {
+        items.push({ type: 'command', name: c.name, description: c.description });
       });
     }
 
     if (filteredSkills.length > 0) {
       if (filteredBuiltin.length > 0) {
-        items.push({ type: "header", name: "Skills", description: "" });
+        items.push({ type: 'header', name: 'Skills', description: '' });
       }
-      filteredSkills.forEach(c => {
-        items.push({ type: "command", name: c.name, description: c.description, isSkill: true });
+      filteredSkills.forEach((c) => {
+        items.push({ type: 'command', name: c.name, description: c.description, isSkill: true });
       });
     }
 
@@ -112,20 +109,23 @@ export function CommandDropdown({
   }, [filteredBuiltin, filteredSkills]);
 
   // Map display index to filtered index
-  const getActualIndex = useCallback((displayIndex: number): number => {
-    let count = 0;
-    for (const item of displayItems) {
-      if (item.type === "command") {
-        if (count === displayIndex) {
-          return filtered.findIndex(c =>
-            c.name === item.name && c.description === item.description
-          );
+  const getActualIndex = useCallback(
+    (displayIndex: number): number => {
+      let count = 0;
+      for (const item of displayItems) {
+        if (item.type === 'command') {
+          if (count === displayIndex) {
+            return filtered.findIndex(
+              (c) => c.name === item.name && c.description === item.description
+            );
+          }
+          count++;
         }
-        count++;
       }
-    }
-    return 0;
-  }, [displayItems, filtered]);
+      return 0;
+    },
+    [displayItems, filtered]
+  );
 
   useEffect(() => {
     setSelected(0);
@@ -146,7 +146,7 @@ export function CommandDropdown({
 
   // Count only command items for navigation
   const commandCount = useMemo(() => {
-    return displayItems.filter(i => i.type === "command").length;
+    return displayItems.filter((i) => i.type === 'command').length;
   }, [displayItems]);
 
   useKeyboard(
@@ -154,7 +154,7 @@ export function CommandDropdown({
       if (!open) return;
 
       if (commandCount === 0) {
-        if (keyEvent.name === "return" || keyEvent.name === "Enter") {
+        if (keyEvent.name === 'return' || keyEvent.name === 'Enter') {
           keyEvent.preventDefault?.();
           keyEvent.stopPropagation?.();
           onSubmit?.(inputValue);
@@ -162,27 +162,21 @@ export function CommandDropdown({
         return;
       }
 
-      if (keyEvent.name === "up" || keyEvent.name === "ArrowUp") {
+      if (keyEvent.name === 'up' || keyEvent.name === 'ArrowUp') {
         setSelected((s) => Math.max(0, s - 1));
         keyEvent.preventDefault?.();
         keyEvent.stopPropagation?.();
-      } else if (
-        keyEvent.name === "down" ||
-        keyEvent.name === "ArrowDown"
-      ) {
+      } else if (keyEvent.name === 'down' || keyEvent.name === 'ArrowDown') {
         setSelected((s) => Math.min(commandCount - 1, s + 1));
         keyEvent.preventDefault?.();
         keyEvent.stopPropagation?.();
-      } else if (
-        keyEvent.name === "return" ||
-        keyEvent.name === "Enter"
-      ) {
+      } else if (keyEvent.name === 'return' || keyEvent.name === 'Enter') {
         // Find the command at the selected index (skip headers)
         let count = 0;
         for (const item of displayItems) {
-          if (item.type === "command") {
+          if (item.type === 'command') {
             if (count === selected) {
-              const cmd = filtered.find(c => c.name === item.name);
+              const cmd = filtered.find((c) => c.name === item.name);
               if (cmd) {
                 onPick(cmd.name);
                 keyEvent.preventDefault?.();
@@ -193,15 +187,15 @@ export function CommandDropdown({
             count++;
           }
         }
-      } else if (keyEvent.name === "tab" || keyEvent.name === "Tab") {
+      } else if (keyEvent.name === 'tab' || keyEvent.name === 'Tab') {
         // Find the selected command for tab completion
         let count = 0;
         for (const item of displayItems) {
-          if (item.type === "command") {
+          if (item.type === 'command') {
             if (count === selected) {
-              const cmd = filtered.find(c => c.name === item.name);
+              const cmd = filtered.find((c) => c.name === item.name);
               if (cmd) {
-                onPick(cmd.name + " ");
+                onPick(cmd.name + ' ');
                 keyEvent.preventDefault?.();
                 keyEvent.stopPropagation?.();
               }
@@ -227,9 +221,7 @@ export function CommandDropdown({
         flexShrink={0}
         backgroundColor={theme.bgPanel}
       >
-        <text fg={theme.mutedFg}>
-          (no match — Enter sends "{inputValue}")
-        </text>
+        <text fg={theme.mutedFg}>(no match — Enter sends "{inputValue}")</text>
       </box>
     );
   }
@@ -238,7 +230,9 @@ export function CommandDropdown({
     ...filteredBuiltin.map((c) => c.name.length),
     ...filteredSkills.map((c) => c.name.length)
   );
-  const headerCount = (filteredBuiltin.length > 0 ? 1 : 0) + (filteredSkills.length > 0 && filteredBuiltin.length > 0 ? 1 : 0);
+  const headerCount =
+    (filteredBuiltin.length > 0 ? 1 : 0) +
+    (filteredSkills.length > 0 && filteredBuiltin.length > 0 ? 1 : 0);
   const visibleRows = Math.min(commandCount + headerCount, 6);
 
   return (
@@ -253,23 +247,21 @@ export function CommandDropdown({
       backgroundColor={theme.bgPanel}
     >
       {displayItems.map((item, _displayIndex) => {
-        if (item.type === "header") {
+        if (item.type === 'header') {
           return (
-            <text
-              key={`header-${item.name}`}
-              fg={theme.mutedFg}
-              marginTop={1}
-            >
+            <text key={`header-${item.name}`} fg={theme.mutedFg} marginTop={1}>
               {`  ${item.name}`}
             </text>
           );
         }
 
-        if (item.type === "command") {
+        if (item.type === 'command') {
           // Find the actual index in filtered array
-          const actualIndex = filtered.findIndex(c => c.name === item.name && c.description === item.description);
+          const actualIndex = filtered.findIndex(
+            (c) => c.name === item.name && c.description === item.description
+          );
           const isSel = actualIndex === selected;
-          const padded = item.name.padEnd(pad, " ");
+          const padded = item.name.padEnd(pad, ' ');
 
           return (
             <text
@@ -278,7 +270,7 @@ export function CommandDropdown({
               fg={isSel ? theme.headerFg : item.isSkill ? theme.agentFg : theme.inputFg}
               bg={isSel ? theme.bgSelected : undefined}
             >
-              {`${isSel ? "▸ " : "  "}${padded}   ${item.description}`}
+              {`${isSel ? '▸ ' : '  '}${padded}   ${item.description}`}
             </text>
           );
         }

@@ -8,8 +8,8 @@
  *   qwen-agent models|doctor
  */
 
-import { runCli } from "./cli/index";
-import { printRootHelp } from "./cli/help";
+import { runCli } from './cli/index';
+import { printRootHelp } from './cli/help';
 
 /** Registered cleanup callbacks invoked during graceful shutdown. */
 const cleanupFns: Array<() => void | Promise<void>> = [];
@@ -25,7 +25,11 @@ async function runCleanup(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   for (const fn of cleanupFns) {
-    try { await fn(); } catch { /* best-effort */ }
+    try {
+      await fn();
+    } catch {
+      /* best-effort */
+    }
   }
 }
 
@@ -42,15 +46,18 @@ export function setupProcessHandlers(): void {
     process.exit(0);
   };
 
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
 
-  process.on("unhandledRejection", (reason) => {
-    console.error("Unhandled rejection:", reason instanceof Error ? reason.message : String(reason));
+  process.on('unhandledRejection', (reason) => {
+    console.error(
+      'Unhandled rejection:',
+      reason instanceof Error ? reason.message : String(reason)
+    );
   });
 
-  process.on("uncaughtException", (err) => {
-    console.error("Uncaught exception:", err.message);
+  process.on('uncaughtException', (err) => {
+    console.error('Uncaught exception:', err.message);
     runCleanup().finally(() => process.exit(1));
   });
 }
@@ -62,27 +69,27 @@ async function main(): Promise<number> {
     const argv = process.argv.slice(2);
 
     if (argv.length === 0) {
-      const { runTui } = await import("./opentui/index");
+      const { runTui } = await import('./opentui/index');
       await runTui();
       return 0;
     }
 
     const [cmd] = argv;
 
-    if (cmd === "--help" || cmd === "-h") {
+    if (cmd === '--help' || cmd === '-h') {
       printRootHelp();
       return 0;
     }
 
-    if (cmd === "tui") {
-      const { runTui } = await import("./opentui/index");
+    if (cmd === 'tui') {
+      const { runTui } = await import('./opentui/index');
       await runTui();
       return 0;
     }
 
     return await runCli(argv);
   } catch (err) {
-    console.error("Unhandled error in main:", err instanceof Error ? err.message : String(err));
+    console.error('Unhandled error in main:', err instanceof Error ? err.message : String(err));
     return 1;
   }
 }

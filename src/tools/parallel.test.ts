@@ -56,7 +56,11 @@ describe('Parallel Tool Execution', () => {
     it('should separate parallel and sequential tools', () => {
       const toolCalls = [
         { name: 'read_file', arguments: JSON.stringify({ path: 'a.txt' }), id: 'call_1' },
-        { name: 'write_file', arguments: JSON.stringify({ path: 'b.txt', content: 'test' }), id: 'call_2' },
+        {
+          name: 'write_file',
+          arguments: JSON.stringify({ path: 'b.txt', content: 'test' }),
+          id: 'call_2',
+        },
         { name: 'list_dir', arguments: JSON.stringify({ path: '.' }), id: 'call_3' },
         { name: 'execute_command', arguments: JSON.stringify({ command: 'ls' }), id: 'call_4' },
       ];
@@ -65,16 +69,20 @@ describe('Parallel Tool Execution', () => {
 
       expect(result.parallel.length).toBe(2);
       expect(result.sequential.length).toBe(2);
-      expect(result.parallel.map(t => t.name)).toContain('read_file');
-      expect(result.parallel.map(t => t.name)).toContain('list_dir');
-      expect(result.sequential.map(t => t.name)).toContain('write_file');
-      expect(result.sequential.map(t => t.name)).toContain('execute_command');
+      expect(result.parallel.map((t) => t.name)).toContain('read_file');
+      expect(result.parallel.map((t) => t.name)).toContain('list_dir');
+      expect(result.sequential.map((t) => t.name)).toContain('write_file');
+      expect(result.sequential.map((t) => t.name)).toContain('execute_command');
     });
 
     it('should preserve original order in indices', () => {
       const toolCalls = [
         { name: 'read_file', arguments: JSON.stringify({ path: 'a.txt' }), id: 'call_1' },
-        { name: 'write_file', arguments: JSON.stringify({ path: 'b.txt', content: 'test' }), id: 'call_2' },
+        {
+          name: 'write_file',
+          arguments: JSON.stringify({ path: 'b.txt', content: 'test' }),
+          id: 'call_2',
+        },
         { name: 'list_dir', arguments: JSON.stringify({ path: '.' }), id: 'call_3' },
       ];
 
@@ -108,7 +116,11 @@ describe('Parallel Tool Execution', () => {
 
     it('should handle all sequential tools', () => {
       const toolCalls = [
-        { name: 'write_file', arguments: JSON.stringify({ path: 'a.txt', content: 'test' }), id: 'call_1' },
+        {
+          name: 'write_file',
+          arguments: JSON.stringify({ path: 'a.txt', content: 'test' }),
+          id: 'call_1',
+        },
         { name: 'execute_command', arguments: JSON.stringify({ command: 'ls' }), id: 'call_2' },
         { name: 'git_commit', arguments: JSON.stringify({ message: 'test' }), id: 'call_3' },
       ];

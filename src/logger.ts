@@ -1,7 +1,7 @@
-import pino from "pino";
+import pino from 'pino';
 
 let _logger: pino.Logger | null = null;
-let _level: pino.LevelWithSilent = "info";
+let _level: pino.LevelWithSilent = 'info';
 
 export function setLogLevel(level: pino.LevelWithSilent): void {
   _level = level;
@@ -13,7 +13,7 @@ export function getLogger(name?: string): pino.Logger {
     _logger = pino({
       level: _level,
       transport: {
-        target: "pino/file",
+        target: 'pino/file',
         options: { destination: 1 }, // stdout
       },
       ...(name ? { name } : {}),

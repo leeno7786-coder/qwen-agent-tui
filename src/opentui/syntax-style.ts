@@ -1,4 +1,4 @@
-import { SyntaxStyle } from "@opentui/core";
+import { SyntaxStyle } from '@opentui/core';
 
 let cached: SyntaxStyle | null = null;
 

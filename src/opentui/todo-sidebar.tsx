@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 
-import type { Todo } from "../types";
-import type { Theme } from "./theme";
+import type { Todo } from '../types';
+import type { Theme } from './theme';
 
 interface TodoSidebarProps {
   theme: Theme;
@@ -39,18 +39,14 @@ export function TodoSidebar({
         <text fg={theme.mutedFg}>q/Esc</text>
       </box>
       <text> </text>
-      {visibleTodos.length === 0 && todos.length > 0 && (
-        <text fg={theme.mutedFg}>All done.</text>
-      )}
-      {visibleTodos.length === 0 && todos.length === 0 && (
-        <text fg={theme.mutedFg}>No todos.</text>
-      )}
+      {visibleTodos.length === 0 && todos.length > 0 && <text fg={theme.mutedFg}>All done.</text>}
+      {visibleTodos.length === 0 && todos.length === 0 && <text fg={theme.mutedFg}>No todos.</text>}
       {visibleTodos.map((t, i) => (
         <box key={t.id} flexDirection="row" height={1}>
           <text fg={theme.mutedFg}>{i + 1}.</text>
           <text fg={theme.userFg}>[ ] </text>
           <text fg={theme.headerFg}>
-            {(t.text ?? "").length > 22 ? (t.text ?? "").slice(0, 21) + "…" : (t.text ?? "")}
+            {(t.text ?? '').length > 22 ? (t.text ?? '').slice(0, 21) + '…' : (t.text ?? '')}
           </text>
         </box>
       ))}

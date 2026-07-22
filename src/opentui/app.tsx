@@ -1,12 +1,12 @@
 /** @jsxImportSource @opentui/react */
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { useKeyboard } from "@opentui/react";
-import type { CliRenderer } from "@opentui/core";
-import { AgentCore } from "../agent";
-import { loadConfig } from "../config";
-import { getModelCompactionSettings, countTokens } from "../llm";
-import { tools } from "../tools";
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useKeyboard } from '@opentui/react';
+import type { CliRenderer } from '@opentui/core';
+import { AgentCore } from '../agent';
+import { loadConfig } from '../config';
+import { getModelCompactionSettings, countTokens } from '../llm';
+import { tools } from '../tools';
 import {
   saveSession,
   loadSessions,
@@ -16,27 +16,38 @@ import {
   exportToMarkdown,
   autoSaveSession,
   resumeSession,
-} from "../store";
-import type { Message, AgentState, Todo, ToolResult, Session, Skill, SkillCommand, Config, RuntimeProvider, ModelInfo } from "../types";
-import type { SubAgentProgressEvent } from "../tools";
-import type { SubAgentResult } from "../subagents";
-import { ChatScreen } from "./chat-screen";
-import { ErrorBoundary } from "./error-boundary";
-import { HelpOverlay, HistoryOverlay } from "./overlays";
-import { SkillsOverlay } from "./skills-overlay";
-import { ConnectOverlay } from "./connect-overlay";
-import { StatusBar } from "./status-bar";
-import { TodoSidebar } from "./todo-sidebar";
-import { THEMES, DEFAULT_THEME, type Theme } from "./theme";
-import { loadSkills, getSkillCommands, getSkill } from "../skills";
-import { getProviderBaseURL } from "../providers";
+} from '../store';
+import type {
+  Message,
+  AgentState,
+  Todo,
+  ToolResult,
+  Session,
+  Skill,
+  SkillCommand,
+  Config,
+  RuntimeProvider,
+  ModelInfo,
+} from '../types';
+import type { SubAgentProgressEvent } from '../tools';
+import type { SubAgentResult } from '../subagents';
+import { ChatScreen } from './chat-screen';
+import { ErrorBoundary } from './error-boundary';
+import { HelpOverlay, HistoryOverlay } from './overlays';
+import { SkillsOverlay } from './skills-overlay';
+import { ConnectOverlay } from './connect-overlay';
+import { StatusBar } from './status-bar';
+import { TodoSidebar } from './todo-sidebar';
+import { THEMES, DEFAULT_THEME, type Theme } from './theme';
+import { loadSkills, getSkillCommands, getSkill } from '../skills';
+import { getProviderBaseURL } from '../providers';
 import {
   formatDoctorReport,
   formatModelsList,
   getDoctorReport,
   getModelsList,
-} from "../cli/reports";
-import { build_memory_graph, get_graph_stats, get_analysis_report } from "../graph/tools";
+} from '../cli/reports';
+import { build_memory_graph, get_graph_stats, get_analysis_report } from '../graph/tools';
 
 /**
  * Simple token estimation function.
@@ -45,7 +56,11 @@ import { build_memory_graph, get_graph_stats, get_analysis_report } from "../gra
  * @returns Estimated token count
  */
 function estimateTokenCount(text: string): number {
-  try { return countTokens(text); } catch { /* tokenizer not available */ }
+  try {
+    return countTokens(text);
+  } catch {
+    /* tokenizer not available */
+  }
   return Math.ceil(text.length / 4);
 }
 
@@ -58,29 +73,33 @@ function estimateTokenCount(text: string): number {
 function calculateConversationTokenCount(messages: Message[]): number {
   return messages.reduce((total, message) => {
     let count = 0;
-    
+
     if (message.content) {
       count += estimateTokenCount(message.content);
     }
-    
+
     if (message.toolCalls) {
       for (const toolCall of message.toolCalls) {
         count += estimateTokenCount(toolCall.name || '');
         if (toolCall.arguments) {
-          count += estimateTokenCount(typeof toolCall.arguments === "string" ? toolCall.arguments : JSON.stringify(toolCall.arguments));
+          count += estimateTokenCount(
+            typeof toolCall.arguments === 'string'
+              ? toolCall.arguments
+              : JSON.stringify(toolCall.arguments)
+          );
         }
       }
     }
-    
+
     if (message.role === 'tool' && message.content) {
       count += estimateTokenCount(message.content);
     }
-    
+
     // Per-message format overhead (role label, JSON structure, separators)
     count += message.role.length + 4;
     if (message.toolCallId) count += message.toolCallId.length + 10;
     if (message.toolCalls && message.toolCalls.length > 0) count += message.toolCalls.length * 30;
-    
+
     return total + count;
   }, 0);
 }
@@ -96,10 +115,14 @@ function estimateMessageOverhead(m: Message): number {
     overhead += m.toolCalls.length * 50; // tool_call JSON structure overhead
     for (const tc of m.toolCalls) {
       overhead += (tc.name?.length || 0) + 2;
-      if (tc.arguments) overhead += typeof tc.arguments === "string" ? tc.arguments.length / 4 : JSON.stringify(tc.arguments).length / 4;
+      if (tc.arguments)
+        overhead +=
+          typeof tc.arguments === 'string'
+            ? tc.arguments.length / 4
+            : JSON.stringify(tc.arguments).length / 4;
     }
   }
-  if (m.role === "tool" && m.toolCallId) {
+  if (m.role === 'tool' && m.toolCallId) {
     overhead += m.toolCallId.length + 20;
   }
   return Math.ceil(overhead);
@@ -109,29 +132,35 @@ function estimateMessageOverhead(m: Message): number {
  * Calculate the total estimated token count for a conversation.
  */
 function totalConversationTokens(messages: Message[]): number {
-  return calculateConversationTokenCount(messages) + messages.reduce((t, m) => t + estimateMessageOverhead(m), 0);
+  return (
+    calculateConversationTokenCount(messages) +
+    messages.reduce((t, m) => t + estimateMessageOverhead(m), 0)
+  );
 }
 
 /**
  * Generate a summary string from removed messages for compact display.
  */
 function summarizeRemovedMessages(removed: Message[]): string {
-  const toolCalls = removed.filter(m => m.toolCalls && m.toolCalls.length > 0);
-  const userMessages = removed.filter(m => m.role === "user");
-  const assistantMessages = removed.filter(m => m.role === "assistant" && m.content);
+  const toolCalls = removed.filter((m) => m.toolCalls && m.toolCalls.length > 0);
+  const userMessages = removed.filter((m) => m.role === 'user');
+  const assistantMessages = removed.filter((m) => m.role === 'assistant' && m.content);
 
   const parts: string[] = [];
 
   if (toolCalls.length > 0) {
     const toolNames = new Set<string>();
-    toolCalls.forEach(tc => tc.toolCalls?.forEach(t => toolNames.add(t.name || "unknown")));
-    parts.push(`Tools used: ${Array.from(toolNames).join(", ")}`);
+    toolCalls.forEach((tc) => tc.toolCalls?.forEach((t) => toolNames.add(t.name || 'unknown')));
+    parts.push(`Tools used: ${Array.from(toolNames).join(', ')}`);
   }
 
   if (userMessages.length > 0) {
-    const keyRequests = userMessages.slice(-3).map(m => m.content.slice(0, 100)).filter(Boolean);
+    const keyRequests = userMessages
+      .slice(-3)
+      .map((m) => m.content.slice(0, 100))
+      .filter(Boolean);
     if (keyRequests.length > 0) {
-      parts.push(`Recent requests: ${keyRequests.join("; ")}`);
+      parts.push(`Recent requests: ${keyRequests.join('; ')}`);
     }
   }
 
@@ -139,19 +168,28 @@ function summarizeRemovedMessages(removed: Message[]): string {
     parts.push(`Completed ${assistantMessages.length} response cycles`);
   }
 
-  return parts.length > 0 ? `Summary of ${removed.length} earlier messages: ${parts.join(". ")}.` : "";
+  return parts.length > 0
+    ? `Summary of ${removed.length} earlier messages: ${parts.join('. ')}.`
+    : '';
 }
 
 /**
  * Build a compacted message array: system messages + optional summary + kept messages.
  */
 function buildCompactMessages(agent: AgentCore, removed: Message[], kept: Message[]): Message[] {
-  const sys = agent.messages.filter((m) => m.role === "system");
+  const sys = agent.messages.filter((m) => m.role === 'system');
   const summary = summarizeRemovedMessages(removed);
   return [
     ...sys,
     ...(summary
-      ? [{ id: Math.random().toString(36).slice(2, 10), role: "user" as const, content: `[Compact: ${removed.length} messages summarized. ${summary}]`, timestamp: Date.now() }]
+      ? [
+          {
+            id: Math.random().toString(36).slice(2, 10),
+            role: 'user' as const,
+            content: `[Compact: ${removed.length} messages summarized. ${summary}]`,
+            timestamp: Date.now(),
+          },
+        ]
       : []),
     ...kept,
   ];
@@ -163,7 +201,10 @@ function buildCompactMessages(agent: AgentCore, removed: Message[], kept: Messag
  */
 const MAX_MESSAGES_BEFORE_COMPACT = 200;
 
-function checkAndAutoCompact(agent: AgentCore, setMessages: React.Dispatch<React.SetStateAction<Message[]>>) {
+function checkAndAutoCompact(
+  agent: AgentCore,
+  setMessages: React.Dispatch<React.SetStateAction<Message[]>>
+) {
   try {
     const settings = getModelCompactionSettings(agent.cfg.model, agent.cfg.maxTokens, {
       baseURL: agent.cfg.baseURL,
@@ -173,28 +214,35 @@ function checkAndAutoCompact(agent: AgentCore, setMessages: React.Dispatch<React
       modelMaxContextLength: agent.cfg.modelMaxContextLength,
     });
     const { compactThreshold, keepCount } = settings;
-    
-    if (totalConversationTokens(agent.messages) <= compactThreshold && agent.messages.length <= MAX_MESSAGES_BEFORE_COMPACT) return;
-    
+
+    if (
+      totalConversationTokens(agent.messages) <= compactThreshold &&
+      agent.messages.length <= MAX_MESSAGES_BEFORE_COMPACT
+    )
+      return;
+
     const rest = agent.messages.filter(
-      (m) => m.role !== "system" && !(m.role === "assistant" && !m.toolCalls && m.content.trim() === "")
+      (m) =>
+        m.role !== 'system' && !(m.role === 'assistant' && !m.toolCalls && m.content.trim() === '')
     );
-    
+
     const kept = rest.slice(-keepCount);
     const removed = rest.slice(0, -keepCount);
-    
+
     agent.messages = buildCompactMessages(agent, removed, kept);
     setMessages([...agent.messages]);
-    
+
     if (process.env.QWEN_DEBUG_LLM) {
-      console.error(`[auto-compact] ${removed.length} removed, ${kept.length} kept, est -> ~${calculateConversationTokenCount(agent.messages)} tokens`);
+      console.error(
+        `[auto-compact] ${removed.length} removed, ${kept.length} kept, est -> ~${calculateConversationTokenCount(agent.messages)} tokens`
+      );
     }
   } catch (err) {
-    console.error("[auto-compact] compaction failed:", err);
+    console.error('[auto-compact] compaction failed:', err);
   }
 }
 
-type Overlay = "help" | "history" | "skills" | "connect" | null;
+type Overlay = 'help' | 'history' | 'skills' | 'connect' | null;
 
 export function App({ renderer }: { renderer: CliRenderer }) {
   const [overlay, setOverlay] = useState<Overlay>(null);
@@ -202,21 +250,22 @@ export function App({ renderer }: { renderer: CliRenderer }) {
   const [mouseEnabled, setMouseEnabled] = useState(true);
   const [theme, setTheme] = useState<Theme>(() => {
     const cfg = loadConfig();
-    return THEMES[cfg.theme || ""] || DEFAULT_THEME;
+    return THEMES[cfg.theme || ''] || DEFAULT_THEME;
   });
 
   // Agent state
   const [messages, setMessages] = useState<Message[]>([]);
-  const [state, setState] = useState<AgentState>("idle");
+  const [state, setState] = useState<AgentState>('idle');
   const cfg = loadConfig();
   const [todos, setTodos] = useState<Todo[]>([]);
   const [toolResults, setToolResults] = useState<ToolResult[]>([]);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [currentTool, setCurrentTool] = useState<
-    {
-      name: string;
-      args: string;
-    } | undefined
+    | {
+        name: string;
+        args: string;
+      }
+    | undefined
   >();
   const [lastUsage, setLastUsage] = useState<
     { input_tokens: number; output_tokens: number } | undefined
@@ -230,7 +279,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
       id: string;
       prompt: string;
       focusPath?: string;
-      status: "running" | "done" | "error";
+      status: 'running' | 'done' | 'error';
       log?: SubAgentProgressEvent[];
       result?: SubAgentResult;
     }>
@@ -241,9 +290,13 @@ export function App({ renderer }: { renderer: CliRenderer }) {
   const [page, setPage] = useState(1);
   const [paginated, setPaginated] = useState(false);
   const displayMessageCount = useMemo(
-    () => messages.filter(
-      (msg) => msg.role !== "system" && msg.role !== "tool" && !(msg.role === "assistant" && !msg.toolCalls?.length && msg.content.trim() === "")
-    ).length,
+    () =>
+      messages.filter(
+        (msg) =>
+          msg.role !== 'system' &&
+          msg.role !== 'tool' &&
+          !(msg.role === 'assistant' && !msg.toolCalls?.length && msg.content.trim() === '')
+      ).length,
     [messages]
   );
   const [skills, setSkills] = useState<Map<string, Skill>>(new Map());
@@ -262,7 +315,14 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     agent.onUpdate = () => {
       const lastMsg = agent.messages[agent.messages.length - 1];
       if (process.env.QWEN_DEBUG_LLM) {
-        console.error("[app onUpdate] state:", agent.state, "lastMsg.role:", lastMsg?.role, "lastMsg.content:", JSON.stringify(lastMsg?.content?.slice(0, 60)));
+        console.error(
+          '[app onUpdate] state:',
+          agent.state,
+          'lastMsg.role:',
+          lastMsg?.role,
+          'lastMsg.content:',
+          JSON.stringify(lastMsg?.content?.slice(0, 60))
+        );
       }
       setMessages([...agent.messages]);
       setState(agent.state);
@@ -284,14 +344,14 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     const loadedSkills = loadSkills();
     setSkills(loadedSkills);
     setSkillCommands(getSkillCommands(loadedSkills));
-    
+
     // Set up skill refresh handler
     const handleSkillRefresh = () => {
       const refreshedSkills = loadSkills();
       setSkills(refreshedSkills);
       setSkillCommands(getSkillCommands(refreshedSkills));
     };
-    
+
     // Store refresh handler in global scope for skills overlay to call
     (globalThis as Record<string, unknown>)['__refreshSkills'] = handleSkillRefresh;
 
@@ -299,21 +359,22 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     const handleSigint = () => {
       agent.shutdown().catch(() => {});
     };
-    process.on("SIGINT", handleSigint);
+    process.on('SIGINT', handleSigint);
 
     // Warn if no API key is configured
-    if (!cfg.apiKey || cfg.apiKey.trim() === "") {
+    if (!cfg.apiKey || cfg.apiKey.trim() === '') {
       agent.messages.push({
         id: Math.random().toString(36).slice(2, 10),
-        role: "system",
-        content: "⚠️ No API key configured. Use /connect to select a provider and enter your API key.",
+        role: 'system',
+        content:
+          '⚠️ No API key configured. Use /connect to select a provider and enter your API key.',
         timestamp: Date.now(),
       });
       setMessages([...agent.messages]);
     }
 
     return () => {
-      process.off("SIGINT", handleSigint);
+      process.off('SIGINT', handleSigint);
       abortControllerRef.current?.abort();
       if (timerRef.current) {
         clearInterval(timerRef.current);
@@ -333,11 +394,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
   }, []);
 
   useEffect(() => {
-    if (
-      state === "idle" ||
-      state === "error" ||
-      state === "waiting_for_user"
-    ) {
+    if (state === 'idle' || state === 'error' || state === 'waiting_for_user') {
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
@@ -388,9 +445,9 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     if (!agent || agent.messages.length <= 2) return;
     const timer = setTimeout(() => {
       const session = {
-        id: "autosave",
+        id: 'autosave',
         messages: agent.messages,
-        todos: agent.todos.filter(t => !t.done),
+        todos: agent.todos.filter((t) => !t.done),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
@@ -402,15 +459,15 @@ export function App({ renderer }: { renderer: CliRenderer }) {
   // Global keyboard shortcuts
   useKeyboard((keyEvent) => {
     if (overlay) {
-      if (keyEvent.name === "escape" || keyEvent.name === "Escape") {
+      if (keyEvent.name === 'escape' || keyEvent.name === 'Escape') {
         setOverlay(null);
         keyEvent.preventDefault?.();
       }
       return;
     }
 
-    if (keyEvent.name === "escape" || keyEvent.name === "Escape") {
-      const busy = state !== "idle" && state !== "error" && state !== "waiting_for_user";
+    if (keyEvent.name === 'escape' || keyEvent.name === 'Escape') {
+      const busy = state !== 'idle' && state !== 'error' && state !== 'waiting_for_user';
       if (busy) {
         abortControllerRef.current?.abort();
         keyEvent.preventDefault?.();
@@ -418,34 +475,34 @@ export function App({ renderer }: { renderer: CliRenderer }) {
       return;
     }
 
-    if (keyEvent.name === "f1" || keyEvent.name === "F1") {
-      setOverlay("help");
+    if (keyEvent.name === 'f1' || keyEvent.name === 'F1') {
+      setOverlay('help');
       keyEvent.preventDefault?.();
-    } else if (keyEvent.name === "f2" || keyEvent.name === "F2") {
+    } else if (keyEvent.name === 'f2' || keyEvent.name === 'F2') {
       const agent = agentRef.current;
       if (agent) {
-        agent.messages = agent.messages.filter((m) => m.role === "system");
+        agent.messages = agent.messages.filter((m) => m.role === 'system');
         setMessages([...agent.messages]);
       }
-    } else if (keyEvent.name === "f4" || keyEvent.name === "F4") {
+    } else if (keyEvent.name === 'f4' || keyEvent.name === 'F4') {
       setShowTodos((s) => !s);
-    } else if (keyEvent.name === "f5" || keyEvent.name === "F5") {
+    } else if (keyEvent.name === 'f5' || keyEvent.name === 'F5') {
       handleSave();
-    } else if (keyEvent.name === "f6" || keyEvent.name === "F6") {
+    } else if (keyEvent.name === 'f6' || keyEvent.name === 'F6') {
       setSessions(loadSessions());
-      setOverlay("history");
-    } else if (keyEvent.name === "f8" || keyEvent.name === "F8") {
-      setOverlay("skills");
-    } else if (keyEvent.name === "f7" || keyEvent.name === "F7") {
+      setOverlay('history');
+    } else if (keyEvent.name === 'f8' || keyEvent.name === 'F8') {
+      setOverlay('skills');
+    } else if (keyEvent.name === 'f7' || keyEvent.name === 'F7') {
       const next = !mouseEnabled;
       renderer.useMouse = next;
       setMouseEnabled(next);
-    } else if (keyEvent.name === "f9" || keyEvent.name === "F9") {
+    } else if (keyEvent.name === 'f9' || keyEvent.name === 'F9') {
       const names = Object.keys(THEMES);
       const idx = names.indexOf(theme.name);
       const next = names[(idx + 1) % names.length];
       setTheme(THEMES[next]);
-    } else if (keyEvent.name === "f10" || keyEvent.name === "F10") {
+    } else if (keyEvent.name === 'f10' || keyEvent.name === 'F10') {
       const agent = agentRef.current;
       if (agent) {
         autoSaveSession(agent.messages, agent.todos, cfg.workspace);
@@ -455,10 +512,10 @@ export function App({ renderer }: { renderer: CliRenderer }) {
 
     // Ctrl+Up/Down: Navigate message selection
     if (keyEvent.ctrl) {
-      if (keyEvent.name === "Up" || keyEvent.name === "ArrowUp") {
+      if (keyEvent.name === 'Up' || keyEvent.name === 'ArrowUp') {
         const agent = agentRef.current;
         if (agent && agent.messages.length > 0) {
-          const nonSystem = agent.messages.filter(m => m.role !== "system");
+          const nonSystem = agent.messages.filter((m) => m.role !== 'system');
           setSelectedMessageIndex((prev) => {
             const current = prev !== null ? prev : nonSystem.length - 1;
             const newIndex = Math.min(current + 1, nonSystem.length - 1);
@@ -467,7 +524,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
           keyEvent.preventDefault?.();
           keyEvent.stopPropagation?.();
         }
-      } else if (keyEvent.name === "Down" || keyEvent.name === "ArrowDown") {
+      } else if (keyEvent.name === 'Down' || keyEvent.name === 'ArrowDown') {
         const agent = agentRef.current;
         if (agent && agent.messages.length > 0) {
           setSelectedMessageIndex((prev) => {
@@ -478,18 +535,18 @@ export function App({ renderer }: { renderer: CliRenderer }) {
           keyEvent.preventDefault?.();
           keyEvent.stopPropagation?.();
         }
-      } else if (keyEvent.name === "c" || keyEvent.name === "C") {
+      } else if (keyEvent.name === 'c' || keyEvent.name === 'C') {
         // Ctrl+C: Copy selected message
         const agent = agentRef.current;
         if (agent && selectedMessageIndex !== null) {
-          const nonSystem = agent.messages.filter(m => m.role !== "system");
+          const nonSystem = agent.messages.filter((m) => m.role !== 'system');
           const selectedMessage = nonSystem[selectedMessageIndex];
           if (selectedMessage) {
             const success = copyToClipboard(selectedMessage.content);
             if (!success) {
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "system",
+                role: 'system',
                 content: `Copied message ${selectedMessage.id.slice(0, 8)} to clipboard.`,
                 timestamp: Date.now(),
               });
@@ -504,7 +561,10 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     }
 
     // Escape: Clear message selection
-    if ((keyEvent.name === "escape" || keyEvent.name === "Escape") && selectedMessageIndex !== null) {
+    if (
+      (keyEvent.name === 'escape' || keyEvent.name === 'Escape') &&
+      selectedMessageIndex !== null
+    ) {
       setSelectedMessageIndex(null);
       keyEvent.preventDefault?.();
       keyEvent.stopPropagation?.();
@@ -518,7 +578,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     const session: Session = {
       id,
       messages: agent.messages,
-      todos: agent.todos.filter(t => !t.done),
+      todos: agent.todos.filter((t) => !t.done),
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -527,7 +587,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     setCurrentSessionId(id);
     const msg: Message = {
       id: Math.random().toString(36).slice(2, 10),
-      role: "system",
+      role: 'system',
       content: `Session saved as ${id}.`,
       timestamp: Date.now(),
     };
@@ -535,67 +595,70 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     setMessages([...agent.messages]);
   }, []);
 
-  const handleRename = useCallback((newName: string) => {
-    const agent = agentRef.current;
-    if (!agent) return;
+  const handleRename = useCallback(
+    (newName: string) => {
+      const agent = agentRef.current;
+      if (!agent) return;
 
-    const name = newName.trim();
-    if (!name) {
+      const name = newName.trim();
+      if (!name) {
+        agent.messages.push({
+          id: Math.random().toString(36).slice(2, 10),
+          role: 'system',
+          content: 'Usage: /rename [new-name]. Provide a new name for the current session.',
+          timestamp: Date.now(),
+        });
+        setMessages([...agent.messages]);
+        return;
+      }
+
+      // If we have a current session, rename it
+      if (currentSessionId) {
+        const success = renameSession(currentSessionId, name);
+        if (success) {
+          setCurrentSessionId(name);
+          setSessions(loadSessions());
+          agent.messages.push({
+            id: Math.random().toString(36).slice(2, 10),
+            role: 'system',
+            content: `Session renamed from ${currentSessionId} to ${name}.`,
+            timestamp: Date.now(),
+          });
+          setMessages([...agent.messages]);
+        } else {
+          agent.messages.push({
+            id: Math.random().toString(36).slice(2, 10),
+            role: 'system',
+            content: `Failed to rename session. Session '${currentSessionId}' not found.`,
+            timestamp: Date.now(),
+          });
+          setMessages([...agent.messages]);
+        }
+        return;
+      }
+
+      // Otherwise, save current messages as a new session with the given name
+      const id = name;
+      const session: Session = {
+        id,
+        messages: agent.messages,
+        todos: agent.todos.filter((t) => !t.done),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      saveSession(session);
+      setSessions(loadSessions());
+      setCurrentSessionId(id);
       agent.messages.push({
         id: Math.random().toString(36).slice(2, 10),
-        role: "system",
-        content: "Usage: /rename [new-name]. Provide a new name for the current session.",
+        role: 'system',
+        content: `Session saved as ${id}.`,
         timestamp: Date.now(),
       });
       setMessages([...agent.messages]);
-      return;
-    }
-
-    // If we have a current session, rename it
-    if (currentSessionId) {
-      const success = renameSession(currentSessionId, name);
-      if (success) {
-        setCurrentSessionId(name);
-        setSessions(loadSessions());
-        agent.messages.push({
-          id: Math.random().toString(36).slice(2, 10),
-          role: "system",
-          content: `Session renamed from ${currentSessionId} to ${name}.`,
-          timestamp: Date.now(),
-        });
-        setMessages([...agent.messages]);
-      } else {
-        agent.messages.push({
-          id: Math.random().toString(36).slice(2, 10),
-          role: "system",
-          content: `Failed to rename session. Session '${currentSessionId}' not found.`,
-          timestamp: Date.now(),
-        });
-        setMessages([...agent.messages]);
-      }
-      return;
-    }
-
-    // Otherwise, save current messages as a new session with the given name
-    const id = name;
-    const session: Session = {
-      id,
-      messages: agent.messages,
-      todos: agent.todos.filter(t => !t.done),
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    saveSession(session);
-    setSessions(loadSessions());
-    setCurrentSessionId(id);
-    agent.messages.push({
-      id: Math.random().toString(36).slice(2, 10),
-      role: "system",
-      content: `Session saved as ${id}.`,
-      timestamp: Date.now(),
-    });
-    setMessages([...agent.messages]);
-  }, [currentSessionId]);
+    },
+    [currentSessionId]
+  );
 
   const handleLoad = useCallback((session: Session) => {
     const agent = agentRef.current;
@@ -618,27 +681,28 @@ export function App({ renderer }: { renderer: CliRenderer }) {
   const handleSubmit = useCallback(
     async (text: string) => {
       const agent = agentRef.current;
-      if (!agent || state !== "idle") return;
+      if (!agent || state !== 'idle') return;
 
       try {
-        if (text.startsWith("/")) {
-          const command = text.trim().substring(1).split(" ")[0];
-          const args = text.trim().substring(1 + command.length).trim();
+        if (text.startsWith('/')) {
+          const command = text.trim().substring(1).split(' ')[0];
+          const args = text
+            .trim()
+            .substring(1 + command.length)
+            .trim();
 
           switch (command) {
-            case "help":
-              setOverlay("help");
+            case 'help':
+              setOverlay('help');
               return;
-            case "clear":
+            case 'clear':
               if (agent) {
-                agent.messages = agent.messages.filter(
-                  (m) => m.role === "system"
-                );
+                agent.messages = agent.messages.filter((m) => m.role === 'system');
                 setMessages([...agent.messages]);
                 setToolResults([]);
               }
               return;
-            case "compact": {
+            case 'compact': {
               if (!agent) return;
               const before = agent.messages.length;
               checkAndAutoCompact(agent, setMessages);
@@ -646,7 +710,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               if (compacted > 0) {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: `Manually compacted: ${compacted} messages removed.`,
                   timestamp: Date.now(),
                 });
@@ -654,46 +718,47 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               } else {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: "Compact: no compaction needed — conversation is within context budget.",
+                  role: 'assistant',
+                  content: 'Compact: no compaction needed — conversation is within context budget.',
                   timestamp: Date.now(),
                 });
                 setMessages([...agent.messages]);
               }
               return;
             }
-            case "connect":
-              setOverlay("connect");
+            case 'connect':
+              setOverlay('connect');
               return;
-            case "doctor": {
+            case 'doctor': {
               const report = await getDoctorReport(agent.cfg);
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "assistant",
+                role: 'assistant',
                 content: formatDoctorReport(report),
                 timestamp: Date.now(),
               });
               setMessages([...agent.messages]);
               return;
             }
-            case "models": {
+            case 'models': {
               const models = await getModelsList(undefined, agent.cfg);
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "assistant",
+                role: 'assistant',
                 content: formatModelsList(models),
                 timestamp: Date.now(),
               });
               setMessages([...agent.messages]);
               return;
             }
-            case "auto": {
+            case 'auto': {
               const task = args.trim();
               if (task) {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: "Autonomous mode enabled. You may iterate tools freely to complete the task.",
+                  role: 'assistant',
+                  content:
+                    'Autonomous mode enabled. You may iterate tools freely to complete the task.',
                   timestamp: Date.now(),
                 });
                 setMessages([...agent.messages]);
@@ -702,76 +767,79 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               } else {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: "Usage: /auto [task description] — runs the agent in autonomous mode.",
+                  role: 'assistant',
+                  content: 'Usage: /auto [task description] — runs the agent in autonomous mode.',
                   timestamp: Date.now(),
                 });
                 setMessages([...agent.messages]);
               }
               return;
             }
-            case "todo":
+            case 'todo':
               if (args) {
                 agent.addTodo(args);
               } else {
                 setShowTodos((s) => !s);
               }
               return;
-            case "skill": {
+            case 'skill': {
               const skills = loadSkills();
               const content =
                 skills.size > 0
-                  ? `Available skills: ${Array.from(skills.keys()).join(", ")}`
-                  : "No skills loaded.";
+                  ? `Available skills: ${Array.from(skills.keys()).join(', ')}`
+                  : 'No skills loaded.';
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "assistant",
+                role: 'assistant',
                 content,
                 timestamp: Date.now(),
               });
               setMessages([...agent.messages]);
               return;
             }
-            case "save":
+            case 'save':
               handleSave();
               return;
-            case "load":
+            case 'load':
               setSessions(loadSessions());
-              setOverlay("history");
+              setOverlay('history');
               return;
-            case "cd": {
+            case 'cd': {
               let target = args.trim();
-              if ((target.startsWith('"') && target.endsWith('"')) || (target.startsWith("'") && target.endsWith("'"))) {
+              if (
+                (target.startsWith('"') && target.endsWith('"')) ||
+                (target.startsWith("'") && target.endsWith("'"))
+              ) {
                 target = target.slice(1, -1).trim();
               }
               if (!target) {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: `Current workspace: ${agent.cfg.workspace}`,
                   timestamp: Date.now(),
                 });
                 setMessages([...agent.messages]);
                 return;
               }
-              
+
               // Use the change_workspace tool instead of direct reconfigure
               // This ensures consistent workspace handling across all tools
-              const changeWorkspaceTool = tools.find(t => t.name === "change_workspace");
+              const changeWorkspaceTool = tools.find((t) => t.name === 'change_workspace');
               if (!changeWorkspaceTool) {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: `change_workspace tool not found`,
                   timestamp: Date.now(),
                 });
                 setMessages([...agent.messages]);
                 return;
               }
-              const toolResult = agent.cfg.allowedPaths?.length 
+              const toolResult = agent.cfg.allowedPaths?.length
                 ? changeWorkspaceTool.execute({ path: target }, agent.cfg.workspace, agent.cfg)
                 : changeWorkspaceTool.execute({ path: target }, agent.cfg.workspace);
-              
+
               try {
                 const result = JSON.parse(toolResult);
                 if (result.ok && result.workspace) {
@@ -780,7 +848,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
                   setTodos([]);
                   agent.messages.push({
                     id: Math.random().toString(36).slice(2, 10),
-                    role: "assistant",
+                    role: 'assistant',
                     content: `Workspace changed to ${result.workspace}`,
                     timestamp: Date.now(),
                   });
@@ -789,7 +857,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
                 } else {
                   agent.messages.push({
                     id: Math.random().toString(36).slice(2, 10),
-                    role: "assistant",
+                    role: 'assistant',
                     content: `Failed to change workspace: ${result.error || 'Unknown error'}`,
                     timestamp: Date.now(),
                   });
@@ -799,7 +867,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               } catch {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: `Failed to parse workspace change result: ${toolResult}`,
                   timestamp: Date.now(),
                 });
@@ -808,22 +876,22 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               }
             }
 
-            case "theme": {
-              const tname = args.trim() || "";
+            case 'theme': {
+              const tname = args.trim() || '';
               const next = THEMES[tname];
               if (next) {
                 setTheme(next);
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: `Theme set to ${next.name}.`,
                   timestamp: Date.now(),
                 });
               } else {
-                const names = Object.keys(THEMES).join(", ");
+                const names = Object.keys(THEMES).join(', ');
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: `Available themes: ${names}`,
                   timestamp: Date.now(),
                 });
@@ -831,13 +899,13 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               setMessages([...agent.messages]);
               return;
             }
-            case "export": {
+            case 'export': {
               if (!agent) return;
               try {
                 const filePath = exportToMarkdown(agent.messages, args || undefined);
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: `Chat exported to ${filePath}`,
                   timestamp: Date.now(),
                 });
@@ -845,7 +913,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               } catch (err) {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: `Failed to export chat: ${err}`,
                   timestamp: Date.now(),
                 });
@@ -853,20 +921,20 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               }
               return;
             }
-            case "skills":
-              setOverlay("skills");
+            case 'skills':
+              setOverlay('skills');
               return;
-            case "reload": {
+            case 'reload': {
               await agent.reloadFromDisk();
               const loadedSkills = loadSkills();
               setSkills(loadedSkills);
               setSkillCommands(getSkillCommands(loadedSkills));
               const ctxNote = agent.cfg.modelContextLength
                 ? ` · ${Math.round(agent.cfg.modelContextLength / 1000)}k ctx`
-                : "";
+                : '';
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "assistant",
+                role: 'assistant',
                 content:
                   `Reloaded config, skills, and LM Studio metadata.\n` +
                   `model: ${agent.cfg.model}${ctxNote} · small_model_mode: ${agent.cfg.smallModelMode ?? false}\n` +
@@ -876,16 +944,16 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               setMessages([...agent.messages]);
               return;
             }
-            case "sessions": {
+            case 'sessions': {
               // List available sessions
-              const sessions = loadSessions().filter((s) => !s.id.startsWith("autosave-"));
+              const sessions = loadSessions().filter((s) => !s.id.startsWith('autosave-'));
               if (sessions.length > 0) {
                 const list = sessions
                   .map((s) => `${new Date(s.updatedAt).toLocaleDateString()} - ${s.id}`)
-                  .join("\n");
+                  .join('\n');
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: `Available sessions:\n${list}\n\nTo resume: /resume [id]`,
                   timestamp: Date.now(),
                 });
@@ -893,15 +961,16 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               } else {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: "No saved sessions found. Your current session will be auto-saved on exit.",
+                  role: 'assistant',
+                  content:
+                    'No saved sessions found. Your current session will be auto-saved on exit.',
                   timestamp: Date.now(),
                 });
                 setMessages([...agent.messages]);
               }
               return;
             }
-            case "new": {
+            case 'new': {
               // Start a new session - clear messages and todos
               agent.messages = [];
               agent.todos = [];
@@ -909,21 +978,21 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               setTodos([]);
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "assistant",
-                content: "Started a new session. Previous conversation cleared.",
+                role: 'assistant',
+                content: 'Started a new session. Previous conversation cleared.',
                 timestamp: Date.now(),
               });
               setMessages([...agent.messages]);
               return;
             }
-            case "delete-session": {
+            case 'delete-session': {
               // Delete a saved session
               const id = args?.trim();
               if (!id) {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: "Usage: /delete-session [id]. List sessions with /sessions.",
+                  role: 'assistant',
+                  content: 'Usage: /delete-session [id]. List sessions with /sessions.',
                   timestamp: Date.now(),
                 });
                 setMessages([...agent.messages]);
@@ -936,7 +1005,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
                 setSessions(loadSessions());
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: `Session '${id}' deleted.`,
                   timestamp: Date.now(),
                 });
@@ -944,7 +1013,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               } else {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: `Session '${id}' not found. Use /sessions to list available sessions.`,
                   timestamp: Date.now(),
                 });
@@ -952,7 +1021,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               }
               return;
             }
-            case "resume": {
+            case 'resume': {
               // Resume latest or specific session
               const session = resumeSession(args?.trim());
               if (session) {
@@ -964,7 +1033,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
                 agent.onUpdate?.();
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: `Resumed session: ${session.id} (${session.messages.length} messages)`,
                   timestamp: Date.now(),
                 });
@@ -972,26 +1041,29 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               } else {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: args?.trim() ? `Session '${args.trim()}' not found.` : "No sessions to resume.",
+                  role: 'assistant',
+                  content: args?.trim()
+                    ? `Session '${args.trim()}' not found.`
+                    : 'No sessions to resume.',
                   timestamp: Date.now(),
                 });
                 setMessages([...agent.messages]);
               }
               return;
             }
-            case "rename": {
-              handleRename(args || "");
+            case 'rename': {
+              handleRename(args || '');
               return;
             }
-            case "copy": {
+            case 'copy': {
               // Copy message content to clipboard by message ID
               const targetId = args?.trim();
               if (!targetId) {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: "Usage: /copy [message-id]. Use /copy with a message ID to copy its content to clipboard.",
+                  role: 'assistant',
+                  content:
+                    'Usage: /copy [message-id]. Use /copy with a message ID to copy its content to clipboard.',
                   timestamp: Date.now(),
                 });
                 setMessages([...agent.messages]);
@@ -1007,17 +1079,17 @@ export function App({ renderer }: { renderer: CliRenderer }) {
                 const success = copyToClipboard(message.content);
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: success
                     ? `Copied message ${message.id.slice(0, 8)} to clipboard.`
-                    : `Failed to copy to clipboard. Content:\n${message.content.slice(0, 500)}${message.content.length > 500 ? "..." : ""}`,
+                    : `Failed to copy to clipboard. Content:\n${message.content.slice(0, 500)}${message.content.length > 500 ? '...' : ''}`,
                   timestamp: Date.now(),
                 });
                 setMessages([...agent.messages]);
               } else {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: `Message with ID '${targetId}' not found. Use the full message ID or a unique partial match.`,
                   timestamp: Date.now(),
                 });
@@ -1025,15 +1097,15 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               }
               return;
             }
-            case "todos": {
+            case 'todos': {
               // Show current todos in chat
               if (todos.length > 0) {
                 const todoList = todos
-                  .map((t) => `${t.done ? "✓" : "✗"} ${t.id}: ${t.text}`)
-                  .join("\n");
+                  .map((t) => `${t.done ? '✓' : '✗'} ${t.id}: ${t.text}`)
+                  .join('\n');
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: `Current Todos:\n${todoList}\n\nUse /todo [text] to add, /clear-todos to remove all.`,
                   timestamp: Date.now(),
                 });
@@ -1041,28 +1113,28 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               } else {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: "No todos. Add one with /todo [description].",
+                  role: 'assistant',
+                  content: 'No todos. Add one with /todo [description].',
                   timestamp: Date.now(),
                 });
                 setMessages([...agent.messages]);
               }
               return;
             }
-            case "clear-todos": {
+            case 'clear-todos': {
               // Clear all todos
               agent.todos = [];
               setTodos([]);
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "assistant",
-                content: "All todos cleared.",
+                role: 'assistant',
+                content: 'All todos cleared.',
                 timestamp: Date.now(),
               });
               setMessages([...agent.messages]);
               return;
             }
-            case "unload": {
+            case 'unload': {
               // Unload a skill: /unload [name]
               const unloadName = args.trim();
               if (!unloadName) {
@@ -1070,25 +1142,37 @@ export function App({ renderer }: { renderer: CliRenderer }) {
                 if (active.length > 0) {
                   agent.messages.push({
                     id: Math.random().toString(36).slice(2, 10),
-                    role: "assistant",
-                    content: `Active skills: ${active.join(", ")}\nUsage: /unload [skill-name]`,
+                    role: 'assistant',
+                    content: `Active skills: ${active.join(', ')}\nUsage: /unload [skill-name]`,
                     timestamp: Date.now(),
                   });
                 } else {
                   agent.messages.push({
                     id: Math.random().toString(36).slice(2, 10),
-                    role: "assistant",
-                    content: "No active skills to unload.",
+                    role: 'assistant',
+                    content: 'No active skills to unload.',
                     timestamp: Date.now(),
                   });
                 }
                 setMessages([...agent.messages]);
                 return;
               }
-              const unloaded = agent.skillManager.unload(unloadName, agent.messages, agent.isSmallModel, undefined) || agent.skillManager.unload(`skill:${unloadName}`, agent.messages, agent.isSmallModel, undefined);
+              const unloaded =
+                agent.skillManager.unload(
+                  unloadName,
+                  agent.messages,
+                  agent.isSmallModel,
+                  undefined
+                ) ||
+                agent.skillManager.unload(
+                  `skill:${unloadName}`,
+                  agent.messages,
+                  agent.isSmallModel,
+                  undefined
+                );
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "assistant",
+                role: 'assistant',
                 content: unloaded
                   ? `Skill "${unloadName}" unloaded.`
                   : `Skill "${unloadName}" not found in active skills.`,
@@ -1097,14 +1181,14 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               setMessages([...agent.messages]);
               return;
             }
-            case "skill-load": {
+            case 'skill-load': {
               // Load a skill: /skill-load [name]
               const loadName = args.trim();
               if (!loadName) {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: "Usage: /skill-load [skill-name]. Use /skills to see available skills.",
+                  role: 'assistant',
+                  content: 'Usage: /skill-load [skill-name]. Use /skills to see available skills.',
                   timestamp: Date.now(),
                 });
                 setMessages([...agent.messages]);
@@ -1112,19 +1196,24 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               }
               const skill = getSkill(loadName) || skills.get(loadName);
               if (skill) {
-                const loaded = agent.skillManager.load(skill, agent.messages, agent.isSmallModel, undefined);
+                const loaded = agent.skillManager.load(
+                  skill,
+                  agent.messages,
+                  agent.isSmallModel,
+                  undefined
+                );
                 if (loaded) {
-                  const skillDesc = skill.description || "";
+                  const skillDesc = skill.description || '';
                   agent.messages.push({
                     id: Math.random().toString(36).slice(2, 10),
-                    role: "assistant",
+                    role: 'assistant',
                     content: `**Skill Loaded: ${skill.name}**\n\n${skillDesc}\n\nWhat would you like to do with this skill?`,
                     timestamp: Date.now(),
                   });
                 } else {
                   agent.messages.push({
                     id: Math.random().toString(36).slice(2, 10),
-                    role: "assistant",
+                    role: 'assistant',
                     content: `Skill "${loadName}" is already loaded.`,
                     timestamp: Date.now(),
                   });
@@ -1132,7 +1221,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               } else {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: `Skill "${loadName}" not found. Use /skills to see available skills.`,
                   timestamp: Date.now(),
                 });
@@ -1140,42 +1229,46 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               setMessages([...agent.messages]);
               return;
             }
-            case "exit":
+            case 'exit':
               // Auto-save before exiting
               if (agent) {
                 autoSaveSession(agent.messages, agent.todos, cfg.workspace);
               }
               process.exit(0);
               return;
-            case "graph": {
-              const sub = args.split(" ")[0].toLowerCase();
+            case 'graph': {
+              const sub = args.split(' ')[0].toLowerCase();
               const ws = agent?.cfg?.workspace || process.cwd();
-              if (sub === "build") {
+              if (sub === 'build') {
                 const result = await build_memory_graph({ workspace: ws });
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: `**Memory Graph — Build**\n\n${result.message}\n- **Nodes:** ${result.nodes ?? "—"}\n- **Edges:** ${result.edges ?? "—"}\n- **Time:** ${result.time != null ? `${result.time}ms` : "—"}`,
+                  role: 'assistant',
+                  content: `**Memory Graph — Build**\n\n${result.message}\n- **Nodes:** ${result.nodes ?? '—'}\n- **Edges:** ${result.edges ?? '—'}\n- **Time:** ${result.time != null ? `${result.time}ms` : '—'}`,
                   timestamp: Date.now(),
                 });
                 setMessages([...agent.messages]);
-              } else if (sub === "stats") {
+              } else if (sub === 'stats') {
                 const stats = await get_graph_stats({ workspace: ws });
-                const byType = Object.entries(stats.nodesByType).map(([k, v]) => `  ${k}: ${v}`).join("\n");
-                const byLang = Object.entries(stats.nodesByLanguage).map(([k, v]) => `  ${k}: ${v}`).join("\n");
+                const byType = Object.entries(stats.nodesByType)
+                  .map(([k, v]) => `  ${k}: ${v}`)
+                  .join('\n');
+                const byLang = Object.entries(stats.nodesByLanguage)
+                  .map(([k, v]) => `  ${k}: ${v}`)
+                  .join('\n');
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: `**Memory Graph — Stats**\n\n- **Nodes:** ${stats.nodeCount}\n- **Edges:** ${stats.edgeCount}\n\n**By Type:**\n${byType || "  —"}\n\n**By Language:**\n${byLang || "  —"}`,
+                  role: 'assistant',
+                  content: `**Memory Graph — Stats**\n\n- **Nodes:** ${stats.nodeCount}\n- **Edges:** ${stats.edgeCount}\n\n**By Type:**\n${byType || '  —'}\n\n**By Language:**\n${byLang || '  —'}`,
                   timestamp: Date.now(),
                 });
                 setMessages([...agent.messages]);
-              } else if (sub === "report") {
+              } else if (sub === 'report') {
                 const result = await get_analysis_report({ workspace: ws });
                 if (result.ok && result.report) {
                   agent.messages.push({
                     id: Math.random().toString(36).slice(2, 10),
-                    role: "assistant",
+                    role: 'assistant',
                     content: result.report,
                     timestamp: Date.now(),
                   });
@@ -1183,8 +1276,8 @@ export function App({ renderer }: { renderer: CliRenderer }) {
                 } else {
                   agent.messages.push({
                     id: Math.random().toString(36).slice(2, 10),
-                    role: "assistant",
-                    content: `Graph report error: ${result.error || "unknown"}`,
+                    role: 'assistant',
+                    content: `Graph report error: ${result.error || 'unknown'}`,
                     timestamp: Date.now(),
                   });
                   setMessages([...agent.messages]);
@@ -1192,7 +1285,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               } else {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: `**Memory Graph**\n\nUsage:\n  \`/graph build\`   — Build/rebuild the memory graph from codebase\n  \`/graph stats\`   — Show node/edge counts by type and language\n  \`/graph report\`  — Full analysis report with communities, god nodes, and surprising connections`,
                   timestamp: Date.now(),
                 });
@@ -1200,14 +1293,15 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               }
               return;
             }
-            case "mcp": {
+            case 'mcp': {
               const states = agent.mcpStates;
               const mgr = agent.mcpManager;
               if (!states || states.length === 0) {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: "No MCP servers configured. Add `mcp` to ~/.qwen-agent.json.\n\nExample:\n```json\n\"mcp\": {\n  \"filesystem\": {\n    \"type\": \"local\",\n    \"command\": [\"npx\", \"-y\", \"@modelcontextprotocol/server-filesystem\", \"/path/to/dir\"]\n  },\n  \"remote\": {\n    \"type\": \"remote\",\n    \"url\": \"https://mcp.example.com/sse\"\n  }\n}\n```\n\nYou can also ask me to add an MCP server — just describe what you need and I'll use manage_mcp to configure it.",
+                  role: 'assistant',
+                  content:
+                    'No MCP servers configured. Add `mcp` to ~/.qwen-agent.json.\n\nExample:\n```json\n"mcp": {\n  "filesystem": {\n    "type": "local",\n    "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]\n  },\n  "remote": {\n    "type": "remote",\n    "url": "https://mcp.example.com/sse"\n  }\n}\n```\n\nYou can also ask me to add an MCP server — just describe what you need and I\'ll use manage_mcp to configure it.',
                   timestamp: Date.now(),
                 });
               } else {
@@ -1215,32 +1309,35 @@ export function App({ renderer }: { renderer: CliRenderer }) {
                 const totalTools = mgr?.totalTools ?? 0;
                 const lines = [
                   `## MCP Servers (${connected} connected, ${totalTools} tools)`,
-                  "",
+                  '',
                   ...states.map((s) => {
-                    const icon = s.status === "connected" ? "+" : s.status === "error" ? "!" : "-";
-                    const info = s.serverInfo ? ` (${s.serverInfo.name}${s.serverInfo.version ? ` v${s.serverInfo.version}` : ""})` : "";
-                    const err = s.error ? ` - ${s.error}` : "";
+                    const icon = s.status === 'connected' ? '+' : s.status === 'error' ? '!' : '-';
+                    const info = s.serverInfo
+                      ? ` (${s.serverInfo.name}${s.serverInfo.version ? ` v${s.serverInfo.version}` : ''})`
+                      : '';
+                    const err = s.error ? ` - ${s.error}` : '';
                     return `- [${icon}] ${s.name}${info}: ${s.status}, ${s.toolCount} tools${err}`;
                   }),
-                  "",
-                  "Commands: `/mcp-add`, `/mcp-remove`, or ask me to manage MCP servers.",
+                  '',
+                  'Commands: `/mcp-add`, `/mcp-remove`, or ask me to manage MCP servers.',
                 ];
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: lines.join("\n"),
+                  role: 'assistant',
+                  content: lines.join('\n'),
                   timestamp: Date.now(),
                 });
               }
               setMessages([...agent.messages]);
               return;
             }
-            case "mcp-add": {
+            case 'mcp-add': {
               if (!args) {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: "Usage: `/mcp-add <name> <type> <connection>`\n\nExamples:\n- `/mcp-add filesystem local npx -y @modelcontextprotocol/server-filesystem /home/user/docs`\n- `/mcp-add github remote https://mcp.github.com/sse`\n\nOr just ask me in natural language: \"Add an MCP server for reading files in /tmp\"",
+                  role: 'assistant',
+                  content:
+                    'Usage: `/mcp-add <name> <type> <connection>`\n\nExamples:\n- `/mcp-add filesystem local npx -y @modelcontextprotocol/server-filesystem /home/user/docs`\n- `/mcp-add github remote https://mcp.github.com/sse`\n\nOr just ask me in natural language: "Add an MCP server for reading files in /tmp"',
                   timestamp: Date.now(),
                 });
                 setMessages([...agent.messages]);
@@ -1249,71 +1346,87 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               const parts = args.split(/\s+/);
               const name = parts[0];
               const type = parts[1];
-              if (type === "local") {
+              if (type === 'local') {
                 const cmdParts = parts.slice(2);
                 if (cmdParts.length === 0) {
                   agent.messages.push({
                     id: Math.random().toString(36).slice(2, 10),
-                    role: "assistant",
-                    content: "Local servers need a command. Example: `/mcp-add filesystem local npx -y @modelcontextprotocol/server-filesystem /path`",
+                    role: 'assistant',
+                    content:
+                      'Local servers need a command. Example: `/mcp-add filesystem local npx -y @modelcontextprotocol/server-filesystem /path`',
                     timestamp: Date.now(),
                   });
                   setMessages([...agent.messages]);
                   return;
                 }
-                const result = await agent.executeToolDirect("manage_mcp", { action: "add", name, type: "local", command: cmdParts });
+                const result = await agent.executeToolDirect('manage_mcp', {
+                  action: 'add',
+                  name,
+                  type: 'local',
+                  command: cmdParts,
+                });
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: result ?? "Added. Restart to connect.",
+                  role: 'assistant',
+                  content: result ?? 'Added. Restart to connect.',
                   timestamp: Date.now(),
                 });
-              } else if (type === "remote") {
+              } else if (type === 'remote') {
                 const url = parts[2];
                 if (!url) {
                   agent.messages.push({
                     id: Math.random().toString(36).slice(2, 10),
-                    role: "assistant",
-                    content: "Remote servers need a URL. Example: `/mcp-add api remote https://mcp.example.com/sse`",
+                    role: 'assistant',
+                    content:
+                      'Remote servers need a URL. Example: `/mcp-add api remote https://mcp.example.com/sse`',
                     timestamp: Date.now(),
                   });
                   setMessages([...agent.messages]);
                   return;
                 }
-                const result = await agent.executeToolDirect("manage_mcp", { action: "add", name, type: "remote", url });
+                const result = await agent.executeToolDirect('manage_mcp', {
+                  action: 'add',
+                  name,
+                  type: 'remote',
+                  url,
+                });
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: result ?? "Added. Restart to connect.",
+                  role: 'assistant',
+                  content: result ?? 'Added. Restart to connect.',
                   timestamp: Date.now(),
                 });
               } else {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: "Type must be 'local' or 'remote'. Example: `/mcp-add filesystem local npx -y ...`",
+                  role: 'assistant',
+                  content:
+                    "Type must be 'local' or 'remote'. Example: `/mcp-add filesystem local npx -y ...`",
                   timestamp: Date.now(),
                 });
               }
               setMessages([...agent.messages]);
               return;
             }
-            case "mcp-remove": {
+            case 'mcp-remove': {
               if (!args) {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
-                  content: "Usage: `/mcp-remove <server-name>` — e.g. `/mcp-remove filesystem`",
+                  role: 'assistant',
+                  content: 'Usage: `/mcp-remove <server-name>` — e.g. `/mcp-remove filesystem`',
                   timestamp: Date.now(),
                 });
                 setMessages([...agent.messages]);
                 return;
               }
-              const result = await agent.executeToolDirect("manage_mcp", { action: "remove", name: args.trim() });
+              const result = await agent.executeToolDirect('manage_mcp', {
+                action: 'remove',
+                name: args.trim(),
+              });
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "assistant",
-                content: result ?? "Removed. Restart to apply.",
+                role: 'assistant',
+                content: result ?? 'Removed. Restart to apply.',
                 timestamp: Date.now(),
               });
               setMessages([...agent.messages]);
@@ -1321,20 +1434,26 @@ export function App({ renderer }: { renderer: CliRenderer }) {
             }
             default: {
               // Handle skill loading by name: /<skill-name>, /skill:name, /skill [name], or /skills [name]
-              const cleanSkillName = command.replace(/^skill:/, "");
+              const cleanSkillName = command.replace(/^skill:/, '');
               const targetSkill =
                 getSkill(cleanSkillName) ||
                 skills.get(cleanSkillName) ||
-                ((command === "skills" || command === "skill") && args
-                  ? getSkill(args.trim().replace(/^skill:/, "")) || skills.get(args.trim().replace(/^skill:/, ""))
+                ((command === 'skills' || command === 'skill') && args
+                  ? getSkill(args.trim().replace(/^skill:/, '')) ||
+                    skills.get(args.trim().replace(/^skill:/, ''))
                   : undefined);
 
               if (targetSkill) {
-                const loaded = agent.skillManager.load(targetSkill, agent.messages, agent.isSmallModel, undefined);
-                const skillDesc = targetSkill.welcomeMessage || targetSkill.description || "";
+                const loaded = agent.skillManager.load(
+                  targetSkill,
+                  agent.messages,
+                  agent.isSmallModel,
+                  undefined
+                );
+                const skillDesc = targetSkill.welcomeMessage || targetSkill.description || '';
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
-                  role: "assistant",
+                  role: 'assistant',
                   content: loaded
                     ? `**Skill Loaded: ${targetSkill.name}**\n\n${skillDesc}\n\nWhat would you like to do with this skill?`
                     : `Skill "${targetSkill.name}" is already loaded.`,
@@ -1347,7 +1466,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               // Unknown command
               agent.messages.push({
                 id: Math.random().toString(36).slice(2, 10),
-                role: "assistant",
+                role: 'assistant',
                 content: `Unknown command: /${command}. Type /help for available commands.`,
                 timestamp: Date.now(),
               });
@@ -1371,7 +1490,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
         if (agent) {
           agent.messages.push({
             id: Math.random().toString(36).slice(2, 10),
-            role: "assistant",
+            role: 'assistant',
             content: `Command error: ${err instanceof Error ? err.message : String(err)}`,
             timestamp: Date.now(),
           });
@@ -1404,38 +1523,39 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     }
   }, []);
 
-  const handleConnectSelect = useCallback(async (provider: RuntimeProvider, model: ModelInfo, apiKey?: string) => {
-    const agent = agentRef.current;
-    if (agent) {
-      const newConfig: Partial<Config> = {
-        baseURL: getProviderBaseURL(provider) || agent.cfg.baseURL,
-        model: model.id,
-        modelContextLength: model.contextLength,
-        modelMaxContextLength: model.maxContextLength,
-        modelParamBillions: model.paramBillions,
-      };
-      if (apiKey) {
-        newConfig.apiKey = apiKey;
-      } else if (provider.isLocal) {
-        newConfig.apiKey = "lm-studio";
+  const handleConnectSelect = useCallback(
+    async (provider: RuntimeProvider, model: ModelInfo, apiKey?: string) => {
+      const agent = agentRef.current;
+      if (agent) {
+        const newConfig: Partial<Config> = {
+          baseURL: getProviderBaseURL(provider) || agent.cfg.baseURL,
+          model: model.id,
+          modelContextLength: model.contextLength,
+          modelMaxContextLength: model.maxContextLength,
+          modelParamBillions: model.paramBillions,
+        };
+        if (apiKey) {
+          newConfig.apiKey = apiKey;
+        } else if (provider.isLocal) {
+          newConfig.apiKey = 'lm-studio';
+        }
+        await agent.reconfigure(newConfig);
+        const ctxNote = agent.cfg.modelContextLength
+          ? ` · ${Math.round(agent.cfg.modelContextLength / 1000)}k ctx`
+          : '';
+        const paramNote =
+          agent.cfg.modelParamBillions !== undefined ? ` · ~${agent.cfg.modelParamBillions}B` : '';
+        agent.messages.push({
+          id: Math.random().toString(36).slice(2, 10),
+          role: 'assistant',
+          content: `Connected to ${provider.name}: ${model.name} (${model.id})${provider.isLocal ? ' [Local]' : ''}${ctxNote}${paramNote}`,
+          timestamp: Date.now(),
+        });
+        setMessages([...agent.messages]);
       }
-      await agent.reconfigure(newConfig);
-      const ctxNote = agent.cfg.modelContextLength
-        ? ` · ${Math.round(agent.cfg.modelContextLength / 1000)}k ctx`
-        : "";
-      const paramNote =
-        agent.cfg.modelParamBillions !== undefined
-          ? ` · ~${agent.cfg.modelParamBillions}B`
-          : "";
-      agent.messages.push({
-        id: Math.random().toString(36).slice(2, 10),
-        role: "assistant",
-        content: `Connected to ${provider.name}: ${model.name} (${model.id})${provider.isLocal ? " [Local]" : ""}${ctxNote}${paramNote}`,
-        timestamp: Date.now(),
-      });
-      setMessages([...agent.messages]);
-    }
-  }, []);
+    },
+    []
+  );
 
   const handleTodoToggle = useCallback((id: string) => {
     const agent = agentRef.current;
@@ -1449,7 +1569,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
 
   const handleCloseTodos = useCallback(() => setShowTodos(false), []);
 
-  if (overlay === "help") {
+  if (overlay === 'help') {
     return (
       <ErrorBoundary theme={theme}>
         <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
@@ -1458,7 +1578,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
       </ErrorBoundary>
     );
   }
-  if (overlay === "history") {
+  if (overlay === 'history') {
     return (
       <ErrorBoundary theme={theme}>
         <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
@@ -1473,7 +1593,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
       </ErrorBoundary>
     );
   }
-  if (overlay === "skills") {
+  if (overlay === 'skills') {
     return (
       <ErrorBoundary theme={theme}>
         <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
@@ -1488,15 +1608,11 @@ export function App({ renderer }: { renderer: CliRenderer }) {
       </ErrorBoundary>
     );
   }
-  if (overlay === "connect") {
+  if (overlay === 'connect') {
     return (
       <ErrorBoundary theme={theme}>
         <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
-          <ConnectOverlay
-            theme={theme}
-            onClose={closeOverlay}
-            onSelect={handleConnectSelect}
-          />
+          <ConnectOverlay theme={theme} onClose={closeOverlay} onSelect={handleConnectSelect} />
         </box>
       </ErrorBoundary>
     );
@@ -1507,7 +1623,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
       <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
         <StatusBar
           state={state}
-          model={agentRef.current?.cfg.model || ""}
+          model={agentRef.current?.cfg.model || ''}
           modelRuntime={agentRef.current?.cfg}
           todoCount={todos.length}
           currentTool={currentTool}
@@ -1544,7 +1660,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               messages={messages}
               toolResults={toolResults}
               state={state}
-              model={agentRef.current?.cfg.model || ""}
+              model={agentRef.current?.cfg.model || ''}
               todoCount={todos.length}
               elapsedMs={elapsedMs}
               currentTool={currentTool}

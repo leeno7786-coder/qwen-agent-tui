@@ -8,7 +8,6 @@ export interface ToolDisplayBlock {
   durationMs?: number;
 }
 
-
 function parseJSON(value: string): Record<string, unknown> | undefined {
   try {
     return JSON.parse(value);
@@ -18,128 +17,140 @@ function parseJSON(value: string): Record<string, unknown> | undefined {
 }
 
 function normalizePath(path?: string): string {
-  if (!path) return ".";
-  return String(path).replace(/\\/g, "/");
+  if (!path) return '.';
+  return String(path).replace(/\\/g, '/');
 }
 
 function shellActionLabel(): string {
-  return process.platform === "win32" ? "PowerShell" : "Bash";
+  return process.platform === 'win32' ? 'PowerShell' : 'Bash';
 }
 
 const ACTION_LABELS: Record<string, string> = {
-  write_file: "Write",
-  edit_file: "Update",
-  edit_file_lines: "Update",
-  read_file: "Read",
-  batch_read_files: "Read",
+  write_file: 'Write',
+  edit_file: 'Update',
+  edit_file_lines: 'Update',
+  read_file: 'Read',
+  batch_read_files: 'Read',
   execute_command: shellActionLabel(),
-  run_tests: "Test",
-  run_command: "Run",
-  typecheck: "Typecheck",
-  install_dependencies: "Install",
-  list_dir: "List",
-  map_project_tree: "Tree",
-  find_files: "Find",
-  grep_search: "Search",
-  search_and_view: "Search",
-  search_files: "Search",
-  git_commit: "Commit",
-  git_status: "Git Status",
-  git_diff: "Git Diff",
+  run_tests: 'Test',
+  run_command: 'Run',
+  typecheck: 'Typecheck',
+  install_dependencies: 'Install',
+  list_dir: 'List',
+  map_project_tree: 'Tree',
+  find_files: 'Find',
+  grep_search: 'Search',
+  search_and_view: 'Search',
+  search_files: 'Search',
+  git_commit: 'Commit',
+  git_status: 'Git Status',
+  git_diff: 'Git Diff',
 
-  manage_todos: "Todo",
-  change_workspace: "Cd",
-  stat_path: "Stat",
-  linear_graphql: "GraphQL",
+  manage_todos: 'Todo',
+  change_workspace: 'Cd',
+  stat_path: 'Stat',
+  linear_graphql: 'GraphQL',
 };
 
 function actionLabel(toolName: string, result?: Record<string, unknown>): string {
-  if (toolName === "write_file") {
-    if (result?.action === "update") return "Update";
-    if (result?.action === "write") return "Write";
-    if ((result?.removed as number ?? 0) > 0) return "Update";
+  if (toolName === 'write_file') {
+    if (result?.action === 'update') return 'Update';
+    if (result?.action === 'write') return 'Write';
+    if (((result?.removed as number) ?? 0) > 0) return 'Update';
   }
-  return ACTION_LABELS[toolName] || toolName.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return (
+    ACTION_LABELS[toolName] || toolName.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  );
 }
 
-function targetFromArgs(toolName: string, args: Record<string, unknown>, result?: Record<string, unknown>): string {
-  if (toolName === "execute_command" || toolName === "run_command") {
-    return String((args?.command ?? result?.command ?? "") as string).trim() || "(command)";
+function targetFromArgs(
+  toolName: string,
+  args: Record<string, unknown>,
+  result?: Record<string, unknown>
+): string {
+  if (toolName === 'execute_command' || toolName === 'run_command') {
+    return String((args?.command ?? result?.command ?? '') as string).trim() || '(command)';
   }
 
-  if (toolName === "manage_todos") {
-    return [args?.action, args?.text || args?.id].filter(Boolean).join(": ") || "todo";
+  if (toolName === 'manage_todos') {
+    return [args?.action, args?.text || args?.id].filter(Boolean).join(': ') || 'todo';
   }
-  if (toolName === "grep_search" || toolName === "search_files") {
+  if (toolName === 'grep_search' || toolName === 'search_files') {
     const path = normalizePath(args?.path as string | undefined);
-    const pattern = String(args?.pattern || args?.query || "");
+    const pattern = String(args?.pattern || args?.query || '');
     return `${path}: "${pattern}"`;
   }
-  if (toolName === "git_commit") {
-    return String(args?.message || result?.message || "").slice(0, 120) || "commit";
+  if (toolName === 'git_commit') {
+    return String(args?.message || result?.message || '').slice(0, 120) || 'commit';
   }
-  if (toolName === "batch_read_files" && Array.isArray(args?.paths)) {
-    return args.paths.map(normalizePath as (p: unknown) => string).join(", ");
+  if (toolName === 'batch_read_files' && Array.isArray(args?.paths)) {
+    return args.paths.map(normalizePath as (p: unknown) => string).join(', ');
   }
-  return normalizePath((args?.path || result?.path || args?.command || ".") as string);
+  return normalizePath((args?.path || result?.path || args?.command || '.') as string);
 }
 
 function firstOutputLine(data: Record<string, unknown>): string {
-  const stdout = typeof data?.stdout === "string" ? data.stdout.trim() : "";
-  const stderr = typeof data?.stderr === "string" ? data.stderr.trim() : "";
-  const error = typeof data?.error === "string" ? data.error.trim() : "";
+  const stdout = typeof data?.stdout === 'string' ? data.stdout.trim() : '';
+  const stderr = typeof data?.stderr === 'string' ? data.stderr.trim() : '';
+  const error = typeof data?.error === 'string' ? data.error.trim() : '';
   const combined = stdout || stderr || error;
-  if (!combined) return data?.ok === false ? "failed" : "(no output)";
-  const line = combined.split("\n").find((l: string) => l.trim()) || combined;
-  return line.length > 140 ? line.slice(0, 139) + "…" : line;
+  if (!combined) return data?.ok === false ? 'failed' : '(no output)';
+  const line = combined.split('\n').find((l: string) => l.trim()) || combined;
+  return line.length > 140 ? line.slice(0, 139) + '…' : line;
 }
 
 function previewLinesFromOutput(data: Record<string, unknown>, limit = 8): string[] | undefined {
-  const stdout = typeof data?.stdout === "string" ? data.stdout : "";
-  const stderr = typeof data?.stderr === "string" ? data.stderr : "";
-  const text = [stdout, stderr].filter(Boolean).join("\n").trim();
+  const stdout = typeof data?.stdout === 'string' ? data.stdout : '';
+  const stderr = typeof data?.stderr === 'string' ? data.stderr : '';
+  const text = [stdout, stderr].filter(Boolean).join('\n').trim();
   if (!text) return undefined;
-  const lines = text.split("\n").filter((l: string) => l.trim());
+  const lines = text.split('\n').filter((l: string) => l.trim());
   if (lines.length <= 1) return undefined;
   return lines.slice(0, limit);
 }
 
 function formatLineChangeSummary(added: number, removed: number): string {
-  if (added === 0 && removed === 0) return "no changes";
+  if (added === 0 && removed === 0) return 'no changes';
   const parts = [];
   if (added > 0) parts.push(`+${added}`);
   if (removed > 0) parts.push(`-${removed}`);
-  return parts.join(" ");
+  return parts.join(' ');
 }
 
-export function buildSummary(toolName: string, args: Record<string, unknown>, result: Record<string, unknown>, ok: boolean): string {
+export function buildSummary(
+  toolName: string,
+  args: Record<string, unknown>,
+  result: Record<string, unknown>,
+  ok: boolean
+): string {
   if (!ok) {
-    return String(result?.error || result?.message || "failed").slice(0, 160);
+    return String(result?.error || result?.message || 'failed').slice(0, 160);
   }
 
-  if (typeof result?.added === "number" || typeof result?.removed === "number") {
-    return formatLineChangeSummary(result.added as number ?? 0, result.removed as number ?? 0);
+  if (typeof result?.added === 'number' || typeof result?.removed === 'number') {
+    return formatLineChangeSummary((result.added as number) ?? 0, (result.removed as number) ?? 0);
   }
 
-  if (toolName === "read_file") {
+  if (toolName === 'read_file') {
     if (result?.total_lines != null) return `${result.total_lines as number} lines`;
     if (result?.content) {
-      const lines = String(result.content).split("\n").length;
-      return `${lines} line${lines === 1 ? "" : "s"}`;
+      const lines = String(result.content).split('\n').length;
+      return `${lines} line${lines === 1 ? '' : 's'}`;
     }
   }
 
-  if (toolName === "grep_search" || toolName === "search_files") {
-    const count = (result?.matches ?? (result?.results as unknown[] | undefined)?.length) as number | undefined;
-    if (count != null) return `${count} match${count === 1 ? "" : "es"}`;
+  if (toolName === 'grep_search' || toolName === 'search_files') {
+    const count = (result?.matches ?? (result?.results as unknown[] | undefined)?.length) as
+      number | undefined;
+    if (count != null) return `${count} match${count === 1 ? '' : 'es'}`;
   }
 
-  if (toolName === "list_dir" && Array.isArray(result?.entries)) {
-    return `${result.entries.length} item${result.entries.length === 1 ? "" : "s"}`;
+  if (toolName === 'list_dir' && Array.isArray(result?.entries)) {
+    return `${result.entries.length} item${result.entries.length === 1 ? '' : 's'}`;
   }
 
-  if (toolName === "git_diff" && result?.diff === "") {
-    return (result?.message as string) || "clean working tree";
+  if (toolName === 'git_diff' && result?.diff === '') {
+    return (result?.message as string) || 'clean working tree';
   }
 
   if (result?.stdout != null || result?.stderr != null || result?.code != null) {
@@ -148,11 +159,11 @@ export function buildSummary(toolName: string, args: Record<string, unknown>, re
     return firstOutputLine(result);
   }
 
-  if (result?.path && toolName === "write_file") {
-    return formatLineChangeSummary(result.added as number ?? 0, result.removed as number ?? 0);
+  if (result?.path && toolName === 'write_file') {
+    return formatLineChangeSummary((result.added as number) ?? 0, (result.removed as number) ?? 0);
   }
 
-  return "ok";
+  return 'ok';
 }
 
 export function buildToolDisplayBlock(
@@ -163,19 +174,24 @@ export function buildToolDisplayBlock(
 ): ToolDisplayBlock {
   const args = parseJSON(argsRaw) ?? {};
   const result = parseJSON(resultRaw);
-  const ok = result ? (result.ok !== false && result.success !== false) as boolean : true;
+  const ok = result ? ((result.ok !== false && result.success !== false) as boolean) : true;
 
   if (result?.subagent) {
     const block: ToolDisplayBlock = {
-      action: "SubAgent",
+      action: 'SubAgent',
       target: String(result.subagent),
       ok,
-      summary: result?.toolCalls != null ? `${String(result.toolCalls)} tool calls` : ok ? "done" : "failed",
+      summary:
+        result?.toolCalls != null
+          ? `${String(result.toolCalls)} tool calls`
+          : ok
+            ? 'done'
+            : 'failed',
       durationMs,
     };
     if (result?.output) {
       block.previewLines = String(result.output)
-        .split("\n")
+        .split('\n')
         .map((l: string) => l.trim())
         .filter(Boolean)
         .slice(0, 12);
@@ -183,13 +199,13 @@ export function buildToolDisplayBlock(
     return block;
   }
 
-  if (toolName.startsWith("sub:")) {
-    const model = args?.model ? ` · ${args.model as string}` : "";
+  if (toolName.startsWith('sub:')) {
+    const model = args?.model ? ` · ${args.model as string}` : '';
     return {
-      action: "SubAgent",
+      action: 'SubAgent',
       target: `${toolName.slice(4)}${model}`,
       ok: true,
-      summary: `running ${(args?.tool as string) ?? "tool"}…`,
+      summary: `running ${(args?.tool as string) ?? 'tool'}…`,
       durationMs,
     };
   }
@@ -202,18 +218,22 @@ export function buildToolDisplayBlock(
     durationMs,
   };
 
-  if (typeof result?.diff === "string" && result.diff.trim()) {
+  if (typeof result?.diff === 'string' && result.diff.trim()) {
     block.diff = result.diff.trim();
   }
 
-  if (!block.diff && toolName === "git_diff" && typeof result?.stdout === "string" && result.stdout.trim()) {
+  if (
+    !block.diff &&
+    toolName === 'git_diff' &&
+    typeof result?.stdout === 'string' &&
+    result.stdout.trim()
+  ) {
     block.diff = result.stdout.trim();
   }
 
   if (!block.diff) {
     block.previewLines = previewLinesFromOutput(result ?? ({} as Record<string, unknown>));
   }
-
 
   return block;
 }

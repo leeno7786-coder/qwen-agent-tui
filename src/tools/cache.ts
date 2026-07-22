@@ -225,7 +225,11 @@ export class ToolCacheManager {
    * Get a cached result for a tool execution.
    * @returns The cached result or undefined if not found/expired
    */
-  get(toolName: string, args: Record<string, unknown>, workspace: string): ToolCacheEntry | undefined {
+  get(
+    toolName: string,
+    args: Record<string, unknown>,
+    workspace: string
+  ): ToolCacheEntry | undefined {
     if (!this.config.enabled) return undefined;
     if (this.config.excludedTools.has(toolName)) return undefined;
 
@@ -288,9 +292,9 @@ export class ToolCacheManager {
     if (this.config.excludedTools.has(toolName)) return;
 
     const key = generateCacheKey(toolName, args, workspace);
-    
+
     // Auto-extract dependencies if not provided
-    const depSet = dependencies 
+    const depSet = dependencies
       ? new Set(dependencies)
       : extractDependencies(toolName, args, workspace);
 
@@ -313,7 +317,7 @@ export class ToolCacheManager {
       dependencies: depSet,
       workspace,
     });
-    
+
     // Start watching dependencies for changes
     if (this.config.enabled && depSet && depSet.size > 0) {
       for (const dep of depSet) {
@@ -381,7 +385,7 @@ export class ToolCacheManager {
     this.workspace = workspace;
     // Stop all existing watchers
     this.stopAllWatchers();
-    
+
     // Re-watch all dependencies in the cache
     for (const entry of this.cache.values()) {
       if (entry.dependencies) {
@@ -397,7 +401,7 @@ export class ToolCacheManager {
    */
   watchFile(filePath: string): void {
     if (!this.config.enabled) return;
-    
+
     const absPath = resolve(this.workspace, filePath);
     if (this.fileWatchers.has(absPath)) return;
 

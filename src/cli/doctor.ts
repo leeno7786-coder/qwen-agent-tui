@@ -1,13 +1,13 @@
-import { parseArgs } from "util";
-import { printDoctorHelp } from "./help";
-import { formatDoctorReport, getDoctorReport } from "./reports";
+import { parseArgs } from 'util';
+import { printDoctorHelp } from './help';
+import { formatDoctorReport, getDoctorReport } from './reports';
 
 export async function cmdDoctor(argv: string[]): Promise<number> {
   const { values } = parseArgs({
     args: argv,
     options: {
-      json: { type: "boolean", default: false },
-      help: { type: "boolean", short: "h", default: false },
+      json: { type: 'boolean', default: false },
+      help: { type: 'boolean', short: 'h', default: false },
     },
     allowPositionals: false,
     strict: true,
@@ -25,6 +25,6 @@ export async function cmdDoctor(argv: string[]): Promise<number> {
     return report.ok ? 0 : 1;
   }
 
-  console.log(formatDoctorReport(report).replace(/\n\nCLI:.*$/s, ""));
+  console.log(formatDoctorReport(report).replace(/\n\nCLI:.*$/s, ''));
   return report.ok ? 0 : 1;
 }

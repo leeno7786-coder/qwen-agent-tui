@@ -24,12 +24,15 @@ describe('SecurityManager', () => {
     });
 
     it('should accept custom configuration', () => {
-      const customManager = createSecurityManager({
-        enabled: false,
-        validateCommands: false,
-        maxFileSize: 1000,
-      }, '/test/workspace');
-      
+      const customManager = createSecurityManager(
+        {
+          enabled: false,
+          validateCommands: false,
+          maxFileSize: 1000,
+        },
+        '/test/workspace'
+      );
+
       const config = customManager.getConfig();
       expect(config.enabled).toBe(false);
       expect(config.validateCommands).toBe(false);
@@ -163,7 +166,10 @@ describe('SecurityManager', () => {
     });
 
     it('should block access to blocked paths - node_modules', () => {
-      const result = securityManager.validateFileAccess('/test/workspace/node_modules/package', 'read');
+      const result = securityManager.validateFileAccess(
+        '/test/workspace/node_modules/package',
+        'read'
+      );
       expect(result.ok).toBe(false);
     });
 
@@ -179,25 +185,34 @@ describe('SecurityManager', () => {
     });
 
     it('should allow access when validation is disabled', () => {
-      const disabledManager = createSecurityManager({ validateFileAccess: false }, '/test/workspace');
+      const disabledManager = createSecurityManager(
+        { validateFileAccess: false },
+        '/test/workspace'
+      );
       const result = disabledManager.validateFileAccess('/etc/passwd', 'read');
       expect(result.ok).toBe(true);
     });
 
     it('should respect custom allowed paths', () => {
-      const customManager = createSecurityManager({
-        allowedPaths: ['config/**'],
-      }, '/test/workspace');
-      
+      const customManager = createSecurityManager(
+        {
+          allowedPaths: ['config/**'],
+        },
+        '/test/workspace'
+      );
+
       const result = customManager.validateFileAccess('/test/workspace/config/app.json', 'read');
       expect(result.ok).toBe(true);
     });
 
     it('should respect custom blocked paths', () => {
-      const customManager = createSecurityManager({
-        blockedPaths: ['secrets/**'],
-      }, '/test/workspace');
-      
+      const customManager = createSecurityManager(
+        {
+          blockedPaths: ['secrets/**'],
+        },
+        '/test/workspace'
+      );
+
       const result = customManager.validateFileAccess('/test/workspace/secrets/api.key', 'read');
       expect(result.ok).toBe(false);
     });
@@ -226,7 +241,8 @@ describe('SecurityManager', () => {
     });
 
     it('should sanitize JWT tokens', () => {
-      const output = 'Using JWT eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+      const output =
+        'Using JWT eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
       const sanitized = securityManager.sanitizeOutput(output);
       expect(sanitized).not.toContain('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9');
       expect(sanitized).toContain('[JWT_REDACTED]');
@@ -344,7 +360,7 @@ describe('SecurityManager', () => {
     it('should enable and disable security', () => {
       securityManager.setEnabled(false);
       expect(securityManager.isSafeCommand('rm -rf /')).toBe(true);
-      
+
       securityManager.setEnabled(true);
       expect(securityManager.isSafeCommand('rm -rf /')).toBe(false);
     });

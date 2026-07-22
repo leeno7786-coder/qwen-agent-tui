@@ -1,4 +1,4 @@
-import type { SecurityManager } from "./security";
+import type { SecurityManager } from './security';
 
 /**
  * Application configuration shape.
@@ -39,7 +39,7 @@ export interface Config {
   /** Parameter count in billions when reported by runtime. */
   modelParamBillions?: number;
   /** How modelContextLength / modelParamBillions were obtained. */
-  modelRuntimeSource?: "lmstudio" | "heuristic";
+  modelRuntimeSource?: 'lmstudio' | 'heuristic';
 
   rateLimitMs?: number;
   /** Enable tool execution caching (default: true). */
@@ -128,19 +128,14 @@ export interface SubAgentPoolConfig {
 
 /** Possible states of the agent lifecycle. */
 export type AgentState =
-  | "idle"
-  | "thinking"
-  | "executing_tool"
-  | "waiting_for_user"
-  | "reflecting"
-  | "error";
+  'idle' | 'thinking' | 'executing_tool' | 'waiting_for_user' | 'reflecting' | 'error';
 
 /** A chat message stored in the session. */
 export interface Message {
   /** Unique message id. */
   id: string;
   /** Message role. */
-  role: "system" | "user" | "assistant" | "tool";
+  role: 'system' | 'user' | 'assistant' | 'tool';
   /** Text content. */
   content: string;
   /** Unix timestamp. */
@@ -176,7 +171,6 @@ export interface ToolResult {
   /** Whether the result was served from cache. */
   cached?: boolean;
 }
-
 
 /** A user-managed todo item. */
 export interface Todo {
@@ -219,7 +213,7 @@ export interface Skill {
   /** Predefined options for user to choose from */
   options?: Array<{ label: string; value: string; description?: string }>;
   /** Source type of this skill */
-  source?: "skilli.md" | "json" | "inline";
+  source?: 'skilli.md' | 'json' | 'inline';
   /** File path this skill was loaded from */
   sourcePath?: string;
 }
@@ -314,7 +308,7 @@ export interface Session {
  * Configuration for a local MCP server (stdio transport).
  */
 export interface McpLocalServerConfig {
-  type: "local";
+  type: 'local';
   /** Command to spawn the MCP server (e.g. ["npx", "-y", "@modelcontextprotocol/server-filesystem"]). */
   command: string[];
   /** Optional environment variables for the child process. */
@@ -329,7 +323,7 @@ export interface McpLocalServerConfig {
  * Configuration for a remote MCP server (HTTP/SSE transport).
  */
 export interface McpRemoteServerConfig {
-  type: "remote";
+  type: 'remote';
   /** URL of the remote MCP server (e.g. "https://mcp.example.com/sse"). */
   url: string;
   /** Optional HTTP headers (supports {env:VAR} interpolation). */
@@ -346,7 +340,7 @@ export interface McpServerState {
   /** Server config key name. */
   name: string;
   /** Connection status. */
-  status: "connected" | "connecting" | "error" | "disabled";
+  status: 'connected' | 'connecting' | 'error' | 'disabled';
   /** Tools discovered from this server. */
   toolCount: number;
   /** Error message if status is "error". */

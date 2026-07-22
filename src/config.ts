@@ -1,9 +1,9 @@
-import { readFileSync, existsSync, statSync, writeFileSync, mkdirSync } from "fs";
-import { homedir } from "os";
-import { join, resolve } from "path";
-import { config as dotenvConfig } from "dotenv";
-import type { Config, SkillConfig } from "./types";
-import { isSmallModel } from "./llm";
+import { readFileSync, existsSync, statSync, writeFileSync, mkdirSync } from 'fs';
+import { homedir } from 'os';
+import { join, resolve } from 'path';
+import { config as dotenvConfig } from 'dotenv';
+import type { Config, SkillConfig } from './types';
+import { isSmallModel } from './llm';
 
 /**
  * Derive sub-agent availability and defaults from the resolved config.
@@ -43,16 +43,16 @@ function sanitizeBaseURL(url: string): string {
     // Remove basic auth (user:password@host) - preserve protocol
     // Match protocol://user:password@ and replace with protocol://
     let sanitized = url.replace(/(https?:\/\/)[^/]+:[^@]+@/, '$1');
-    
+
     // Remove API key from query string
     // Match ?key=value or &key=value and replace with just the separator
     sanitized = sanitized.replace(/([?&])(api_key|key)=[^&]+/gi, '$1');
-    
+
     // Clean up: replace ?& with ?, && with &, trailing ? or &
     sanitized = sanitized.replace(/\?&/g, '?');
     sanitized = sanitized.replace(/&&+/g, '&');
     sanitized = sanitized.replace(/[?&]$/, '');
-    
+
     return sanitized;
   } catch {
     return url;
@@ -63,25 +63,24 @@ function sanitizeBaseURL(url: string): string {
  * Preset model configurations.
  */
 export const MODELS: Record<string, { baseURL: string; model: string }> = {
-  "qwen3-coder-flash": {
-    baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model: "qwen3-coder-flash",
+  'qwen3-coder-flash': {
+    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen3-coder-flash',
   },
-  "qwen-plus": {
-    baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model: "qwen-plus",
+  'qwen-plus': {
+    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen-plus',
   },
-  "qwen-max": {
-    baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model: "qwen-max",
+  'qwen-max': {
+    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen-max',
   },
 };
 
-
 function getDefault(): Config {
   return {
-    baseURL: "http://127.0.0.1:1234/",
-    model: "model-identifier",
+    baseURL: 'http://127.0.0.1:1234/',
+    model: 'model-identifier',
     apiKey: null,
     maxIterations: 50,
     workspace: process.cwd(),
@@ -93,16 +92,15 @@ function getDefault(): Config {
   };
 }
 
-
 /**
  * Load `.env` files from the current directory and the workspace.
  * @param workspace - Working directory to search for `.env`.
  */
 function loadEnv(workspace: string) {
   const candidates = [
-    join(process.cwd(), ".env"),
-    join(workspace, ".env"),
-    join(homedir(), ".qwen-agent-tui", ".env"),
+    join(process.cwd(), '.env'),
+    join(workspace, '.env'),
+    join(homedir(), '.qwen-agent-tui', '.env'),
   ];
   for (const p of candidates) {
     if (existsSync(p)) {
@@ -133,16 +131,19 @@ export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
   const configPath = typeof pathOrConfig === 'string' ? pathOrConfig : undefined;
   const candidates = [
     configPath,
-    join(process.cwd(), "qwen-agent.json"),
-    join(homedir(), ".qwen-agent.json"),
+    join(process.cwd(), 'qwen-agent.json'),
+    join(homedir(), '.qwen-agent.json'),
   ].filter(Boolean) as string[];
 
   for (const p of candidates) {
     if (existsSync(p)) {
       try {
-        Object.assign(cfg, JSON.parse(readFileSync(p, "utf-8")));
+        Object.assign(cfg, JSON.parse(readFileSync(p, 'utf-8')));
       } catch (err) {
-        console.warn(`Warning: failed to parse config file ${p}:`, err instanceof Error ? err.message : String(err));
+        console.warn(
+          `Warning: failed to parse config file ${p}:`,
+          err instanceof Error ? err.message : String(err)
+        );
       }
       break;
     }
@@ -150,14 +151,19 @@ export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
 
   // Sanitize baseURL to remove any embedded API keys
   cfg.baseURL = sanitizeBaseURL(cfg.baseURL);
-  
+
   // Provider env overrides — ONLY auto-apply OPENAI_API_KEY for OpenAI endpoints
   const explicitBaseURL = process.env.QWEN_BASE_URL || cfg.baseURL;
   const isDefaultLocal = /localhost|127\.0\.0\.1/.test(explicitBaseURL);
   const isOpenAIEndpoint = /openai\.com|api\.openai\.com/i.test(explicitBaseURL);
-  if (!process.env.QWEN_BASE_URL && !isDefaultLocal && process.env.OPENAI_API_KEY && isOpenAIEndpoint) {
+  if (
+    !process.env.QWEN_BASE_URL &&
+    !isDefaultLocal &&
+    process.env.OPENAI_API_KEY &&
+    isOpenAIEndpoint
+  ) {
     cfg.apiKey = process.env.OPENAI_API_KEY;
-    cfg.baseURL = sanitizeBaseURL(process.env.OPENAI_BASE_URL || "https://api.openai.com/v1");
+    cfg.baseURL = sanitizeBaseURL(process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1');
   }
   if (process.env.QWEN_BASE_URL) cfg.baseURL = sanitizeBaseURL(process.env.QWEN_BASE_URL);
 
@@ -165,15 +171,15 @@ export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
   // Only set from env var if no explicit apiKey is already configured
   if (cfg.baseURL && !cfg.apiKey) {
     const providerKeyPatterns: [string, string][] = [
-      ["mistral.ai", "MISTRAL_API_KEY"],
-      ["anthropic.com", "ANTHROPIC_API_KEY"],
-      ["googleapis.com", "GOOGLE_API_KEY"],
-      ["nebius.com", "NEBIUS_API_KEY"],
-      ["api.z.ai", "ZAI_API_KEY"],
-      ["bigmodel.cn", "ZHIPU_API_KEY"],
-      ["helicone.ai", "HELICONE_API_KEY"],
-      ["cohere.ai", "COHERE_API_KEY"],
-      ["openrouter.ai", "OPENROUTER_API_KEY"],
+      ['mistral.ai', 'MISTRAL_API_KEY'],
+      ['anthropic.com', 'ANTHROPIC_API_KEY'],
+      ['googleapis.com', 'GOOGLE_API_KEY'],
+      ['nebius.com', 'NEBIUS_API_KEY'],
+      ['api.z.ai', 'ZAI_API_KEY'],
+      ['bigmodel.cn', 'ZHIPU_API_KEY'],
+      ['helicone.ai', 'HELICONE_API_KEY'],
+      ['cohere.ai', 'COHERE_API_KEY'],
+      ['openrouter.ai', 'OPENROUTER_API_KEY'],
     ];
     for (const [pattern, envVar] of providerKeyPatterns) {
       if (cfg.baseURL.includes(pattern) && process.env[envVar]) {
@@ -219,7 +225,10 @@ export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
   }
 
   // Tool cache configuration
-  if (process.env.QWEN_TOOL_CACHE_ENABLED === "0" || process.env.QWEN_TOOL_CACHE_ENABLED === "false") {
+  if (
+    process.env.QWEN_TOOL_CACHE_ENABLED === '0' ||
+    process.env.QWEN_TOOL_CACHE_ENABLED === 'false'
+  ) {
     cfg.toolCacheEnabled = false;
   }
   if (process.env.QWEN_TOOL_CACHE_TTL_MS) {
@@ -232,7 +241,10 @@ export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
   }
 
   // Context management configuration
-  if (process.env.QWEN_CONTEXT_MANAGEMENT_ENABLED === "0" || process.env.QWEN_CONTEXT_MANAGEMENT_ENABLED === "false") {
+  if (
+    process.env.QWEN_CONTEXT_MANAGEMENT_ENABLED === '0' ||
+    process.env.QWEN_CONTEXT_MANAGEMENT_ENABLED === 'false'
+  ) {
     cfg.contextManagementEnabled = false;
   }
   if (process.env.QWEN_CONTEXT_COMPACT_THRESHOLD) {
@@ -253,16 +265,25 @@ export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
   }
 
   // Security configuration
-  if (process.env.QWEN_SECURITY_ENABLED === "0" || process.env.QWEN_SECURITY_ENABLED === "false") {
+  if (process.env.QWEN_SECURITY_ENABLED === '0' || process.env.QWEN_SECURITY_ENABLED === 'false') {
     cfg.securityEnabled = false;
   }
-  if (process.env.QWEN_SECURITY_VALIDATE_COMMANDS === "0" || process.env.QWEN_SECURITY_VALIDATE_COMMANDS === "false") {
+  if (
+    process.env.QWEN_SECURITY_VALIDATE_COMMANDS === '0' ||
+    process.env.QWEN_SECURITY_VALIDATE_COMMANDS === 'false'
+  ) {
     cfg.securityValidateCommands = false;
   }
-  if (process.env.QWEN_SECURITY_VALIDATE_FILE_ACCESS === "0" || process.env.QWEN_SECURITY_VALIDATE_FILE_ACCESS === "false") {
+  if (
+    process.env.QWEN_SECURITY_VALIDATE_FILE_ACCESS === '0' ||
+    process.env.QWEN_SECURITY_VALIDATE_FILE_ACCESS === 'false'
+  ) {
     cfg.securityValidateFileAccess = false;
   }
-  if (process.env.QWEN_SECURITY_SANITIZE_OUTPUT === "0" || process.env.QWEN_SECURITY_SANITIZE_OUTPUT === "false") {
+  if (
+    process.env.QWEN_SECURITY_SANITIZE_OUTPUT === '0' ||
+    process.env.QWEN_SECURITY_SANITIZE_OUTPUT === 'false'
+  ) {
     cfg.securitySanitizeOutput = false;
   }
   if (process.env.QWEN_SECURITY_MAX_FILE_SIZE) {
@@ -274,12 +295,15 @@ export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
     if (!Number.isNaN(n) && n > 0) cfg.securityMaxBatchFiles = n;
   }
   if (process.env.QWEN_SECURITY_ALLOWED_PATHS) {
-    cfg.securityAllowedPaths = process.env.QWEN_SECURITY_ALLOWED_PATHS.split(',').map(p => p.trim());
+    cfg.securityAllowedPaths = process.env.QWEN_SECURITY_ALLOWED_PATHS.split(',').map((p) =>
+      p.trim()
+    );
   }
   if (process.env.QWEN_SECURITY_BLOCKED_PATHS) {
-    cfg.securityBlockedPaths = process.env.QWEN_SECURITY_BLOCKED_PATHS.split(',').map(p => p.trim());
+    cfg.securityBlockedPaths = process.env.QWEN_SECURITY_BLOCKED_PATHS.split(',').map((p) =>
+      p.trim()
+    );
   }
-
 
   // Auto-detect small model mode (≤8B) — does not shrink context; that comes from the model id.
   // When smallModelMode is undefined (default), isSmallModel checks the model ID.
@@ -300,17 +324,17 @@ export function loadConfig(pathOrConfig?: string | Partial<Config>): Config {
     if (detected) {
       console.warn(
         `Config warning: smallModelMode is set to false, but "${cfg.model}" appears to be a small model (≤8B). ` +
-        `Remove "smallModelMode": false from your config to enable auto-detection.`
+          `Remove "smallModelMode": false from your config to enable auto-detection.`
       );
     }
   }
 
   const validation = validateConfig(cfg);
   if (validation.warnings.length > 0) {
-    console.warn("Config warnings:", validation.warnings.join("; "));
+    console.warn('Config warnings:', validation.warnings.join('; '));
   }
   if (validation.errors.length > 0) {
-    console.error("Config errors:", validation.errors.join("; "));
+    console.error('Config errors:', validation.errors.join('; '));
   }
 
   return cfg;
@@ -330,15 +354,23 @@ export function validateConfig(cfg: Config): {
   const errors: string[] = [];
 
   const isLocal = /localhost|127\.0\.0\.1|lm-studio|ollama/i.test(cfg.baseURL);
-  if (!isLocal && (!cfg.apiKey || cfg.apiKey.trim() === "")) {
-    warnings.push("apiKey is empty — set OPENAI_API_KEY or DASHSCOPE_API_KEY");
+  if (!isLocal && (!cfg.apiKey || cfg.apiKey.trim() === '')) {
+    warnings.push('apiKey is empty — set OPENAI_API_KEY or DASHSCOPE_API_KEY');
   }
 
   if (!isLocal && cfg.apiKey && cfg.apiKey.trim().length < 8) {
-    warnings.push("apiKey looks too short — most provider keys are 32+ characters");
+    warnings.push('apiKey looks too short — most provider keys are 32+ characters');
   }
-  if (!isLocal && cfg.apiKey && cfg.apiKey.trim().startsWith("sk-") && cfg.apiKey.trim().length < 20) {
-    warnings.push("apiKey looks like a malformed OpenAI-style key — expected ~51 chars, got " + cfg.apiKey.trim().length);
+  if (
+    !isLocal &&
+    cfg.apiKey &&
+    cfg.apiKey.trim().startsWith('sk-') &&
+    cfg.apiKey.trim().length < 20
+  ) {
+    warnings.push(
+      'apiKey looks like a malformed OpenAI-style key — expected ~51 chars, got ' +
+        cfg.apiKey.trim().length
+    );
   }
 
   try {
@@ -348,9 +380,7 @@ export function validateConfig(cfg: Config): {
   }
 
   if (cfg.maxIterations < 1 || cfg.maxIterations > 200) {
-    errors.push(
-      `maxIterations must be between 1 and 200, got ${cfg.maxIterations}`
-    );
+    errors.push(`maxIterations must be between 1 and 200, got ${cfg.maxIterations}`);
   }
 
   try {
@@ -364,33 +394,25 @@ export function validateConfig(cfg: Config): {
 
   if (cfg.retryCount !== undefined) {
     if (cfg.retryCount < 0 || cfg.retryCount > 10) {
-      errors.push(
-        `retryCount must be between 0 and 10, got ${cfg.retryCount}`
-      );
+      errors.push(`retryCount must be between 0 and 10, got ${cfg.retryCount}`);
     }
   }
 
   if (cfg.timeout !== undefined) {
     if (cfg.timeout < 1000 || cfg.timeout > 300000) {
-      errors.push(
-        `timeout must be between 1 and 300 seconds (1000-300000ms), got ${cfg.timeout}`
-      );
+      errors.push(`timeout must be between 1 and 300 seconds (1000-300000ms), got ${cfg.timeout}`);
     }
   }
 
   if (cfg.toolCacheTtlMs !== undefined) {
     if (cfg.toolCacheTtlMs < 0 || cfg.toolCacheTtlMs > 300000) {
-      errors.push(
-        `toolCacheTtlMs must be between 0 and 300000ms, got ${cfg.toolCacheTtlMs}`
-      );
+      errors.push(`toolCacheTtlMs must be between 0 and 300000ms, got ${cfg.toolCacheTtlMs}`);
     }
   }
 
   if (cfg.toolCacheMaxSize !== undefined) {
     if (cfg.toolCacheMaxSize < 1 || cfg.toolCacheMaxSize > 10000) {
-      errors.push(
-        `toolCacheMaxSize must be between 1 and 10000, got ${cfg.toolCacheMaxSize}`
-      );
+      errors.push(`toolCacheMaxSize must be between 1 and 10000, got ${cfg.toolCacheMaxSize}`);
     }
   }
 
@@ -412,9 +434,7 @@ export function validateConfig(cfg: Config): {
 
   if (cfg.contextKeepCount !== undefined) {
     if (cfg.contextKeepCount < 1 || cfg.contextKeepCount > 100) {
-      errors.push(
-        `contextKeepCount must be between 1 and 100, got ${cfg.contextKeepCount}`
-      );
+      errors.push(`contextKeepCount must be between 1 and 100, got ${cfg.contextKeepCount}`);
     }
   }
 
@@ -450,8 +470,10 @@ export function validateConfig(cfg: Config): {
       if (path && workspace) {
         // Ensure allowed paths are within workspace or are absolute paths
         // This is a basic check - more thorough validation happens in the safe() function
-        if (!path.startsWith(workspace) && !path.startsWith("/") && !path.match(/^[a-zA-Z]:/)) {
-          warnings.push(`securityAllowedPaths entry "${path}" may not be accessible from workspace: ${workspace}`);
+        if (!path.startsWith(workspace) && !path.startsWith('/') && !path.match(/^[a-zA-Z]:/)) {
+          warnings.push(
+            `securityAllowedPaths entry "${path}" may not be accessible from workspace: ${workspace}`
+          );
         }
       }
     }
@@ -460,29 +482,33 @@ export function validateConfig(cfg: Config): {
   // P1: Validate subAgentMaxParallel has reasonable limits
   if (cfg.maxBackgroundSubAgents !== undefined) {
     if (cfg.maxBackgroundSubAgents < 1 || cfg.maxBackgroundSubAgents > 10) {
-      warnings.push(`maxBackgroundSubAgents should be between 1 and 10 for stability, got ${cfg.maxBackgroundSubAgents}`);
+      warnings.push(
+        `maxBackgroundSubAgents should be between 1 and 10 for stability, got ${cfg.maxBackgroundSubAgents}`
+      );
     }
   }
 
   // MCP server configuration validation
-  if (cfg.mcp && typeof cfg.mcp === "object") {
+  if (cfg.mcp && typeof cfg.mcp === 'object') {
     for (const [name, serverCfg] of Object.entries(cfg.mcp)) {
-      if (!serverCfg || typeof serverCfg !== "object") {
+      if (!serverCfg || typeof serverCfg !== 'object') {
         errors.push(`mcp.${name}: must be an object`);
         continue;
       }
       const cfg = serverCfg as unknown as Record<string, unknown>;
       if (!cfg.type) {
         errors.push(`mcp.${name}: "type" is required (local or remote)`);
-      } else if (cfg.type === "local") {
+      } else if (cfg.type === 'local') {
         if (!cfg.command || !Array.isArray(cfg.command) || cfg.command.length === 0) {
           errors.push(`mcp.${name}: "command" must be a non-empty array for local servers`);
         }
-      } else if (cfg.type === "remote") {
-        if (!cfg.url || typeof cfg.url !== "string") {
+      } else if (cfg.type === 'remote') {
+        if (!cfg.url || typeof cfg.url !== 'string') {
           errors.push(`mcp.${name}: "url" is required for remote servers`);
         } else {
-          try { new URL(cfg.url); } catch {
+          try {
+            new URL(cfg.url);
+          } catch {
             errors.push(`mcp.${name}: "url" is not a valid URL: ${cfg.url}`);
           }
         }
@@ -503,27 +529,27 @@ export function validateConfig(cfg: Config): {
  * Ensure the .env file exists in the user's home directory for qwen-agent-tui.
  */
 function ensureEnvFile(): string {
-  const envDir = join(homedir(), ".qwen-agent-tui");
-  const envPath = join(envDir, ".env");
-  
+  const envDir = join(homedir(), '.qwen-agent-tui');
+  const envPath = join(envDir, '.env');
+
   // Create directory if it doesn't exist
   if (!existsSync(envDir)) {
     try {
       mkdirSync(envDir, { recursive: true });
     } catch (err) {
-      console.warn("Warning: failed to create env directory:", err);
+      console.warn('Warning: failed to create env directory:', err);
     }
   }
-  
+
   // Create .env file if it doesn't exist
   if (!existsSync(envPath)) {
     try {
-      writeFileSync(envPath, "# Qwen Agent TUI Environment Variables\n", "utf-8");
+      writeFileSync(envPath, '# Qwen Agent TUI Environment Variables\n', 'utf-8');
     } catch (err) {
-      console.warn("Warning: failed to create .env file:", err);
+      console.warn('Warning: failed to create .env file:', err);
     }
   }
-  
+
   return envPath;
 }
 
@@ -534,58 +560,54 @@ function ensureEnvFile(): string {
  * @param envPath - Optional path to .env file
  * @returns True if saved successfully
  */
-export function saveApiKeyToEnv(
-  envVarName: string,
-  apiKey: string,
-  envPath?: string
-): boolean {
+export function saveApiKeyToEnv(envVarName: string, apiKey: string, envPath?: string): boolean {
   try {
     const targetPath = envPath || ensureEnvFile();
-    
+
     // Read existing content
-    let existingContent = "";
+    let existingContent = '';
     if (existsSync(targetPath)) {
-      existingContent = readFileSync(targetPath, "utf-8");
+      existingContent = readFileSync(targetPath, 'utf-8');
     }
-    
+
     // Check if the variable already exists
-    const lines = existingContent.split("\n");
+    const lines = existingContent.split('\n');
     const varName = `${envVarName}=`;
     const updatedLines = [];
     let found = false;
-    
+
     for (const line of lines) {
       if (line.startsWith(varName) || line.trim().startsWith(varName)) {
         // Update existing line
         updatedLines.push(`${varName}${apiKey}`);
         found = true;
-      } else if (line.trim() === "" || line.trim().startsWith("#")) {
+      } else if (line.trim() === '' || line.trim().startsWith('#')) {
         // Keep comments and empty lines
         updatedLines.push(line);
       } else {
         updatedLines.push(line);
       }
     }
-    
+
     // If not found, append to the end
     if (!found) {
-      updatedLines.push("");
+      updatedLines.push('');
       updatedLines.push(`# ${new Date().toISOString().slice(0, 10)}`);
       updatedLines.push(`${varName}${apiKey}`);
     }
-    
+
     // Write back
-    writeFileSync(targetPath, updatedLines.join("\n"), "utf-8");
-    
+    writeFileSync(targetPath, updatedLines.join('\n'), 'utf-8');
+
     // Reload environment variables
     dotenvConfig({ path: resolve(targetPath) });
     // dotenv does not override existing env vars, so force-set it so
     // getApiKey() returns the latest value within the same session.
     process.env[envVarName] = apiKey;
-    
+
     return true;
   } catch (error) {
-    console.error("Error saving API key:", error);
+    console.error('Error saving API key:', error);
     return false;
   }
 }
@@ -600,19 +622,19 @@ export function getApiKey(envVarName: string): string | undefined {
   if (process.env[envVarName]) {
     return process.env[envVarName];
   }
-  
+
   // Check .env files
   const candidates = [
-    join(process.cwd(), ".env"),
-    join(homedir(), ".qwen-agent-tui", ".env"),
-    join(homedir(), ".env"),
+    join(process.cwd(), '.env'),
+    join(homedir(), '.qwen-agent-tui', '.env'),
+    join(homedir(), '.env'),
   ];
-  
+
   for (const envPath of candidates) {
     if (existsSync(envPath)) {
       try {
-        const content = readFileSync(envPath, "utf-8");
-        const match = content.match(new RegExp(`^${envVarName}=(.+)$`, "m"));
+        const content = readFileSync(envPath, 'utf-8');
+        const match = content.match(new RegExp(`^${envVarName}=(.+)$`, 'm'));
         if (match) {
           return match[1]?.trim() || undefined;
         }
@@ -621,7 +643,7 @@ export function getApiKey(envVarName: string): string | undefined {
       }
     }
   }
-  
+
   return undefined;
 }
 
@@ -633,16 +655,16 @@ export function getApiKey(envVarName: string): string | undefined {
 export function removeApiKeyFromEnv(envVarName: string): boolean {
   try {
     const envPath = ensureEnvFile();
-    
+
     if (!existsSync(envPath)) {
       return false;
     }
-    
-    const content = readFileSync(envPath, "utf-8");
-    const lines = content.split("\n");
+
+    const content = readFileSync(envPath, 'utf-8');
+    const lines = content.split('\n');
     const updatedLines = [];
     let removed = false;
-    
+
     for (const line of lines) {
       if (line.trim().startsWith(`${envVarName}=`)) {
         // Skip this line
@@ -651,15 +673,15 @@ export function removeApiKeyFromEnv(envVarName: string): boolean {
         updatedLines.push(line);
       }
     }
-    
+
     if (removed) {
-      writeFileSync(envPath, updatedLines.join("\n"), "utf-8");
+      writeFileSync(envPath, updatedLines.join('\n'), 'utf-8');
       return true;
     }
-    
+
     return false;
   } catch (error) {
-    console.error("Error removing API key:", error);
+    console.error('Error removing API key:', error);
     return false;
   }
 }
@@ -668,17 +690,17 @@ export function removeApiKeyFromEnv(envVarName: string): boolean {
  * Ensure the skill config directory exists in user's home directory.
  */
 function ensureSkillConfigDir(): string {
-  const skillConfigDir = join(homedir(), ".qwen-agent-tui", "skill-config");
-  
+  const skillConfigDir = join(homedir(), '.qwen-agent-tui', 'skill-config');
+
   // Create directory if it doesn't exist
   if (!existsSync(skillConfigDir)) {
     try {
       mkdirSync(skillConfigDir, { recursive: true });
     } catch (err) {
-      console.warn("Warning: failed to create skill config directory:", err);
+      console.warn('Warning: failed to create skill config directory:', err);
     }
   }
-  
+
   return skillConfigDir;
 }
 
@@ -688,16 +710,19 @@ function ensureSkillConfigDir(): string {
  */
 export function loadSkillConfig(): SkillConfig {
   const skillConfigDir = ensureSkillConfigDir();
-  const configPath = join(skillConfigDir, "skill-config.json");
-  
+  const configPath = join(skillConfigDir, 'skill-config.json');
+
   if (!existsSync(configPath)) {
     return {};
   }
-  
+
   try {
-    return JSON.parse(readFileSync(configPath, "utf-8"));
+    return JSON.parse(readFileSync(configPath, 'utf-8'));
   } catch (err) {
-    console.warn(`Warning: failed to parse skill config ${configPath}:`, err instanceof Error ? err.message : String(err));
+    console.warn(
+      `Warning: failed to parse skill config ${configPath}:`,
+      err instanceof Error ? err.message : String(err)
+    );
     return {};
   }
 }
@@ -710,18 +735,18 @@ export function loadSkillConfig(): SkillConfig {
 export function saveSkillConfig(config: SkillConfig): boolean {
   try {
     const skillConfigDir = ensureSkillConfigDir();
-    
+
     // Ensure directory exists
     if (!existsSync(skillConfigDir)) {
       mkdirSync(skillConfigDir, { recursive: true });
     }
-    
-    const configPath = join(skillConfigDir, "skill-config.json");
-    writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
-    
+
+    const configPath = join(skillConfigDir, 'skill-config.json');
+    writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+
     return true;
   } catch (error) {
-    console.error("Error saving skill configuration:", error);
+    console.error('Error saving skill configuration:', error);
     return false;
   }
 }
@@ -734,7 +759,7 @@ export function saveSkillConfig(config: SkillConfig): boolean {
 export function toggleSkillInConfig(name: string): boolean {
   try {
     const config = loadSkillConfig();
-    
+
     // If no specific setting for this skill, use the global enabled flag
     if (!config.skills) {
       config.skills = {};
@@ -747,11 +772,11 @@ export function toggleSkillInConfig(name: string): boolean {
     } else {
       config.skills[name] = !config.skills[name];
     }
-    
+
     saveSkillConfig(config);
     return true;
   } catch (error) {
-    console.error("Error toggling skill in config:", error);
+    console.error('Error toggling skill in config:', error);
     return false;
   }
 }
@@ -763,12 +788,12 @@ export function toggleSkillInConfig(name: string): boolean {
  */
 export function getSkillEnabledFromConfig(name: string): boolean | undefined {
   const config = loadSkillConfig();
-  
+
   // If there's a specific setting for this skill, use it
   if (config.skills && config.skills[name] !== undefined) {
     return config.skills[name];
   }
-  
+
   // Otherwise, check the global enabled flag
   return config.enabled;
 }
@@ -779,20 +804,20 @@ export function getSkillEnabledFromConfig(name: string): boolean | undefined {
  */
 export function getAllConfiguredSkills(): Map<string, boolean> {
   const config = loadSkillConfig();
-  
+
   const map = new Map<string, boolean>();
-  
+
   // Add globally enabled/disabled setting if present
   if (config.enabled !== undefined) {
-    map.set("*", config.enabled);
+    map.set('*', config.enabled);
   }
-  
+
   // Add individual skill settings
-  if (config.skills && typeof config.skills === "object") {
+  if (config.skills && typeof config.skills === 'object') {
     for (const [name, enabled] of Object.entries(config.skills)) {
       map.set(name, enabled);
     }
   }
-  
+
   return map;
 }

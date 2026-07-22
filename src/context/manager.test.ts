@@ -55,9 +55,9 @@ describe('ContextManager', () => {
         content: 'Hello, world!',
         timestamp: Date.now(),
       };
-      
+
       contextManager.addMessage(msg);
-      
+
       const messages = contextManager.getMessages();
       expect(messages.length).toBe(1);
       expect(messages[0].content).toBe('Hello, world!');
@@ -65,9 +65,14 @@ describe('ContextManager', () => {
 
     it('should track multiple messages', () => {
       contextManager.addMessage({ id: '1', role: 'user', content: 'First', timestamp: Date.now() });
-      contextManager.addMessage({ id: '2', role: 'assistant', content: 'Second', timestamp: Date.now() });
+      contextManager.addMessage({
+        id: '2',
+        role: 'assistant',
+        content: 'Second',
+        timestamp: Date.now(),
+      });
       contextManager.addMessage({ id: '3', role: 'tool', content: 'Third', timestamp: Date.now() });
-      
+
       const messages = contextManager.getMessages();
       expect(messages.length).toBe(3);
     });
@@ -79,16 +84,16 @@ describe('ContextManager', () => {
         contextMaxHistoryTokens: 100,
       };
       const smallManager = createContextManager(smallCfg);
-      
+
       // Mock console.warn BEFORE adding messages
       const originalWarn = console.warn;
       const warnings: string[] = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  console.warn = (...args: any[]) => {
+      console.warn = (...args: any[]) => {
         warnings.push(args[0]);
         originalWarn(...args);
       };
-      
+
       // Add messages that approach 80% of the limit (80 tokens)
       // With tiktoken, 'A'.repeat(40) is about 6 tokens, role 'user' is ~1
       // So ~7 tokens per message. Need > 80 tokens, so ~12 messages
@@ -100,12 +105,14 @@ describe('ContextManager', () => {
           timestamp: Date.now(),
         });
       }
-      
+
       // Restore console.warn
       console.warn = originalWarn;
-      
+
       // Check that a warning was logged
-      const contextWarning = warnings.find(w => w.includes('[ContextManager] Context approaching limit'));
+      const contextWarning = warnings.find((w) =>
+        w.includes('[ContextManager] Context approaching limit')
+      );
       expect(contextWarning).toBeDefined();
       expect(contextWarning).toContain('100'); // Should contain the max
       expect(contextWarning).toContain('%'); // Should contain percentage
@@ -115,9 +122,9 @@ describe('ContextManager', () => {
   describe('getStats', () => {
     it('should return context statistics', () => {
       contextManager.addMessage({ id: '1', role: 'user', content: 'Hello', timestamp: Date.now() });
-      
+
       const stats = contextManager.getStats();
-      
+
       expect(stats.currentTokens).toBeGreaterThan(0);
       expect(stats.maxTokens).toBeGreaterThan(0);
       expect(stats.usagePercent).toBeGreaterThanOrEqual(0);
@@ -130,9 +137,9 @@ describe('ContextManager', () => {
     it('should update stats when messages are added', () => {
       const stats1 = contextManager.getStats();
       expect(stats1.messageCount).toBe(0);
-      
+
       contextManager.addMessage({ id: '1', role: 'user', content: 'Test', timestamp: Date.now() });
-      
+
       const stats2 = contextManager.getStats();
       expect(stats2.messageCount).toBe(1);
       expect(stats2.currentTokens).toBeGreaterThan(stats1.currentTokens);
@@ -147,7 +154,7 @@ describe('ContextManager', () => {
         content: 'Hello',
         timestamp: Date.now(),
       };
-      
+
       expect(contextManager.canFitMessage(msg)).toBe(true);
     });
 
@@ -159,7 +166,7 @@ describe('ContextManager', () => {
         modelContextLength: 100, // Very small context
       };
       const smallManager = createContextManager(smallCfg);
-      
+
       // Add messages to fill up context
       for (let i = 0; i < 5; i++) {
         smallManager.addMessage({
@@ -169,7 +176,7 @@ describe('ContextManager', () => {
           timestamp: Date.now(),
         });
       }
-      
+
       // Try to add another large message that would exceed the small context
       const largeMsg: Message = {
         id: '101',
@@ -177,7 +184,7 @@ describe('ContextManager', () => {
         content: 'A'.repeat(1000), // This would exceed 100 token context
         timestamp: Date.now(),
       };
-      
+
       expect(smallManager.canFitMessage(largeMsg)).toBe(false);
     });
   });
@@ -194,7 +201,7 @@ describe('ContextManager', () => {
   describe('compact', () => {
     it('should preserve minimum number of messages', () => {
       const keepCount = contextManager.getConfig().keepCount;
-      
+
       // Add messages
       for (let i = 0; i < keepCount + 10; i++) {
         contextManager.addMessage({
@@ -204,10 +211,10 @@ describe('ContextManager', () => {
           timestamp: Date.now(),
         });
       }
-      
+
       // Trigger compaction
       contextManager.compact();
-      
+
       // Should keep at least keepCount messages
       const messages = contextManager.getMessages();
       expect(messages.length).toBeGreaterThanOrEqual(keepCount);
@@ -216,9 +223,9 @@ describe('ContextManager', () => {
     it('should do nothing when compaction is not needed', () => {
       // Add only a few messages
       contextManager.addMessage({ id: '1', role: 'user', content: 'Test', timestamp: Date.now() });
-      
+
       const result = contextManager.compact();
-      
+
       expect(result.removedCount).toBe(0);
       expect(result.summary).toBeUndefined();
     });
@@ -230,10 +237,15 @@ describe('ContextManager', () => {
   describe('clear', () => {
     it('should remove all messages', () => {
       contextManager.addMessage({ id: '1', role: 'user', content: 'Test', timestamp: Date.now() });
-      contextManager.addMessage({ id: '2', role: 'assistant', content: 'Response', timestamp: Date.now() });
-      
+      contextManager.addMessage({
+        id: '2',
+        role: 'assistant',
+        content: 'Response',
+        timestamp: Date.now(),
+      });
+
       contextManager.clear();
-      
+
       expect(contextManager.getMessages().length).toBe(0);
       expect(contextManager.getStats().compactionCount).toBe(0);
     });
@@ -243,14 +255,14 @@ describe('ContextManager', () => {
     it('should enable and disable context management', () => {
       contextManager.setEnabled(false);
       expect(contextManager.getConfig().enabled).toBe(false);
-      
+
       contextManager.setEnabled(true);
       expect(contextManager.getConfig().enabled).toBe(true);
     });
 
     it('should not compact when disabled', () => {
       contextManager.setEnabled(false);
-      
+
       // Add many messages
       for (let i = 0; i < 100; i++) {
         contextManager.addMessage({
@@ -260,7 +272,7 @@ describe('ContextManager', () => {
           timestamp: Date.now(),
         });
       }
-      
+
       const result = contextManager.compact();
       expect(result.removedCount).toBe(0);
     });
@@ -272,7 +284,7 @@ describe('ContextManager', () => {
         compactThreshold: 0.5,
         keepCount: 5,
       });
-      
+
       const config = contextManager.getConfig();
       expect(config.compactThreshold).toBe(0.5);
       expect(config.keepCount).toBe(5);

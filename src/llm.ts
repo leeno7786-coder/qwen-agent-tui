@@ -1,7 +1,7 @@
-import OpenAI from "openai";
-import { createRequire } from "module";
-import type { Config } from "./types";
-import type { StreamChunk } from "./streaming";
+import OpenAI from 'openai';
+import { createRequire } from 'module';
+import type { Config } from './types';
+import type { StreamChunk } from './streaming';
 
 /**
  * Custom error that preserves the HTTP status code through retry re-throws.
@@ -13,7 +13,7 @@ export class ApiError extends Error {
   status?: number;
   constructor(message: string, status?: number) {
     super(message);
-    this.name = "ApiError";
+    this.name = 'ApiError';
     this.status = status;
   }
 }
@@ -21,12 +21,12 @@ export class ApiError extends Error {
 // --- Types used internally by llm.ts ---
 
 export interface ChatMessage {
-  role: "system" | "user" | "assistant" | "tool";
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
   tool_call_id?: string;
   tool_calls?: Array<{
     id: string;
-    type: "function";
+    type: 'function';
     function: { name: string; arguments: string };
   }>;
   reasoning_content?: string;
@@ -38,7 +38,7 @@ export interface ChatResponse {
     content: string;
     tool_calls?: Array<{
       id: string;
-      type: "function";
+      type: 'function';
       function: { name: string; arguments: string };
     }>;
     reasoning_content?: string;
@@ -48,18 +48,20 @@ export interface ChatResponse {
 }
 
 export function normalizeContent(v: unknown): string {
-  if (v === null || v === undefined) return "";
-  if (typeof v === "string") return v;
-  if (typeof v === "object" && v !== null) {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'object' && v !== null) {
     if (Array.isArray(v)) {
-      return v.map((part: unknown) => {
-        if (part === null || part === undefined) return "";
-        if (typeof part === "string") return part;
-        const p = part as Record<string, unknown>;
-        if (p.text) return String(p.text);
-        if (p.content) return String(p.content);
-        return String(part);
-      }).join("");
+      return v
+        .map((part: unknown) => {
+          if (part === null || part === undefined) return '';
+          if (typeof part === 'string') return part;
+          const p = part as Record<string, unknown>;
+          if (p.text) return String(p.text);
+          if (p.content) return String(p.content);
+          return String(part);
+        })
+        .join('');
     }
     const obj = v as Record<string, unknown>;
     if (obj.text) return String(obj.text);
@@ -72,7 +74,12 @@ export function normalizeContent(v: unknown): string {
 export function isLocalProvider(baseURL?: string): boolean {
   if (!baseURL) return false;
   const u = baseURL.toLowerCase();
-  return u.includes("localhost") || u.includes("127.0.0.1") || u.includes("lm-studio") || u.includes("ollama");
+  return (
+    u.includes('localhost') ||
+    u.includes('127.0.0.1') ||
+    u.includes('lm-studio') ||
+    u.includes('ollama')
+  );
 }
 
 /**
@@ -91,16 +98,16 @@ export function isSmallModel(
 
   // Explicit parameter counts in id (1b–8b, nano, etc.)
   if (/\b(0\.5|1\.5|1|2|3|4|7|8)[-.]?b\b/.test(lower)) return true;
-  if (lower.includes("4b") || lower.includes("nano")) return true;
+  if (lower.includes('4b') || lower.includes('nano')) return true;
 
   // Families commonly run locally at ≤8B
-  if (lower.includes("nemotron") && (lower.includes("4b") || lower.includes("nano"))) return true;
-  if (lower.includes("phi")) return true;
-  if (lower.includes("gemma") && /\b(1|2|4|7|8)[-.]?b\b/.test(lower)) return true;
-  if (lower.includes("qwen") && /\b(0\.5|1\.5|1|2|3|4|7|8)[-.]?b\b/.test(lower)) return true;
-  if (lower.includes("llama") && /\b(1|3|7|8)[-.]?b\b/.test(lower)) return true;
-  if (lower.includes("mistral") && lower.includes("7b")) return true;
-  if (lower.includes("deepseek") && (lower.includes("1.5b") || lower.includes("7b"))) return true;
+  if (lower.includes('nemotron') && (lower.includes('4b') || lower.includes('nano'))) return true;
+  if (lower.includes('phi')) return true;
+  if (lower.includes('gemma') && /\b(1|2|4|7|8)[-.]?b\b/.test(lower)) return true;
+  if (lower.includes('qwen') && /\b(0\.5|1\.5|1|2|3|4|7|8)[-.]?b\b/.test(lower)) return true;
+  if (lower.includes('llama') && /\b(1|3|7|8)[-.]?b\b/.test(lower)) return true;
+  if (lower.includes('mistral') && lower.includes('7b')) return true;
+  if (lower.includes('deepseek') && (lower.includes('1.5b') || lower.includes('7b'))) return true;
 
   return false;
 }
@@ -112,18 +119,22 @@ export function isSmallModel(
  */
 const _tkEncoders = new Map<string, unknown>();
 function getTKEncoder(modelId?: string) {
-  const cacheKey = modelId || "default";
+  const cacheKey = modelId || 'default';
   if (_tkEncoders.has(cacheKey)) return _tkEncoders.get(cacheKey);
   let encoder = null;
   try {
     const requireOptional = createRequire(import.meta.url);
-    const tk = requireOptional("tiktoken");
+    const tk = requireOptional('tiktoken');
     // Use encoding_for_model if a model name is provided, otherwise fall back to cl100k_base
     if (modelId) {
-      try { encoder = tk.encoding_for_model(modelId); } catch { /* model not supported */ }
+      try {
+        encoder = tk.encoding_for_model(modelId);
+      } catch {
+        /* model not supported */
+      }
     }
     if (!encoder) {
-      encoder = tk.get_encoding("cl100k_base");
+      encoder = tk.get_encoding('cl100k_base');
     }
   } catch {
     encoder = null;
@@ -139,7 +150,11 @@ function getTKEncoder(modelId?: string) {
 export function countTokens(text: string, modelId?: string): number {
   const enc = getTKEncoder(modelId);
   if (enc) {
-    try { return enc.encode(text).length; } catch { /* encoding failed */ }
+    try {
+      return enc.encode(text).length;
+    } catch {
+      /* encoding failed */
+    }
   }
   return Math.ceil(text.length / 4);
 }
@@ -151,16 +166,20 @@ export function countTokens(text: string, modelId?: string): number {
  */
 export function doesChatFitInContext(
   modelId: string,
-  messages: Array<{ role: string; content?: string; toolCalls?: Array<{ name: string; arguments: string }> }>
+  messages: Array<{
+    role: string;
+    content?: string;
+    toolCalls?: Array<{ name: string; arguments: string }>;
+  }>
 ): boolean {
   const contextLength = estimateModelContextSize(modelId);
-  
+
   // Count content tokens
   let contentTokens = 0;
   for (const m of messages) {
-    contentTokens += countTokens(`${m.role}: ${m.content || ""}`, modelId);
+    contentTokens += countTokens(`${m.role}: ${m.content || ''}`, modelId);
   }
-  
+
   // Account for OpenAI-style framing overhead:
   // - Per message: ~4 tokens for role delimiter and content framing
   // - Per tool call: ~8 tokens for function name + arguments structure + delimiter
@@ -168,7 +187,7 @@ export function doesChatFitInContext(
   // - Baseline conversation overhead: ~2 tokens for BOS/EOS delimiters
   const baselineOverhead = 2;
   let overhead = baselineOverhead;
-  
+
   for (const m of messages) {
     overhead += 4; // per-message framing
     if (m.toolCalls) {
@@ -178,20 +197,25 @@ export function doesChatFitInContext(
       overhead += 4; // tool response framing
     }
   }
-  
+
   const totalTokens = contentTokens + overhead;
   return totalTokens < contextLength;
 }
 
 export function estimateModelContextSize(modelId: string, _maxTokens?: number): number {
   const lowerModelId = modelId.toLowerCase();
-  
+
   // Check for explicit context size in model name
   if (lowerModelId.includes('1m') || lowerModelId.includes('1048576')) return 1048576;
   if (lowerModelId.includes('500k')) return 500000;
   if (lowerModelId.includes('400k')) return 400000;
   if (lowerModelId.includes('256k')) return 256000;
-  if (lowerModelId.includes('132k') || lowerModelId.includes('131k') || lowerModelId.includes('131072')) return 131072;
+  if (
+    lowerModelId.includes('132k') ||
+    lowerModelId.includes('131k') ||
+    lowerModelId.includes('131072')
+  )
+    return 131072;
   if (lowerModelId.includes('128k')) return 128000;
   if (lowerModelId.includes('100k')) return 100000;
   if (lowerModelId.includes('64k')) return 64000;
@@ -199,7 +223,7 @@ export function estimateModelContextSize(modelId: string, _maxTokens?: number): 
   if (lowerModelId.includes('16k')) return 16000;
   if (lowerModelId.includes('8k')) return 8000;
   if (lowerModelId.includes('4k')) return 4000;
-  
+
   // Qwen models — local ≤8B stacks often run at 128K+
   if (lowerModelId.includes('qwen')) {
     if (/\b(0\.5|1\.5|1|2|3|4|7|8)[-.]?b\b/.test(lowerModelId)) return 128000;
@@ -207,7 +231,7 @@ export function estimateModelContextSize(modelId: string, _maxTokens?: number): 
     if (lowerModelId.includes('32k')) return 32000;
     return 32000;
   }
-  
+
   // Nemotron — user typically runs at 400K (model + context fits the device)
   if (lowerModelId.includes('nemotron')) {
     if (lowerModelId.includes('4b')) {
@@ -215,7 +239,7 @@ export function estimateModelContextSize(modelId: string, _maxTokens?: number): 
     }
     return 256000;
   }
-  
+
   // Check for specific model families with known context sizes
   if (lowerModelId.includes('gpt-4')) {
     if (lowerModelId.includes('turbo') || lowerModelId.includes('preview')) {
@@ -223,47 +247,56 @@ export function estimateModelContextSize(modelId: string, _maxTokens?: number): 
     }
     return 8000; // Regular GPT-4 has 8k context
   }
-  
+
   if (lowerModelId.includes('gpt-3.5')) {
     if (lowerModelId.includes('16k')) return 16000;
     return 4000; // Regular GPT-3.5 has 4k context
   }
-  
+
   if (lowerModelId.includes('claude')) {
     if (lowerModelId.includes('200k')) return 200000;
     return 100000; // Default Claude context size
   }
-  
+
   if (lowerModelId.includes('llama') || lowerModelId.includes('codellama')) {
     if (lowerModelId.includes('32k')) return 32000;
     if (lowerModelId.includes('16k')) return 16000;
     return 4000; // Default Llama context size
   }
-  
-  if (lowerModelId.includes('mixtral') || lowerModelId.includes('mistral') || lowerModelId.includes('codestral')) {
-    if (lowerModelId.includes('small') || lowerModelId.includes('ministral') || lowerModelId.includes('mixtral')) return 32000;
+
+  if (
+    lowerModelId.includes('mixtral') ||
+    lowerModelId.includes('mistral') ||
+    lowerModelId.includes('codestral')
+  ) {
+    if (
+      lowerModelId.includes('small') ||
+      lowerModelId.includes('ministral') ||
+      lowerModelId.includes('mixtral')
+    )
+      return 32000;
     if (lowerModelId.includes('nemo')) return 128000;
     if (lowerModelId.includes('codestral')) return 256000;
     return 128000; // Mistral Large has 128k context
   }
-  
+
   if (lowerModelId.includes('gemini')) {
     if (lowerModelId.includes('128k')) return 128000;
     return 32000; // Default Gemini context size
   }
-  
+
   // DeepSeek models
   if (lowerModelId.includes('deepseek')) {
     if (lowerModelId.includes('v3') || lowerModelId.includes('coder')) return 128000;
     return 65536;
   }
-  
+
   // Phi models
   if (lowerModelId.includes('phi')) {
     if (lowerModelId.includes('4k')) return 4000;
     return 32000; // Phi-3 and newer support longer context
   }
-  
+
   // Gemma models (2b/8b often run at 128k locally)
   if (lowerModelId.includes('gemma')) {
     if (lowerModelId.includes('128k')) return 128000;
@@ -273,7 +306,7 @@ export function estimateModelContextSize(modelId: string, _maxTokens?: number): 
 
   // Generic 8b local stacks
   if (/\b8[-.]?b\b/.test(lowerModelId)) return 128000;
-  
+
   // Default fallback for unknown models
   return 32000;
 }
@@ -294,7 +327,7 @@ export function effectiveContextSize(
   const archSize = estimateModelContextSize(modelId, maxTokens);
   if (isLocalProvider(baseURL)) return archSize;
   if (maxTokens !== undefined) {
-    return Math.min(archSize, Math.max(maxTokens * 4,  8192));
+    return Math.min(archSize, Math.max(maxTokens * 4, 8192));
   }
   return archSize;
 }
@@ -325,21 +358,19 @@ export function getModelCompactionSettings(
     maxContextLength: options?.modelMaxContextLength,
   });
   const lowerModelId = modelId.toLowerCase();
-  
-  const summaryReservedPercent = 0.30;
-  
+
+  const summaryReservedPercent = 0.3;
+
   const small =
     options?.smallModelMode === true ||
     (options?.modelParamBillions !== undefined
       ? options.modelParamBillions <= 8
       : isSmallModel(modelId, maxTokens, options?.smallModelMode));
-  const compactThreshold = small
-    ? Math.floor(contextSize * 0.65)
-    : Math.floor(contextSize * 0.80);
-  
+  const compactThreshold = small ? Math.floor(contextSize * 0.65) : Math.floor(contextSize * 0.8);
+
   // Determine how many messages to keep based on model type
   let keepCount = 12;
-  
+
   if (small) {
     keepCount = 6;
   } else if (lowerModelId.includes('qwen') && lowerModelId.includes('4b')) {
@@ -347,7 +378,7 @@ export function getModelCompactionSettings(
   } else if (lowerModelId.includes('nemotron') && lowerModelId.includes('4b')) {
     keepCount = 30;
   }
-  
+
   return {
     contextSize,
     compactThreshold,
@@ -363,7 +394,7 @@ export function extractDeltaText(delta: unknown): {
   content: string;
   reasoningContent: string;
 } {
-  if (!delta) return { content: "", reasoningContent: "" };
+  if (!delta) return { content: '', reasoningContent: '' };
 
   const d = delta as Record<string, unknown>;
 
@@ -372,11 +403,10 @@ export function extractDeltaText(delta: unknown): {
     normalizeContent(d.text) ||
     normalizeContent(d.response) ||
     normalizeContent((d.message as Record<string, unknown>)?.content) ||
-    "";
+    '';
 
   const reasoningContent =
-    normalizeContent(d.reasoning_content) ||
-    normalizeContent(d.reasoningContent);
+    normalizeContent(d.reasoning_content) || normalizeContent(d.reasoningContent);
 
   return { content, reasoningContent };
 }
@@ -387,16 +417,16 @@ export function extractDeltaText(delta: unknown): {
  * @returns Configured OpenAI client.
  */
 export function createClient(cfg: Config) {
-  const isOpenRouter = cfg.baseURL.includes("openrouter.ai");
+  const isOpenRouter = cfg.baseURL.includes('openrouter.ai');
   return new OpenAI({
-    apiKey: cfg.apiKey || (isLocalProvider(cfg.baseURL) ? "lm-studio" : ""),
+    apiKey: cfg.apiKey || (isLocalProvider(cfg.baseURL) ? 'lm-studio' : ''),
     baseURL: cfg.baseURL,
     timeout: cfg.timeout ?? 60000,
     maxRetries: 0, // we handle retries ourselves for fine-grained control
     defaultHeaders: isOpenRouter
       ? {
-          "HTTP-Referer": "https://github.com/qwen-agent-tui",
-          "X-Title": "Qwen Agent TUI",
+          'HTTP-Referer': 'https://github.com/qwen-agent-tui',
+          'X-Title': 'Qwen Agent TUI',
         }
       : undefined,
   });
@@ -415,12 +445,12 @@ function extractApiMessage(err: unknown): string {
   if (errObj?.message) return errObj.message as string;
   // Mistral: { message } at root level
   const msg = e.message as string | undefined;
-  if (msg && !msg.startsWith("HTTP ")) return msg;
+  if (msg && !msg.startsWith('HTTP ')) return msg;
   // Provider-specific: error_object, error_detail
   const errObj2 = e.error_object as Record<string, unknown> | undefined;
   if (errObj2?.message) return errObj2.message as string;
   if (e.error_detail) return e.error_detail as string;
-  return "";
+  return '';
 }
 
 function errorMessage(
@@ -431,21 +461,25 @@ function errorMessage(
 ): string {
   if (status === 401) {
     const detail = extractApiMessage(originalErr);
-    return detail ? `Authentication failed (401): ${detail}` : `Authentication failed (401). Check your API key.`;
+    return detail
+      ? `Authentication failed (401): ${detail}`
+      : `Authentication failed (401). Check your API key.`;
   }
   if (status === 404) {
     const detail = extractApiMessage(originalErr);
-    return detail ? `Model not found (404): ${detail}` : `Model not found (404). Try a different model name.`;
+    return detail
+      ? `Model not found (404): ${detail}`
+      : `Model not found (404). Try a different model name.`;
   }
   if (status === 422) {
     const detail = extractApiMessage(originalErr);
-    return `Request rejected (422): ${detail || "Check max_tokens, model name, or message format."}`;
+    return `Request rejected (422): ${detail || 'Check max_tokens, model name, or message format.'}`;
   }
   if (status === 429) {
     const detail = extractApiMessage(originalErr);
     return attempt >= maxAttempts
-      ? `Rate limited by provider.${detail ? " " + detail : ""} Wait a minute, then retry with fewer sub-agents.`
-      : "Rate limited. Retrying...";
+      ? `Rate limited by provider.${detail ? ' ' + detail : ''} Wait a minute, then retry with fewer sub-agents.`
+      : 'Rate limited. Retrying...';
   }
   if (status === 503) {
     return `Provider temporarily unavailable (503). Retrying (attempt ${attempt}/${maxAttempts})...`;
@@ -463,22 +497,27 @@ function errorMessage(
  */
 /** Error keywords that indicate a non-retriable request (retrying will fail identically). */
 const NON_RETRIABLE_ERRORS = [
-  "context_length_exceeded",
-  "context too long",
-  "maximum context length",
-  "content_moderation",
-  "content policy",
-  "invalid_max_tokens",
-  "model_not_found",
-  "invalid_model",
-  "invalid_api_key",
-  "insufficient_quota",
+  'context_length_exceeded',
+  'context too long',
+  'maximum context length',
+  'content_moderation',
+  'content policy',
+  'invalid_max_tokens',
+  'model_not_found',
+  'invalid_model',
+  'invalid_api_key',
+  'insufficient_quota',
 ];
 
 function isRetriable(err?: unknown): boolean {
   if (!err) return true;
   const e = err as Record<string, unknown>;
-  const msg = ((e.message as string) || (e.code as string) || (e.type as string) || "").toLowerCase();
+  const msg = (
+    (e.message as string) ||
+    (e.code as string) ||
+    (e.type as string) ||
+    ''
+  ).toLowerCase();
   return !NON_RETRIABLE_ERRORS.some((kw) => msg.includes(kw));
 }
 
@@ -501,7 +540,12 @@ function shouldRetry(status?: number, attempt?: number, err?: unknown): boolean 
  */
 function getMaxOutputTokens(modelId: string, configuredMax?: number): number {
   const lower = modelId.toLowerCase();
-  if (lower.includes('mistral') || lower.includes('codestral') || lower.includes('ministral') || lower.includes('mixtral')) {
+  if (
+    lower.includes('mistral') ||
+    lower.includes('codestral') ||
+    lower.includes('ministral') ||
+    lower.includes('mixtral')
+  ) {
     return Math.min(configuredMax ?? 8192, 8192);
   }
   if (lower.includes('gemini')) {
@@ -539,22 +583,21 @@ export async function chat(
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const isQwen = cfg.model.toLowerCase().includes("qwen");
-      const enableThinking =
-        options?.enableThinking ?? (isQwen ? true : false);
+      const isQwen = cfg.model.toLowerCase().includes('qwen');
+      const enableThinking = options?.enableThinking ?? (isQwen ? true : false);
       const reqParams: Record<string, unknown> = {
         model: cfg.model,
         messages: messages.map((m) => {
-          if (m.role === "tool") {
+          if (m.role === 'tool') {
             return {
-              role: "tool" as const,
+              role: 'tool' as const,
               content: m.content,
-              tool_call_id: m.tool_call_id ?? "",
+              tool_call_id: m.tool_call_id ?? '',
             };
           }
-          if (m.role === "assistant" && m.tool_calls) {
+          if (m.role === 'assistant' && m.tool_calls) {
             return {
-              role: "assistant" as const,
+              role: 'assistant' as const,
               content: m.content,
               tool_calls: m.tool_calls,
             };
@@ -563,25 +606,28 @@ export async function chat(
         }),
         temperature: cfg.temperature ?? 0.2,
         max_tokens: getMaxOutputTokens(cfg.model, cfg.maxTokens),
-        tool_choice: tools?.length ? "auto" : undefined,
+        tool_choice: tools?.length ? 'auto' : undefined,
       };
       if (tools?.length) reqParams.tools = tools;
       if (enableThinking) reqParams.enable_thinking = true;
-      const completion = await client.chat.completions.create(
+      const completion = (await client.chat.completions.create(
         reqParams as unknown as Parameters<typeof client.chat.completions.create>[0],
         { signal }
-      ) as unknown as { choices: Array<Record<string, unknown>>; usage?: { prompt_tokens: number; completion_tokens: number } };
+      )) as unknown as {
+        choices: Array<Record<string, unknown>>;
+        usage?: { prompt_tokens: number; completion_tokens: number };
+      };
 
-  const completionObj = completion as unknown as {
-    choices: Array<Record<string, unknown>>;
-    usage?: { prompt_tokens: number; completion_tokens: number };
-  };
-  const choice = completionObj.choices[0] as Record<string, unknown> | undefined;
-  const msg = choice?.message as Record<string, unknown> | undefined;
+      const completionObj = completion as unknown as {
+        choices: Array<Record<string, unknown>>;
+        usage?: { prompt_tokens: number; completion_tokens: number };
+      };
+      const choice = completionObj.choices[0] as Record<string, unknown> | undefined;
+      const msg = choice?.message as Record<string, unknown> | undefined;
 
       return {
         message: {
-          role: (msg?.role as string) || "assistant",
+          role: (msg?.role as string) || 'assistant',
           content: normalizeContent(msg?.content),
           reasoning_content:
             (msg?.reasoning_content as string) ||
@@ -589,29 +635,35 @@ export async function chat(
             undefined,
           tool_calls: ((msg?.tool_calls as Array<Record<string, unknown>> | undefined) || [])
             .map((tc: Record<string, unknown>) => {
-               if (!(tc.function as Record<string, unknown> | undefined)?.name) {
-                 return null;
-               }
-               return {
-                 id: (tc.id as string) || `call_${Math.random().toString(36).slice(2, 10)}`,
-                 type: "function" as const,
-                 function: {
-                   name: (tc.function as Record<string, unknown>).name as string,
-                   arguments: ((tc.function as Record<string, unknown>).arguments as string) || "{}",
-                 },
-               };
-             }).filter((x): x is NonNullable<typeof x> => x !== null),
-           },
-           usage: completionObj.usage
-             ? {
-               input_tokens: completionObj.usage.prompt_tokens,
-               output_tokens: completionObj.usage.completion_tokens,
+              if (!(tc.function as Record<string, unknown> | undefined)?.name) {
+                return null;
               }
-              : undefined,
-             finishReason: choice?.finish_reason as string | undefined,
-           };
-     } catch (err: unknown) {
-      const e = err as { name: string; status?: number; status_code?: number; response?: { status?: number } };
+              return {
+                id: (tc.id as string) || `call_${Math.random().toString(36).slice(2, 10)}`,
+                type: 'function' as const,
+                function: {
+                  name: (tc.function as Record<string, unknown>).name as string,
+                  arguments: ((tc.function as Record<string, unknown>).arguments as string) || '{}',
+                },
+              };
+            })
+            .filter((x): x is NonNullable<typeof x> => x !== null),
+        },
+        usage: completionObj.usage
+          ? {
+              input_tokens: completionObj.usage.prompt_tokens,
+              output_tokens: completionObj.usage.completion_tokens,
+            }
+          : undefined,
+        finishReason: choice?.finish_reason as string | undefined,
+      };
+    } catch (err: unknown) {
+      const e = err as {
+        name: string;
+        status?: number;
+        status_code?: number;
+        response?: { status?: number };
+      };
       if (e.name === 'AbortError' || signal?.aborted) {
         throw err;
       }
@@ -634,7 +686,7 @@ export async function chat(
     }
   }
 
-  throw lastError || new ApiError("Unknown error");
+  throw lastError || new ApiError('Unknown error');
 }
 
 /**
@@ -654,22 +706,21 @@ export async function* streamChat(
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const isQwen = cfg.model.toLowerCase().includes("qwen");
-      const enableThinking =
-        options?.enableThinking ?? (isQwen ? true : false);
+      const isQwen = cfg.model.toLowerCase().includes('qwen');
+      const enableThinking = options?.enableThinking ?? (isQwen ? true : false);
       const streamReqParams: Record<string, unknown> = {
         model: cfg.model,
         messages: messages.map((m) => {
-          if (m.role === "tool") {
+          if (m.role === 'tool') {
             return {
-              role: "tool" as const,
+              role: 'tool' as const,
               content: m.content,
-              tool_call_id: m.tool_call_id ?? "",
+              tool_call_id: m.tool_call_id ?? '',
             };
           }
-          if (m.role === "assistant" && m.tool_calls) {
+          if (m.role === 'assistant' && m.tool_calls) {
             return {
-              role: "assistant" as const,
+              role: 'assistant' as const,
               content: m.content,
               tool_calls: m.tool_calls,
             };
@@ -678,15 +729,22 @@ export async function* streamChat(
         }),
         temperature: cfg.temperature ?? 0.2,
         max_tokens: getMaxOutputTokens(cfg.model, cfg.maxTokens),
-        tool_choice: tools?.length ? "auto" : undefined,
+        tool_choice: tools?.length ? 'auto' : undefined,
         stream: true,
       };
       if (tools?.length) streamReqParams.tools = tools;
       if (enableThinking) streamReqParams.enable_thinking = true;
-      const stream = await client.chat.completions.create(
+      const stream = (await client.chat.completions.create(
         streamReqParams as unknown as Parameters<typeof client.chat.completions.create>[0],
         { signal }
-      ) as AsyncIterable<{ choices: Array<{ delta: Record<string, unknown>; finish_reason?: string; index: number; reasoning_content?: string }> }>;
+      )) as AsyncIterable<{
+        choices: Array<{
+          delta: Record<string, unknown>;
+          finish_reason?: string;
+          index: number;
+          reasoning_content?: string;
+        }>;
+      }>;
 
       const toolCallBuffers = new Map<number, { id: string; name: string; args: string }>();
       let finishReason: string | undefined;
@@ -713,7 +771,7 @@ export async function* streamChat(
 
         // Debug: log first few chunks to diagnose empty responses
         if (process.env.QWEN_DEBUG_LLM) {
-          console.error("[QWEN_DEBUG] llm chunk:", JSON.stringify(delta));
+          console.error('[QWEN_DEBUG] llm chunk:', JSON.stringify(delta));
         }
 
         if (!delta) continue;
@@ -734,7 +792,11 @@ export async function* streamChat(
             const tcFn = tcRaw.function as Record<string, unknown> | undefined;
             if (!toolCallBuffers.has(idx)) {
               const fallbackId = tcId || `call_${idx}_${Math.random().toString(36).slice(2, 10)}`;
-              toolCallBuffers.set(idx, { id: fallbackId, name: (tcFn?.name as string) || "", args: "" });
+              toolCallBuffers.set(idx, {
+                id: fallbackId,
+                name: (tcFn?.name as string) || '',
+                args: '',
+              });
             }
             const buf = toolCallBuffers.get(idx)!;
             if (tcId && !buf.id) {
@@ -748,9 +810,10 @@ export async function* streamChat(
         // Some local servers use different field names for content
         const { content, reasoningContent: drc } = extractDeltaText(delta);
         // Also check choice-level reasoning_content (some providers put it here instead of delta)
-        const reasoningContent = drc ||
-          normalizeContent((choiceAny.reasoning_content as string) ?? "") ||
-          normalizeContent((choiceAny.reasoning as string) ?? "");
+        const reasoningContent =
+          drc ||
+          normalizeContent((choiceAny.reasoning_content as string) ?? '') ||
+          normalizeContent((choiceAny.reasoning as string) ?? '');
 
         // Build complete tool calls from buffers
         const completeToolCalls: Array<{ id: string; name: string; arguments: string }> = [];
@@ -785,17 +848,22 @@ export async function* streamChat(
         }
         if (completeToolCalls.length > 0) {
           yield {
-            content: "",
-            reasoningContent: "",
+            content: '',
+            reasoningContent: '',
             toolCalls: completeToolCalls,
-            finishReason: finishReason || "tool_calls",
+            finishReason: finishReason || 'tool_calls',
           };
         }
       }
 
       return { usage };
     } catch (err: unknown) {
-      const e = err as { name: string; status?: number; status_code?: number; response?: { status?: number } };
+      const e = err as {
+        name: string;
+        status?: number;
+        status_code?: number;
+        response?: { status?: number };
+      };
       if (e.name === 'AbortError' || signal?.aborted) {
         throw err;
       }
@@ -818,5 +886,5 @@ export async function* streamChat(
     }
   }
 
-  throw lastError || new ApiError("Unknown error");
+  throw lastError || new ApiError('Unknown error');
 }

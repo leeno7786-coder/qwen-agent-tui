@@ -11,19 +11,22 @@
  * tool result it can synthesise.
  */
 
-import { createClient, streamChat } from "./llm";
-import type { ChatMessage } from "./llm";
-import { tools, toOpenAI, findTool, type Tool, type ToolExecutionHooks, type SubAgentProgressEvent } from "./tools";
-import { createSecurityManager, type SecurityManager } from "./security";
-import { createToolCacheManager, type ToolCacheManager } from "./tools/cache";
-import { fetchLMStudioModels } from "./model-runtime";
-import { access, readdir } from "fs/promises";
-import { resolve, join, normalize } from "path";
-import type {
-  Config,
-  SubAgentEndpoint,
-  SubAgentPoolConfig,
-} from "./types";
+import { createClient, streamChat } from './llm';
+import type { ChatMessage } from './llm';
+import {
+  tools,
+  toOpenAI,
+  findTool,
+  type Tool,
+  type ToolExecutionHooks,
+  type SubAgentProgressEvent,
+} from './tools';
+import { createSecurityManager, type SecurityManager } from './security';
+import { createToolCacheManager, type ToolCacheManager } from './tools/cache';
+import { fetchLMStudioModels } from './model-runtime';
+import { access, readdir } from 'fs/promises';
+import { resolve, join, normalize } from 'path';
+import type { Config, SubAgentEndpoint, SubAgentPoolConfig } from './types';
 
 /** Sub-agent worker context. */
 interface WorkerContext {
@@ -83,10 +86,25 @@ export async function buildSubAgentContext(cfg: Config): Promise<string> {
   const ws = cfg.workspace || process.cwd();
   const lines: string[] = [];
   lines.push(`WORKSPACE ROOT (absolute): ${ws}`);
-  lines.push(`Use paths RELATIVE to the workspace root. Example: "src/agent.ts" not "G:\\project\\src\\agent.ts".`);
-  lines.push(`DO NOT call list_dir, git_status, or stat_path — the file tree is provided below. Go straight to batch_read_files.`);
+  lines.push(
+    `Use paths RELATIVE to the workspace root. Example: "src/agent.ts" not "G:\\project\\src\\agent.ts".`
+  );
+  lines.push(
+    `DO NOT call list_dir, git_status, or stat_path — the file tree is provided below. Go straight to batch_read_files.`
+  );
 
-  const SKIP = new Set(["node_modules", "dist", ".git", "__pycache__", ".next", ".cache", "bun.lock", "skills", "prerelease", "dist-opentui"]);
+  const SKIP = new Set([
+    'node_modules',
+    'dist',
+    '.git',
+    '__pycache__',
+    '.next',
+    '.cache',
+    'bun.lock',
+    'skills',
+    'prerelease',
+    'dist-opentui',
+  ]);
   const files: string[] = [];
   const MAX_FILES = 150;
 
@@ -94,7 +112,7 @@ export async function buildSubAgentContext(cfg: Config): Promise<string> {
     if (depth > 3 || files.length >= MAX_FILES) return;
     try {
       const entries = (await readdir(dir, { withFileTypes: true }))
-        .filter((e) => !SKIP.has(e.name) && !e.name.startsWith("."))
+        .filter((e) => !SKIP.has(e.name) && !e.name.startsWith('.'))
         .sort((a, b) => {
           if (a.isDirectory() && !b.isDirectory()) return -1;
           if (!a.isDirectory() && b.isDirectory()) return 1;
@@ -110,39 +128,44 @@ export async function buildSubAgentContext(cfg: Config): Promise<string> {
           files.push(rel);
         }
       }
-    } catch { /* permission denied or similar */ }
+    } catch {
+      /* permission denied or similar */
+    }
   }
 
   try {
-    await walk(ws, "", 0);
-  } catch { /* ignore */ }
+    await walk(ws, '', 0);
+  } catch {
+    /* ignore */
+  }
 
   if (files.length > 0) {
     lines.push(`\nFILE TREE (${files.length} files):`);
-    lines.push(files.join("\n"));
+    lines.push(files.join('\n'));
   } else {
     lines.push(`\n(could not enumerate files — use list_dir if needed)`);
   }
 
-  return lines.join("\n");
+  return lines.join('\n');
 }
 
 /** Prepend shared context to a sub-agent task so it isn't dispatched blind. */
-export async function enrichTaskWithContext(task: string, cfg: Config, focusPath?: string): Promise<string> {
+export async function enrichTaskWithContext(
+  task: string,
+  cfg: Config,
+  focusPath?: string
+): Promise<string> {
   const ctx = await buildSubAgentContext(cfg);
-  const focus = focusPath ? `\n\nFOCUS PATH (prefer this area): ${focusPath}` : "";
+  const focus = focusPath ? `\n\nFOCUS PATH (prefer this area): ${focusPath}` : '';
   return `=== SHARED CONTEXT ===\n${ctx}\n=== END CONTEXT ===\n\n${task}${focus}`;
 }
 
-function buildWorkerContext(
-  endpoint: SubAgentEndpoint,
-  base: Config
-): WorkerContext {
+function buildWorkerContext(endpoint: SubAgentEndpoint, base: Config): WorkerContext {
   const cfg: Config = {
     ...base,
     baseURL: endpoint.baseURL,
     model: endpoint.model,
-    apiKey: endpoint.apiKey ?? "",
+    apiKey: endpoint.apiKey ?? '',
     maxTokens: base.subagents?.maxTokens ?? base.maxTokens ?? 1500,
     temperature: base.subagents?.temperature ?? base.temperature ?? 0.3,
     // Give sub-agents generous headroom — big codebases need many reads.
@@ -172,7 +195,7 @@ function buildWorkerContext(
 }
 
 function parseArgs(tc: { name: string; arguments: string }): Record<string, unknown> {
-  if (typeof tc.arguments !== "string") return tc.arguments;
+  if (typeof tc.arguments !== 'string') return tc.arguments;
   try {
     return JSON.parse(tc.arguments);
   } catch {
@@ -194,7 +217,7 @@ function parseArgs(tc: { name: string; arguments: string }): Record<string, unkn
  * lines)"). Kept short so the panel stays readable.
  */
 function summarizeToolResult(tool: string | undefined, raw: string): string {
-  if (!tool) return "";
+  if (!tool) return '';
   let parsed: Record<string, unknown> | undefined = undefined;
   try {
     parsed = JSON.parse(raw);
@@ -224,16 +247,19 @@ function summarizeToolResult(tool: string | undefined, raw: string): string {
   // read_file: report file + line count
   if (/read_file|batch_read|read/i.test(tool)) {
     const _r = parsed?.result as Record<string, unknown> | undefined;
-    const path = parsed?.path ?? parsed?.file ?? _r?.path ?? "";
+    const path = parsed?.path ?? parsed?.file ?? _r?.path ?? '';
     const lines = parsed?.line_count ?? parsed?.lines ?? parsed?.lineCount ?? _r?.line_count;
-    const tail = lines != null ? ` (${lines} lines)` : "";
-    const p = typeof path === "string" && path ? path.split(/[\\/]/).pop() : "";
+    const tail = lines != null ? ` (${lines} lines)` : '';
+    const p = typeof path === 'string' && path ? path.split(/[\\/]/).pop() : '';
     return p ? `${tool}: Read from ${p}${tail}` : `${tool}: read ${raw.length} bytes`;
   }
 
   // list_dir
   if (/list_dir|map_project|tree/i.test(tool)) {
-    const n = (parsed?.entries as unknown[] | undefined)?.length ?? parsed?.count ?? (parsed?.files as unknown[] | undefined)?.length;
+    const n =
+      (parsed?.entries as unknown[] | undefined)?.length ??
+      parsed?.count ??
+      (parsed?.files as unknown[] | undefined)?.length;
     return n != null ? `${tool}: listed ${n} entries` : `${tool}: ok`;
   }
 
@@ -244,7 +270,7 @@ function summarizeToolResult(tool: string | undefined, raw: string): string {
 
   // Fallback: file + byte size
   const fp = parsed?.path ?? parsed?.file;
-  if (typeof fp === "string") {
+  if (typeof fp === 'string') {
     return `${tool}: ${fp.split(/[\\/]/).pop()}`;
   }
   return `${tool}: ok (${raw.length} bytes)`;
@@ -252,15 +278,15 @@ function summarizeToolResult(tool: string | undefined, raw: string): string {
 
 /** Read-only exploration tools exposed to sub-agents. */
 const SUBAGENT_TOOLS = new Set([
-  "read_file",
-  "batch_read_files",
-  "list_dir",
-  "map_project_tree",
-  "find_files",
-  "stat_path",
-  "grep_search",
-  "search_and_view",
-  "search_files",
+  'read_file',
+  'batch_read_files',
+  'list_dir',
+  'map_project_tree',
+  'find_files',
+  'stat_path',
+  'grep_search',
+  'search_and_view',
+  'search_files',
 ]);
 
 /**
@@ -270,20 +296,27 @@ const SUBAGENT_TOOLS = new Set([
  * exist but a normalized variant does, return the working one. Keeps the small
  * agents from spamming "File not found" on every read.
  */
-async function normalizeSubAgentPath(p: string | undefined, ws: string): Promise<string | undefined> {
-  if (typeof p !== "string" || !p) return p;
-  const original = resolve(ws, normalize(p).replace(/\\/g, "/"));
+async function normalizeSubAgentPath(
+  p: string | undefined,
+  ws: string
+): Promise<string | undefined> {
+  if (typeof p !== 'string' || !p) return p;
+  const original = resolve(ws, normalize(p).replace(/\\/g, '/'));
   try {
     await access(original);
     return p;
-  } catch { /* original path not accessible */ }
-  const segs = normalize(p).replace(/\\/g, "/").split("/").filter(Boolean);
+  } catch {
+    /* original path not accessible */
+  }
+  const segs = normalize(p).replace(/\\/g, '/').split('/').filter(Boolean);
   for (let drop = 1; drop <= Math.min(2, segs.length - 1); drop++) {
-    const cand = resolve(ws, segs.slice(drop).join("/"));
+    const cand = resolve(ws, segs.slice(drop).join('/'));
     try {
       await access(cand);
-      return segs.slice(drop).join("/");
-    } catch { /* candidate path not accessible */ }
+      return segs.slice(drop).join('/');
+    } catch {
+      /* candidate path not accessible */
+    }
   }
   return p;
 }
@@ -303,7 +336,7 @@ async function runWorkerTool(
   const tool: Tool | undefined = findTool(tc.name);
   const args = parseArgs(tc);
   // Fix 2B path guesses before the real tool runs.
-  if (typeof args?.path === "string") {
+  if (typeof args?.path === 'string') {
     args.path = (await normalizeSubAgentPath(args.path, wctx.cfg.workspace)) ?? args.path;
   }
   if (Array.isArray(args?.paths)) {
@@ -333,17 +366,20 @@ async function runWorkerTool(
 
     const sanitized = wctx.security.sanitizeOutput(out);
     // Sub-agent file read truncation: 256k context models can ingest full files (up to ~80k chars / ~2000 lines)
-    if ((tc.name === "read_file" || tc.name === "batch_read_files") && sanitized.length > 80000) {
-      const lines = sanitized.split("\n");
+    if ((tc.name === 'read_file' || tc.name === 'batch_read_files') && sanitized.length > 80000) {
+      const lines = sanitized.split('\n');
       if (lines.length > 2000) {
-        const head = lines.slice(0, 1500).join("\n");
-        const tail = lines.slice(-200).join("\n");
+        const head = lines.slice(0, 1500).join('\n');
+        const tail = lines.slice(-200).join('\n');
         return `${head}\n\n... [${lines.length - 1700} middle lines omitted for sub-agent context budget] ...\n\n${tail}`;
       }
     }
     return sanitized;
   } catch (e: unknown) {
-    return JSON.stringify({ ok: false, error: (e as { message?: string } | undefined)?.message || String(e) });
+    return JSON.stringify({
+      ok: false,
+      error: (e as { message?: string } | undefined)?.message || String(e),
+    });
   }
 }
 
@@ -360,8 +396,8 @@ async function runSingleSubAgent(
   const emit = (e: SubAgentProgressEvent) => hooks?.onSubAgentProgress?.(e);
   const start = performance.now();
   const messages: ChatMessage[] = [
-    { role: "system", content: SUBAGENT_SYSTEM_PROMPT },
-    { role: "user", content: task },
+    { role: 'system', content: SUBAGENT_SYSTEM_PROMPT },
+    { role: 'user', content: task },
   ];
   // Sub-agents are small (2B) models that botch shell commands. Give them a
   // curated READ/EXPLORE tool set only — no execute_command, no writes, no git
@@ -377,12 +413,12 @@ async function runSingleSubAgent(
   // Track per-tool call counts to block wasteful repeated discovery calls
   const toolCallCounts = new Map<string, number>();
   // Discovery-only tools that should NOT be called more than once
-  const DISCOVERY_TOOLS = new Set(["list_dir", "map_project_tree", "stat_path", "find_files"]);
+  const DISCOVERY_TOOLS = new Set(['list_dir', 'map_project_tree', 'stat_path', 'find_files']);
   // Hard budget: after this many total tool calls, force the model to report
   const TOOL_BUDGET = 18;
 
   emit({
-    type: "subagent_start",
+    type: 'subagent_start',
     agent: wctx.endpoint.name,
     model: wctx.cfg.model,
     task,
@@ -393,11 +429,11 @@ async function runSingleSubAgent(
   for (let i = 0; i < maxIter; i++) {
     if (signal?.aborted) {
       emit({
-        type: "subagent_done",
+        type: 'subagent_done',
         agent: wctx.endpoint.name,
         model: wctx.cfg.model,
         ok: false,
-        output: "",
+        output: '',
         toolCalls: toolCallCount,
       });
       return {
@@ -405,9 +441,9 @@ async function runSingleSubAgent(
         model: wctx.cfg.model,
         baseURL: wctx.cfg.baseURL,
         ok: false,
-        output: "",
+        output: '',
         durationMs: Math.round(performance.now() - start),
-        error: "aborted",
+        error: 'aborted',
         toolCalls: toolCallCount,
       };
     }
@@ -415,34 +451,29 @@ async function runSingleSubAgent(
     // Wrap-up nudges — remind the model to report before it runs out of turns.
     if (i === 14 && toolCallCount > 0) {
       messages.push({
-        role: "user",
+        role: 'user',
         content: `You are on turn ${i + 1} of ${maxIter}. Start writing your final report now. Use batch_read_files if you need to read more files, then summarize.`,
       });
     }
     if (i >= maxIter - 4 && toolCallCount > 0) {
       messages.push({
-        role: "user",
+        role: 'user',
         content: `TURN ${i + 1}/${maxIter}: You are running low on turns. Finish reading and output your full report NOW. Do NOT start new searches.`,
       });
     }
 
-    let accumulatedContent = "";
+    let accumulatedContent = '';
     let streamedToolCalls: Array<{ id: string; name: string; arguments: string }> = [];
 
-    const stream = streamChat(
-      wctx.client,
-      wctx.cfg,
-      messages,
-      toolDefs,
-      signal,
-      { enableThinking: false }
-    );
+    const stream = streamChat(wctx.client, wctx.cfg, messages, toolDefs, signal, {
+      enableThinking: false,
+    });
 
     for await (const chunk of stream) {
       if (chunk.content) {
         accumulatedContent += chunk.content;
         emit({
-          type: "subagent_chunk",
+          type: 'subagent_chunk',
           agent: wctx.endpoint.name,
           model: wctx.cfg.model,
           text: chunk.content,
@@ -450,7 +481,7 @@ async function runSingleSubAgent(
       }
       if (chunk.reasoningContent) {
         emit({
-          type: "subagent_chunk",
+          type: 'subagent_chunk',
           agent: wctx.endpoint.name,
           model: wctx.cfg.model,
           reasoning: chunk.reasoningContent,
@@ -462,178 +493,181 @@ async function runSingleSubAgent(
     }
 
     const msg = {
-      role: "assistant" as const,
+      role: 'assistant' as const,
       content: accumulatedContent,
       tool_calls: streamedToolCalls.map((tc) => ({
         id: tc.id,
-        type: "function" as const,
+        type: 'function' as const,
         function: { name: tc.name, arguments: tc.arguments },
       })),
     };
     if (msg.tool_calls && msg.tool_calls.length > 0) {
       // Record assistant message with tool calls, then run them.
       messages.push({
-        role: "assistant",
-        content: msg.content || "",
+        role: 'assistant',
+        content: msg.content || '',
         tool_calls: msg.tool_calls.map((tc) => ({
           id: tc.id,
-          type: "function" as const,
+          type: 'function' as const,
           function: { name: tc.function.name, arguments: tc.function.arguments },
         })),
       });
-      const results = await Promise.all(msg.tool_calls.map(async (tc, index) => {
-        const currentToolCallCount = toolCallCount + index + 1;
-        const parsedArgs = parseArgs(tc.function);
-        const sig = `${tc.function.name}:${JSON.stringify(parsedArgs)}`;
-        const filePath = parsedArgs?.path || parsedArgs?.file;
+      const results = await Promise.all(
+        msg.tool_calls.map(async (tc, index) => {
+          const currentToolCallCount = toolCallCount + index + 1;
+          const parsedArgs = parseArgs(tc.function);
+          const sig = `${tc.function.name}:${JSON.stringify(parsedArgs)}`;
+          const filePath = parsedArgs?.path || parsedArgs?.file;
 
-        // --- GUARD 1: Hard tool budget ---
-        if (toolCallCount >= TOOL_BUDGET) {
-          const budgetResult = JSON.stringify({
-            ok: false,
-            error: `Tool budget exhausted (${TOOL_BUDGET} calls). You MUST output your final report now using only the information you have already gathered.`,
-          });
-          emit({
-            type: "subagent_tool_result",
-            agent: wctx.endpoint.name,
-            model: wctx.cfg.model,
-            tool: tc.function.name,
-            toolArgs: tc.function.arguments,
-            toolResult: `budget exhausted`,
-            toolResultRaw: budgetResult,
-            toolCalls: currentToolCallCount,
-          });
-          return { role: "tool" as const, content: budgetResult, tool_call_id: tc.id };
-        }
+          // --- GUARD 1: Hard tool budget ---
+          if (toolCallCount >= TOOL_BUDGET) {
+            const budgetResult = JSON.stringify({
+              ok: false,
+              error: `Tool budget exhausted (${TOOL_BUDGET} calls). You MUST output your final report now using only the information you have already gathered.`,
+            });
+            emit({
+              type: 'subagent_tool_result',
+              agent: wctx.endpoint.name,
+              model: wctx.cfg.model,
+              tool: tc.function.name,
+              toolArgs: tc.function.arguments,
+              toolResult: `budget exhausted`,
+              toolResultRaw: budgetResult,
+              toolCalls: currentToolCallCount,
+            });
+            return { role: 'tool' as const, content: budgetResult, tool_call_id: tc.id };
+          }
 
-        // --- GUARD 2: Exact duplicate signature ---
-        if (seenSignatures.has(sig)) {
-          duplicateStrikes++;
-          const dupResult = JSON.stringify({
-            ok: false,
-            error: `Duplicate call blocked. You already ran ${tc.function.name} with these exact inputs. Output your final report now.`,
-          });
-          emit({
-            type: "subagent_tool_result",
-            agent: wctx.endpoint.name,
-            model: wctx.cfg.model,
-            tool: tc.function.name,
-            toolArgs: tc.function.arguments,
-            toolResult: `${tc.function.name}: duplicate blocked`,
-            toolResultRaw: dupResult,
-            toolCalls: currentToolCallCount,
-          });
-          return { role: "tool" as const, content: dupResult, tool_call_id: tc.id };
-        }
-        seenSignatures.add(sig);
-
-        // --- GUARD 3: Discovery tools called more than once ---
-        if (DISCOVERY_TOOLS.has(tc.function.name)) {
-          const prev = toolCallCounts.get(tc.function.name) ?? 0;
-          if (prev >= 1) {
+          // --- GUARD 2: Exact duplicate signature ---
+          if (seenSignatures.has(sig)) {
             duplicateStrikes++;
             const dupResult = JSON.stringify({
               ok: false,
-              error: `You already called ${tc.function.name} ${prev} time(s). You have the results. Do NOT call discovery tools again. Use batch_read_files to read the files you need, then write your report.`,
+              error: `Duplicate call blocked. You already ran ${tc.function.name} with these exact inputs. Output your final report now.`,
             });
             emit({
-              type: "subagent_tool_result",
+              type: 'subagent_tool_result',
               agent: wctx.endpoint.name,
               model: wctx.cfg.model,
               tool: tc.function.name,
               toolArgs: tc.function.arguments,
-              toolResult: `${tc.function.name}: already called`,
+              toolResult: `${tc.function.name}: duplicate blocked`,
               toolResultRaw: dupResult,
               toolCalls: currentToolCallCount,
             });
-            return { role: "tool" as const, content: dupResult, tool_call_id: tc.id };
+            return { role: 'tool' as const, content: dupResult, tool_call_id: tc.id };
           }
-          toolCallCounts.set(tc.function.name, prev + 1);
-        }
+          seenSignatures.add(sig);
 
-        // --- GUARD 4: Re-reading the exact same file ---
-        if (tc.function.name === "read_file" && typeof filePath === "string") {
-          if (readPaths.has(filePath)) {
-            duplicateStrikes++;
-            const reReadResult = JSON.stringify({
+          // --- GUARD 3: Discovery tools called more than once ---
+          if (DISCOVERY_TOOLS.has(tc.function.name)) {
+            const prev = toolCallCounts.get(tc.function.name) ?? 0;
+            if (prev >= 1) {
+              duplicateStrikes++;
+              const dupResult = JSON.stringify({
+                ok: false,
+                error: `You already called ${tc.function.name} ${prev} time(s). You have the results. Do NOT call discovery tools again. Use batch_read_files to read the files you need, then write your report.`,
+              });
+              emit({
+                type: 'subagent_tool_result',
+                agent: wctx.endpoint.name,
+                model: wctx.cfg.model,
+                tool: tc.function.name,
+                toolArgs: tc.function.arguments,
+                toolResult: `${tc.function.name}: already called`,
+                toolResultRaw: dupResult,
+                toolCalls: currentToolCallCount,
+              });
+              return { role: 'tool' as const, content: dupResult, tool_call_id: tc.id };
+            }
+            toolCallCounts.set(tc.function.name, prev + 1);
+          }
+
+          // --- GUARD 4: Re-reading the exact same file ---
+          if (tc.function.name === 'read_file' && typeof filePath === 'string') {
+            if (readPaths.has(filePath)) {
+              duplicateStrikes++;
+              const reReadResult = JSON.stringify({
+                ok: false,
+                error: `File '${filePath}' was already read. Refer to its contents in conversation history and output your final report.`,
+              });
+              emit({
+                type: 'subagent_tool_result',
+                agent: wctx.endpoint.name,
+                model: wctx.cfg.model,
+                tool: tc.function.name,
+                toolArgs: tc.function.arguments,
+                toolResult: `${tc.function.name}: re-read blocked`,
+                toolResultRaw: reReadResult,
+                toolCalls: currentToolCallCount,
+              });
+              return { role: 'tool' as const, content: reReadResult, tool_call_id: tc.id };
+            }
+            readPaths.add(filePath);
+          }
+
+          // --- GUARD 5: More than 3 duplicate strikes = stuck ---
+          if (duplicateStrikes >= 3) {
+            const stuckResult = JSON.stringify({
               ok: false,
-              error: `File '${filePath}' was already read. Refer to its contents in conversation history and output your final report.`,
+              error:
+                'You are stuck repeating calls. Stop all tool calls and output your final report NOW.',
             });
             emit({
-              type: "subagent_tool_result",
+              type: 'subagent_tool_result',
               agent: wctx.endpoint.name,
               model: wctx.cfg.model,
               tool: tc.function.name,
               toolArgs: tc.function.arguments,
-              toolResult: `${tc.function.name}: re-read blocked`,
-              toolResultRaw: reReadResult,
+              toolResult: `stuck — forced report`,
+              toolResultRaw: stuckResult,
               toolCalls: currentToolCallCount,
             });
-            return { role: "tool" as const, content: reReadResult, tool_call_id: tc.id };
+            return { role: 'tool' as const, content: stuckResult, tool_call_id: tc.id };
           }
-          readPaths.add(filePath);
-        }
 
-        // --- GUARD 5: More than 3 duplicate strikes = stuck ---
-        if (duplicateStrikes >= 3) {
-          const stuckResult = JSON.stringify({
-            ok: false,
-            error: "You are stuck repeating calls. Stop all tool calls and output your final report NOW.",
-          });
           emit({
-            type: "subagent_tool_result",
+            type: 'subagent_tool',
             agent: wctx.endpoint.name,
             model: wctx.cfg.model,
             tool: tc.function.name,
             toolArgs: tc.function.arguments,
-            toolResult: `stuck — forced report`,
-            toolResultRaw: stuckResult,
             toolCalls: currentToolCallCount,
           });
-          return { role: "tool" as const, content: stuckResult, tool_call_id: tc.id };
-        }
+          const out = await runWorkerTool(wctx, {
+            name: tc.function.name,
+            arguments: tc.function.arguments,
+            id: tc.id,
+          });
+          // Emit a result summary so the TUI can show e.g. "grep: Found 100 matches".
+          emit({
+            type: 'subagent_tool_result',
+            agent: wctx.endpoint.name,
+            model: wctx.cfg.model,
+            tool: tc.function.name,
+            toolArgs: tc.function.arguments,
+            toolResult: summarizeToolResult(tc.function.name, out),
+            toolResultRaw: out,
+            toolCalls: currentToolCallCount,
+          });
+          return {
+            role: 'tool' as const,
+            content: out,
+            tool_call_id: tc.id,
+          };
+        })
+      );
 
-        emit({
-          type: "subagent_tool",
-          agent: wctx.endpoint.name,
-          model: wctx.cfg.model,
-          tool: tc.function.name,
-          toolArgs: tc.function.arguments,
-          toolCalls: currentToolCallCount,
-        });
-        const out = await runWorkerTool(wctx, {
-          name: tc.function.name,
-          arguments: tc.function.arguments,
-          id: tc.id,
-        });
-        // Emit a result summary so the TUI can show e.g. "grep: Found 100 matches".
-        emit({
-          type: "subagent_tool_result",
-          agent: wctx.endpoint.name,
-          model: wctx.cfg.model,
-          tool: tc.function.name,
-          toolArgs: tc.function.arguments,
-          toolResult: summarizeToolResult(tc.function.name, out),
-          toolResultRaw: out,
-          toolCalls: currentToolCallCount,
-        });
-        return {
-          role: "tool" as const,
-          content: out,
-          tool_call_id: tc.id,
-        };
-      }));
-      
       toolCallCount += msg.tool_calls.length;
       messages.push(...results);
-      
+
       continue;
     }
 
     // Final text answer.
-    const answer = msg.content || "";
+    const answer = msg.content || '';
     emit({
-      type: "subagent_done",
+      type: 'subagent_done',
       agent: wctx.endpoint.name,
       model: wctx.cfg.model,
       ok: true,
@@ -652,11 +686,11 @@ async function runSingleSubAgent(
   }
 
   emit({
-    type: "subagent_done",
+    type: 'subagent_done',
     agent: wctx.endpoint.name,
     model: wctx.cfg.model,
     ok: false,
-    output: "",
+    output: '',
     toolCalls: toolCallCount,
   });
   return {
@@ -664,9 +698,9 @@ async function runSingleSubAgent(
     model: wctx.cfg.model,
     baseURL: wctx.cfg.baseURL,
     ok: false,
-    output: "",
+    output: '',
     durationMs: Math.round(performance.now() - start),
-    error: "max iterations reached without a final answer",
+    error: 'max iterations reached without a final answer',
     toolCalls: toolCallCount,
   };
 }
@@ -674,19 +708,20 @@ async function runSingleSubAgent(
 /** Format a list of sub-agent results into a single tool result string. */
 export function formatSubAgentResults(results: SubAgentResult[]): string {
   const blocks = results.map((r) => {
-    const header = `### ${r.name} (${r.model} @ ${r.baseURL}) — ${r.ok ? "ok" : "failed"} [${r.toolCalls} tool calls, ${r.durationMs}ms]`;
-    const body = r.ok ? r.output : `ERROR: ${r.error || "unknown"}\n${r.output}`;
+    const header = `### ${r.name} (${r.model} @ ${r.baseURL}) — ${r.ok ? 'ok' : 'failed'} [${r.toolCalls} tool calls, ${r.durationMs}ms]`;
+    const body = r.ok ? r.output : `ERROR: ${r.error || 'unknown'}\n${r.output}`;
     return `${header}\n\n${body}`.trim();
   });
   const summary = `Sub-agent pool returned ${results.filter((r) => r.ok).length}/${results.length} successful.`;
   return JSON.stringify({
     ok: true,
     summary,
-    batch_status: "COMPLETED",
-    directive: "All sub-agents have finished execution. Do NOT wait for any agents. Synthesize the findings above immediately.",
+    batch_status: 'COMPLETED',
+    directive:
+      'All sub-agents have finished execution. Do NOT wait for any agents. Synthesize the findings above immediately.',
     agents: results.length,
     successful: results.filter((r) => r.ok).length,
-    results: blocks.join("\n\n---\n\n"),
+    results: blocks.join('\n\n---\n\n'),
   });
 }
 
@@ -752,13 +787,13 @@ export async function exploreWithSubAgent(
   const endpoints = pool.endpoints.filter((e) => e.baseURL && e.model);
   if (endpoints.length === 0) {
     return {
-      name: "pool",
-      model: "",
-      baseURL: "",
+      name: 'pool',
+      model: '',
+      baseURL: '',
       ok: false,
-      output: "",
+      output: '',
       durationMs: 0,
-      error: "no remote sub-agent endpoints configured",
+      error: 'no remote sub-agent endpoints configured',
       toolCalls: 0,
     };
   }
@@ -766,13 +801,13 @@ export async function exploreWithSubAgent(
   const ep = scheduler.acquire(endpoints, endpointName);
   if (!ep) {
     return {
-      name: endpointName || "pool",
-      model: "",
-      baseURL: "",
+      name: endpointName || 'pool',
+      model: '',
+      baseURL: '',
       ok: false,
-      output: "",
+      output: '',
       durationMs: 0,
-      error: "all sub-agent workers are busy (max 4 concurrent)",
+      error: 'all sub-agent workers are busy (max 4 concurrent)',
       toolCalls: 0,
     };
   }
@@ -789,21 +824,19 @@ export async function exploreWithSubAgent(
  * the other device's models automatically. The three Qwen3.5-2B instances are
  * loaded here as qwen3.5-2b, qwen3.5-2b:2, qwen3.5-2b:3.
  */
-const LOCAL_LMSTUDIO_URL = "http://127.0.0.1:1234/v1";
+const LOCAL_LMSTUDIO_URL = 'http://127.0.0.1:1234/v1';
 
 /**
  * Discover loaded Qwen3.5-2B sub-agent models from a given LM Studio base URL.
  */
-async function discoverQwen2BEndpoints(
-  baseURL: string
-): Promise<SubAgentEndpoint[] | undefined> {
+async function discoverQwen2BEndpoints(baseURL: string): Promise<SubAgentEndpoint[] | undefined> {
   try {
     const models = await fetchLMStudioModels(baseURL);
     const qwen2b = models
       .filter((m) => /qwen3\.5[-.]?2b/i.test(m.id))
       .map((m, i) => ({
         name: `qwen-remote-${i + 1}`,
-        baseURL: baseURL.replace(/\/+$/, "").replace(/\/v1\/?$/i, "") + "/v1",
+        baseURL: baseURL.replace(/\/+$/, '').replace(/\/v1\/?$/i, '') + '/v1',
         model: m.id,
       }));
     return qwen2b.length > 0 ? qwen2b : undefined;
@@ -821,9 +854,7 @@ async function discoverQwen2BEndpoints(
  *   3. This machine's LM Studio (127.0.0.1:1234) — auto-discover the three
  *      qwen3.5-2b* instances. LM Studio forwards to the linked device.
  */
-export async function resolveSubAgentPool(
-  base: Config
-): Promise<SubAgentPoolConfig | undefined> {
+export async function resolveSubAgentPool(base: Config): Promise<SubAgentPoolConfig | undefined> {
   if (base.subagents) {
     if (base.subagents.enabled && base.subagents.endpoints.length > 0) {
       return base.subagents;
@@ -833,10 +864,9 @@ export async function resolveSubAgentPool(
     }
   }
 
-  const candidates = [
-    process.env.REMOTE_LMSTUDIO_URL,
-    LOCAL_LMSTUDIO_URL,
-  ].filter(Boolean) as string[];
+  const candidates = [process.env.REMOTE_LMSTUDIO_URL, LOCAL_LMSTUDIO_URL].filter(
+    Boolean
+  ) as string[];
 
   for (const url of candidates) {
     const endpoints = await discoverQwen2BEndpoints(url);
@@ -846,4 +876,3 @@ export async function resolveSubAgentPool(
   }
   return undefined;
 }
-

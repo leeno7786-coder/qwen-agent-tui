@@ -1,8 +1,8 @@
 /**
  * Memory Graph Module
- * 
+ *
  * Provides a knowledge graph of the codebase for better understanding and querying.
- * 
+ *
  * Features:
  * - Build graph from source code
  * - Load/save existing graphs
@@ -21,7 +21,7 @@ export type {
   GraphBuildOptions,
   GraphIndexOptions,
   NodeType,
-  EdgeType
+  EdgeType,
 } from './types';
 export {
   getMemoryGraph,

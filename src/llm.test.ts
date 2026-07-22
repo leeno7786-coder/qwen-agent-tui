@@ -1,82 +1,69 @@
-import { describe, expect, it } from "bun:test";
-import {
-  extractDeltaText,
-  isSmallModel,
-  effectiveContextSize,
-} from "./llm";
+import { describe, expect, it } from 'bun:test';
+import { extractDeltaText, isSmallModel, effectiveContextSize } from './llm';
 
 const RUNTIME_128K = { contextLength: 128000 };
 
-describe("extractDeltaText", () => {
-  it("reads standard OpenAI streaming content", () => {
-    expect(extractDeltaText({ content: "hello" })).toEqual({
-      content: "hello",
-      reasoningContent: "",
+describe('extractDeltaText', () => {
+  it('reads standard OpenAI streaming content', () => {
+    expect(extractDeltaText({ content: 'hello' })).toEqual({
+      content: 'hello',
+      reasoningContent: '',
     });
   });
 
-  it("reads LM Studio-compatible alternate token fields", () => {
-    expect(extractDeltaText({ text: "hello" }).content).toBe("hello");
-    expect(extractDeltaText({ response: "world" }).content).toBe("world");
-    expect(extractDeltaText({ message: { content: "nested" } }).content).toBe("nested");
+  it('reads LM Studio-compatible alternate token fields', () => {
+    expect(extractDeltaText({ text: 'hello' }).content).toBe('hello');
+    expect(extractDeltaText({ response: 'world' }).content).toBe('world');
+    expect(extractDeltaText({ message: { content: 'nested' } }).content).toBe('nested');
   });
 
-  it("normalizes array content parts", () => {
+  it('normalizes array content parts', () => {
     expect(
       extractDeltaText({
-        content: [{ type: "text", text: "hello " }, { content: "world" }],
+        content: [{ type: 'text', text: 'hello ' }, { content: 'world' }],
       }).content
-    ).toBe("hello world");
+    ).toBe('hello world');
   });
 
-  it("reads reasoning extension fields separately", () => {
-    expect(extractDeltaText({ reasoning_content: "thinking" })).toEqual({
-      content: "",
-      reasoningContent: "thinking",
+  it('reads reasoning extension fields separately', () => {
+    expect(extractDeltaText({ reasoning_content: 'thinking' })).toEqual({
+      content: '',
+      reasoningContent: 'thinking',
     });
   });
 });
 
-describe("isSmallModel", () => {
-  it("detects 4b/8b and common local families", () => {
-    expect(isSmallModel("nvidia/nemotron-3-nano-4b")).toBe(true);
-    expect(isSmallModel("qwen3-8b-instruct")).toBe(true);
-    expect(isSmallModel("phi-3-mini-4k")).toBe(true);
-    expect(isSmallModel("gpt-4o")).toBe(false);
+describe('isSmallModel', () => {
+  it('detects 4b/8b and common local families', () => {
+    expect(isSmallModel('nvidia/nemotron-3-nano-4b')).toBe(true);
+    expect(isSmallModel('qwen3-8b-instruct')).toBe(true);
+    expect(isSmallModel('phi-3-mini-4k')).toBe(true);
+    expect(isSmallModel('gpt-4o')).toBe(false);
   });
 
-  it("respects explicit smallModelMode override", () => {
-    expect(isSmallModel("gpt-4o", undefined, true)).toBe(true);
-    expect(isSmallModel("qwen3-8b", undefined, false)).toBe(false);
+  it('respects explicit smallModelMode override', () => {
+    expect(isSmallModel('gpt-4o', undefined, true)).toBe(true);
+    expect(isSmallModel('qwen3-8b', undefined, false)).toBe(false);
   });
 
-  it("does not treat low maxTokens alone as small model", () => {
-    expect(isSmallModel("gpt-4o", 4096)).toBe(false);
+  it('does not treat low maxTokens alone as small model', () => {
+    expect(isSmallModel('gpt-4o', 4096)).toBe(false);
   });
 });
 
-describe("effectiveContextSize", () => {
-  it("prefers runtime-reported context over heuristics", () => {
-    const size = effectiveContextSize(
-      "qwen3-8b",
-      4096,
-      "http://127.0.0.1:1234/v1",
-      RUNTIME_128K
-    );
+describe('effectiveContextSize', () => {
+  it('prefers runtime-reported context over heuristics', () => {
+    const size = effectiveContextSize('qwen3-8b', 4096, 'http://127.0.0.1:1234/v1', RUNTIME_128K);
     expect(size).toBe(128000);
   });
 
-  it("uses full architectural context for local providers without runtime", () => {
-    const size = effectiveContextSize(
-      "qwen3-8b",
-      4096,
-      "http://127.0.0.1:1234/v1"
-    );
+  it('uses full architectural context for local providers without runtime', () => {
+    const size = effectiveContextSize('qwen3-8b', 4096, 'http://127.0.0.1:1234/v1');
     expect(size).toBeGreaterThanOrEqual(128000);
   });
 
-  it("may clamp context for remote APIs with small maxTokens", () => {
-    const size = effectiveContextSize("gpt-4o", 4096, "https://api.openai.com/v1");
+  it('may clamp context for remote APIs with small maxTokens', () => {
+    const size = effectiveContextSize('gpt-4o', 4096, 'https://api.openai.com/v1');
     expect(size).toBeLessThanOrEqual(16384);
   });
 });

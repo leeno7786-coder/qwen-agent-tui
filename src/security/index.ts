@@ -45,33 +45,62 @@ export const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
   allowedPaths: [],
   blockedPaths: [
     // Secrets / credentials
-    '**/.env', '**/.env.*',
+    '**/.env',
+    '**/.env.*',
     '**/.ssh/**',
-    '**/secrets/**', '**/credentials/**',
-    '**/*.pem', '**/*.key', '**/*.crt', '**/*.cer', '**/*.p12', '**/*.pfx',
-    '**/id_rsa*', '**/id_ed25519*', '**/id_ecdsa*',
-    '**/known_hosts', '**/authorized_keys',
+    '**/secrets/**',
+    '**/credentials/**',
+    '**/*.pem',
+    '**/*.key',
+    '**/*.crt',
+    '**/*.cer',
+    '**/*.p12',
+    '**/*.pfx',
+    '**/id_rsa*',
+    '**/id_ed25519*',
+    '**/id_ecdsa*',
+    '**/known_hosts',
+    '**/authorized_keys',
     // System auth files
-    '**/shadow', '**/passwd', '**/sudoers',
-    '**/hosts', '**/resolv.conf',
+    '**/shadow',
+    '**/passwd',
+    '**/sudoers',
+    '**/hosts',
+    '**/resolv.conf',
     // VCS
     '**/.git/**',
     // Dependencies / lock files
     '**/node_modules/**',
-    '**/bun.lock', '**/package-lock.json', '**/yarn.lock', '**/pnpm-lock.yaml',
-    '**/.npmrc', '**/.yarnrc',
+    '**/bun.lock',
+    '**/package-lock.json',
+    '**/yarn.lock',
+    '**/pnpm-lock.yaml',
+    '**/.npmrc',
+    '**/.yarnrc',
     '**/bunfig.toml',
-    '**/composer.lock', '**/Gemfile.lock', '**/Cargo.lock',
-    '**/go.mod', '**/go.sum',
-    '**/Pipfile.lock', '**/poetry.lock', '**/requirements.txt',
+    '**/composer.lock',
+    '**/Gemfile.lock',
+    '**/Cargo.lock',
+    '**/go.mod',
+    '**/go.sum',
+    '**/Pipfile.lock',
+    '**/poetry.lock',
+    '**/requirements.txt',
     // Config / metadata (package.json and tsconfig.json are needed for legitimate operations)
     '**/config/**',
     '**/tsconfig.*.json',
     // System directories
-    '**/etc/**', '**/var/**', '**/usr/**',
-    '**/bin/**', '**/sbin/**', '**/boot/**',
-    '**/dev/**', '**/proc/**', '**/sys/**',
-    '**/tmp/**', '**/temp/**',
+    '**/etc/**',
+    '**/var/**',
+    '**/usr/**',
+    '**/bin/**',
+    '**/sbin/**',
+    '**/boot/**',
+    '**/dev/**',
+    '**/proc/**',
+    '**/sys/**',
+    '**/tmp/**',
+    '**/temp/**',
   ],
   maxFileSize: 10 * 1024 * 1024, // 10MB
   maxBatchFiles: 50,
@@ -82,39 +111,39 @@ export const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
  */
 const DANGEROUS_COMMAND_PATTERNS: RegExp[] = [
   // System destruction
-  /rm\s+-rf\s+\//i,            // rm -rf / (must target root)
+  /rm\s+-rf\s+\//i, // rm -rf / (must target root)
   /rm\s+--no-preserve-root/i,
   /rm\s+-r\s+\//i,
   /dd\s+if=\/dev\//i,
   /mkfs/i,
-  /\bformat\s+[a-zA-Z]:/i,     // Windows format drive only
-  
+  /\bformat\s+[a-zA-Z]:/i, // Windows format drive only
+
   // Process management
-  /kill\s+-9\s+1\b/i,          // kill -9 PID 1 (init)
+  /kill\s+-9\s+1\b/i, // kill -9 PID 1 (init)
   /killall/i,
-  
+
   // Privilege escalation
   /\bsudo\s+/i,
-  /\bsu\s+-/i,                  // su - (login shell, not "su" as substring)
+  /\bsu\s+-/i, // su - (login shell, not "su" as substring)
   /chmod\s+777\s+\//i,
   /chmod\s+-R\s+\//i,
   /chown\s+0:0\s+\//i,
-  
+
   // Network listeners (not curl/wget which are harmless for API calls)
-  /\bnc\s+-l/i,                  // netcat listen mode
+  /\bnc\s+-l/i, // netcat listen mode
   /\bnetcat\s+-l/i,
   /\bssh\s+/i,
   /\bscp\s+/i,
   /\bsftp\s+/i,
-  
+
   // File system overwrite to root
   />\s*\/dev\//i,
   />>\s*\/dev\//i,
-  
+
   // Shell injection patterns (stricter — must pipe TO a shell)
   /\|\s*sh\s*$/i,
   /\|\s*bash\s*$/i,
-  
+
   // Windows-specific destructive
   /\bdel\s+\\\\/i,
   /\bdiskpart/i,
@@ -147,7 +176,7 @@ const SAFE_COMMAND_PATTERNS: RegExp[] = [
   /^git\s+stash$/i,
   /^git\s+reset$/i,
   /^git\s+reset\s+--/i,
-  
+
   // File operations
   /^ls(?:\s+.*)?$/i,
   /^dir(?:\s+.*)?$/i,
@@ -178,7 +207,7 @@ const SAFE_COMMAND_PATTERNS: RegExp[] = [
   /^which\s+\S+/i,
   /^where$/i,
   /^where\s+\S+/i,
-  
+
   // Node.js/Bun operations
   /^node\s+--version$/i,
   /^bun\s+--version$/i,
@@ -187,7 +216,7 @@ const SAFE_COMMAND_PATTERNS: RegExp[] = [
   /^npm\s+run\s+\S+/i,
   /^bun\s+test$/i,
   /^bun\s+run\s+\S+/i,
-  
+
   // Build tools
   /^make$/i,
   /^make\s+\S+/i,
@@ -198,14 +227,14 @@ const SAFE_COMMAND_PATTERNS: RegExp[] = [
   /^go\s+build$/i,
   /^go\s+test$/i,
   /^go\s+run$/i,
-  
+
   // Text editors
   /^vim$/i,
   /^nano$/i,
   /^emacs$/i,
   /^code$/i,
   /^notepad$/i,
-  
+
   // Version control
   /^hg$/i,
   /^hg\s+\S+/i,
@@ -259,7 +288,7 @@ export class SecurityManager {
     // Check against allowed commands (if any are specified)
     if (this.config.allowedCommands.size > 0) {
       const isAllowed = Array.from(this.config.allowedCommands).some(
-        allowed => trimmed.toLowerCase() === allowed.toLowerCase()
+        (allowed) => trimmed.toLowerCase() === allowed.toLowerCase()
       );
       if (!isAllowed) {
         return { ok: false, error: `Command not in allowed list` };
@@ -282,7 +311,10 @@ export class SecurityManager {
    * Validate file access for a path.
    * @returns { ok: boolean, error?: string, path?: string } - Validation result
    */
-  validateFileAccess(path: string, operation: 'read' | 'write' | 'delete' | 'execute' = 'read'): {
+  validateFileAccess(
+    path: string,
+    operation: 'read' | 'write' | 'delete' | 'execute' = 'read'
+  ): {
     ok: boolean;
     error?: string;
     path?: string;
@@ -315,7 +347,7 @@ export class SecurityManager {
     // Allowed paths take precedence over blocked paths
     let isExplicitlyAllowed = false;
     if (this.config.allowedPaths.length > 0) {
-      isExplicitlyAllowed = this.config.allowedPaths.some(pattern =>
+      isExplicitlyAllowed = this.config.allowedPaths.some((pattern) =>
         this.pathMatchesPattern(relPath, pattern)
       );
       if (!isExplicitlyAllowed) {
@@ -337,7 +369,10 @@ export class SecurityManager {
       try {
         const stats = statSync(resolved);
         if (stats.size > this.config.maxFileSize) {
-          return { ok: false, error: `File too large: ${stats.size} bytes (max ${this.config.maxFileSize})` };
+          return {
+            ok: false,
+            error: `File too large: ${stats.size} bytes (max ${this.config.maxFileSize})`,
+          };
         }
       } catch {
         // File doesn't exist or can't be stat'd
@@ -379,17 +414,16 @@ export class SecurityManager {
     if (!this.workspace) {
       return true; // No workspace restriction
     }
-    
+
     const workspace = resolve(this.workspace);
     const resolvedPath = resolve(path);
-    
+
     // Normalize both paths to use forward slashes for comparison
     const normWorkspace = workspace.replace(/\\/g, '/');
     const normPath = resolvedPath.replace(/\\/g, '/');
-    
+
     // Path must be the workspace itself or a subdirectory
-    return normPath === normWorkspace || 
-           normPath.startsWith(normWorkspace + '/');
+    return normPath === normWorkspace || normPath.startsWith(normWorkspace + '/');
   }
 
   /**
@@ -399,7 +433,7 @@ export class SecurityManager {
     // Normalize paths
     const normalizedPath = path.replace(/\\/g, '/');
     const normalizedPattern = pattern.replace(/\\/g, '/');
-    
+
     // Simple glob matching for common patterns
     // Handle ** patterns (recursive)
     if (normalizedPattern.includes('**/')) {
@@ -414,7 +448,7 @@ export class SecurityManager {
         return false;
       }
     }
-    
+
     // Handle patterns ending with /**
     if (normalizedPattern.endsWith('/**')) {
       const prefix = normalizedPattern.slice(0, -3).replace(/\*/g, '.*').replace(/\?/g, '.');
@@ -426,7 +460,7 @@ export class SecurityManager {
         return false;
       }
     }
-    
+
     // Handle patterns starting with **/
     if (normalizedPattern.startsWith('**/')) {
       const suffix = normalizedPattern.slice(3).replace(/\*/g, '.*').replace(/\?/g, '.');
@@ -438,13 +472,13 @@ export class SecurityManager {
         return false;
       }
     }
-    
+
     // Handle simple * patterns
-    const regexPattern = '^' + normalizedPattern
-      .replace(/\./g, '\\.')
-      .replace(/\*/g, '[^/]*')
-      .replace(/\?/g, '.') + '$';
-    
+    const regexPattern =
+      '^' +
+      normalizedPattern.replace(/\./g, '\\.').replace(/\*/g, '[^/]*').replace(/\?/g, '.') +
+      '$';
+
     try {
       const regex = new RegExp(regexPattern, 'i');
       return regex.test(normalizedPath);
@@ -474,7 +508,10 @@ export class SecurityManager {
     sanitized = sanitized.replace(/or-[a-zA-Z0-9]{20,}/g, '[OPENROUTER_KEY_REDACTED]');
     sanitized = sanitized.replace(/xai-[a-zA-Z0-9]{20,}/g, '[XAI_KEY_REDACTED]');
     sanitized = sanitized.replace(/AIza[0-9A-Za-z\-_]{35}/g, '[GOOGLE_KEY_REDACTED]');
-    sanitized = sanitized.replace(/eyJ[a-zA-Z0-9\-_]+\.eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+/g, '[JWT_REDACTED]');
+    sanitized = sanitized.replace(
+      /eyJ[a-zA-Z0-9\-_]+\.eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+/g,
+      '[JWT_REDACTED]'
+    );
 
     // Bearer tokens (check before other auth patterns)
     sanitized = sanitized.replace(/auth:\s*Bearer\s+[^\s,;"']+/gi, 'auth: Bearer [REDACTED]');
@@ -488,7 +525,10 @@ export class SecurityManager {
     sanitized = sanitized.replace(/auth[=:]\s*[^\s]+/gi, 'auth=[REDACTED]');
 
     // Private keys
-    sanitized = sanitized.replace(/-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----.*-----END\s+(?:RSA\s+)?PRIVATE\s+KEY-----/gs, '[PRIVATE_KEY_REDACTED]');
+    sanitized = sanitized.replace(
+      /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----.*-----END\s+(?:RSA\s+)?PRIVATE\s+KEY-----/gs,
+      '[PRIVATE_KEY_REDACTED]'
+    );
     sanitized = sanitized.replace(/ssh-rsa\s+[A-Za-z0-9+/=]+/g, '[SSH_KEY_REDACTED]');
 
     // AWS credentials

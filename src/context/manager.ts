@@ -3,9 +3,9 @@
  * Prevents context overflow and manages conversation history.
  */
 
-import { countTokens, effectiveContextSize } from "../llm";
-import type { Config, Message } from "../types";
-import { getModelCompactionSettings } from "../llm";
+import { countTokens, effectiveContextSize } from '../llm';
+import type { Config, Message } from '../types';
+import { getModelCompactionSettings } from '../llm';
 
 /**
  * Configuration for context management.
@@ -67,10 +67,7 @@ export class ContextManager {
   private messageTokenCache: Map<string, number> = new Map();
   private cachedTotalTokens: number = 0;
 
-  constructor(
-    cfg: Config,
-    messages: Message[] = []
-  ) {
+  constructor(cfg: Config, messages: Message[] = []) {
     this.messages = [...messages];
     this.modelId = cfg.model;
     this.baseURL = cfg.baseURL || '';
@@ -78,23 +75,19 @@ export class ContextManager {
       contextLength: cfg.modelContextLength,
       maxContextLength: cfg.modelMaxContextLength,
     };
-    
+
     // Get model-specific compaction settings
-    const compactionSettings = getModelCompactionSettings(
-      this.modelId,
-      cfg.maxTokens,
-      {
-        baseURL: this.baseURL,
-        smallModelMode: cfg.smallModelMode,
-        modelParamBillions: cfg.modelParamBillions,
-        modelContextLength: cfg.modelContextLength,
-        modelMaxContextLength: cfg.modelMaxContextLength,
-      }
-    );
-    
+    const compactionSettings = getModelCompactionSettings(this.modelId, cfg.maxTokens, {
+      baseURL: this.baseURL,
+      smallModelMode: cfg.smallModelMode,
+      modelParamBillions: cfg.modelParamBillions,
+      modelContextLength: cfg.modelContextLength,
+      modelMaxContextLength: cfg.modelMaxContextLength,
+    });
+
     // Store the absolute compact threshold from model settings
     const absoluteCompactThreshold = compactionSettings.compactThreshold;
-    
+
     this.config = {
       ...DEFAULT_CONTEXT_CONFIG,
       maxHistoryTokens: compactionSettings.contextSize,
@@ -102,7 +95,7 @@ export class ContextManager {
       summaryReservedPercent: compactionSettings.summaryReservedPercent,
       keepCount: compactionSettings.keepCount,
     };
-    
+
     // Override with explicit config if provided
     if (cfg.contextCompactThreshold !== undefined) {
       this.config.compactThreshold = cfg.contextCompactThreshold;
@@ -131,19 +124,15 @@ export class ContextManager {
       contextLength: cfg.modelContextLength,
       maxContextLength: cfg.modelMaxContextLength,
     };
-    
-    const compactionSettings = getModelCompactionSettings(
-      this.modelId,
-      cfg.maxTokens,
-      {
-        baseURL: this.baseURL,
-        smallModelMode: cfg.smallModelMode,
-        modelParamBillions: cfg.modelParamBillions,
-        modelContextLength: cfg.modelContextLength,
-        modelMaxContextLength: cfg.modelMaxContextLength,
-      }
-    );
-    
+
+    const compactionSettings = getModelCompactionSettings(this.modelId, cfg.maxTokens, {
+      baseURL: this.baseURL,
+      smallModelMode: cfg.smallModelMode,
+      modelParamBillions: cfg.modelParamBillions,
+      modelContextLength: cfg.modelContextLength,
+      modelMaxContextLength: cfg.modelMaxContextLength,
+    });
+
     this.config = {
       ...this.config,
       maxHistoryTokens: compactionSettings.contextSize,
@@ -173,12 +162,14 @@ export class ContextManager {
 
     // Monitor context growth - warn when approaching maxHistoryTokens limit
     const thresholdPercent = 0.8; // Warn at 80% usage
-    if (this.config.maxHistoryTokens > 0 && 
-        this.cachedTotalTokens > this.config.maxHistoryTokens * thresholdPercent) {
+    if (
+      this.config.maxHistoryTokens > 0 &&
+      this.cachedTotalTokens > this.config.maxHistoryTokens * thresholdPercent
+    ) {
       console.warn(
         `[ContextManager] Context approaching limit: ` +
-        `${this.cachedTotalTokens}/${this.config.maxHistoryTokens} tokens ` +
-        `(${Math.round((this.cachedTotalTokens / this.config.maxHistoryTokens) * 100)}%)`
+          `${this.cachedTotalTokens}/${this.config.maxHistoryTokens} tokens ` +
+          `(${Math.round((this.cachedTotalTokens / this.config.maxHistoryTokens) * 100)}%)`
       );
     }
   }
@@ -191,25 +182,21 @@ export class ContextManager {
       return this.stats;
     }
 
-    const contextSize = effectiveContextSize(
-      this.modelId,
-      undefined,
-      this.baseURL,
-      this.runtime
-    );
-    
+    const contextSize = effectiveContextSize(this.modelId, undefined, this.baseURL, this.runtime);
+
     const currentTokens = this.countMessageTokens(this.messages);
     const maxTokens = Math.floor(contextSize * (1 - this.config.summaryReservedPercent));
     const usagePercent = contextSize > 0 ? currentTokens / contextSize : 0;
     const availablePercent = maxTokens > 0 ? currentTokens / maxTokens : 0;
-    
+
     // Check if we've exceeded the absolute compact threshold
     // If compactThreshold is a ratio (0-1), use it as such
     // If it's an absolute number (> 1), use it as absolute token count
     const threshold = this.config.compactThreshold;
-    const needsCompaction = threshold <= 1 
-      ? usagePercent > threshold
-      : currentTokens > threshold || availablePercent > 0.95;
+    const needsCompaction =
+      threshold <= 1
+        ? usagePercent > threshold
+        : currentTokens > threshold || availablePercent > 0.95;
 
     this.stats = {
       currentTokens,
@@ -247,8 +234,10 @@ export class ContextManager {
    */
   private countMessageTokens(messages: Message[]): number {
     // Fast path: if counting all messages, use the cached total
-    if (messages.length === this.messages.length &&
-        messages.every((m, i) => m.id === this.messages[i]?.id)) {
+    if (
+      messages.length === this.messages.length &&
+      messages.every((m, i) => m.id === this.messages[i]?.id)
+    ) {
       return this.cachedTotalTokens;
     }
     // Slow path: compute for a subset or out-of-order list
@@ -272,11 +261,13 @@ export class ContextManager {
 
     const stats = this.getStats();
     const messageTokens = this.countMessageTokens([message]);
-    
+
     // Use the maxTokens from stats which already accounts for reserved space
     // Also ensure we don't exceed the absolute context size
-    return stats.currentTokens + messageTokens < stats.maxTokens &&
-           stats.currentTokens + messageTokens < stats.maxTokens * 1.1; // Small buffer
+    return (
+      stats.currentTokens + messageTokens < stats.maxTokens &&
+      stats.currentTokens + messageTokens < stats.maxTokens * 1.1
+    ); // Small buffer
   }
 
   /**
@@ -303,19 +294,12 @@ export class ContextManager {
     }
 
     // Calculate how many tokens we need to free
-    const contextSize = effectiveContextSize(
-      this.modelId,
-      undefined,
-      this.baseURL,
-      this.runtime
-    );
-    
+    const contextSize = effectiveContextSize(this.modelId, undefined, this.baseURL, this.runtime);
+
     // Determine target tokens based on whether compactThreshold is a ratio or absolute
     const threshold = this.config.compactThreshold;
-    const targetTokens = threshold <= 1 
-      ? Math.floor(contextSize * threshold)
-      : threshold;
-    
+    const targetTokens = threshold <= 1 ? Math.floor(contextSize * threshold) : threshold;
+
     const tokensToRemove = stats.currentTokens - targetTokens;
 
     if (tokensToRemove <= 0) {
@@ -429,12 +413,7 @@ export class ContextManager {
    * Get the maximum context size.
    */
   getMaxContextSize(): number {
-    return effectiveContextSize(
-      this.modelId,
-      undefined,
-      this.baseURL,
-      this.runtime
-    );
+    return effectiveContextSize(this.modelId, undefined, this.baseURL, this.runtime);
   }
 
   /**
@@ -472,9 +451,6 @@ export class ContextManager {
 /**
  * Create a context manager from configuration.
  */
-export function createContextManager(
-  cfg: Config,
-  messages: Message[] = []
-): ContextManager {
+export function createContextManager(cfg: Config, messages: Message[] = []): ContextManager {
   return new ContextManager(cfg, messages);
 }

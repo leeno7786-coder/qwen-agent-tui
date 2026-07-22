@@ -3,7 +3,7 @@
  * Covers: sub-agent context building, task enrichment, result formatting, pool resolution
  */
 
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from 'bun:test';
 import {
   buildSubAgentContext,
   enrichTaskWithContext,
@@ -11,84 +11,84 @@ import {
   MAX_CONCURRENT_SUBAGENTS,
   resolveSubAgentPool,
   type SubAgentResult,
-} from "./subagents";
-import type { Config } from "./types";
+} from './subagents';
+import type { Config } from './types';
 
 const mockConfig: Config = {
-  model: "test-model",
-  baseURL: "http://localhost:1234",
-  apiKey: "test-key",
+  model: 'test-model',
+  baseURL: 'http://localhost:1234',
+  apiKey: 'test-key',
   workspace: process.cwd(),
   maxIterations: 5,
   temperature: 0.3,
   maxTokens: 4096,
 };
 
-describe("subagents.ts - Sub-agent Management", () => {
-  describe("buildSubAgentContext", () => {
-    it("should include workspace root", async () => {
+describe('subagents.ts - Sub-agent Management', () => {
+  describe('buildSubAgentContext', () => {
+    it('should include workspace root', async () => {
       const context = await buildSubAgentContext(mockConfig);
-      expect(context).toContain("WORKSPACE ROOT");
+      expect(context).toContain('WORKSPACE ROOT');
     });
 
-    it("should include workspace path", async () => {
+    it('should include workspace path', async () => {
       const context = await buildSubAgentContext(mockConfig);
       expect(context).toContain(process.cwd());
     });
 
-    it("should include usage instructions", async () => {
+    it('should include usage instructions', async () => {
       const context = await buildSubAgentContext(mockConfig);
-      expect(context).toContain("RELATIVE to the workspace root");
+      expect(context).toContain('RELATIVE to the workspace root');
     });
 
-    it("should list file tree", async () => {
+    it('should list file tree', async () => {
       const context = await buildSubAgentContext(mockConfig);
-      expect(context).toContain("FILE TREE");
+      expect(context).toContain('FILE TREE');
     });
   });
 
-  describe("enrichTaskWithContext", () => {
-    it("should add context to simple task", async () => {
-      const enriched = await enrichTaskWithContext("test task", mockConfig);
-      expect(enriched).toContain("test task");
-      expect(enriched.length).toBeGreaterThan("test task".length);
+  describe('enrichTaskWithContext', () => {
+    it('should add context to simple task', async () => {
+      const enriched = await enrichTaskWithContext('test task', mockConfig);
+      expect(enriched).toContain('test task');
+      expect(enriched.length).toBeGreaterThan('test task'.length);
     });
 
-    it("should handle empty task", async () => {
-      const enriched = await enrichTaskWithContext("", mockConfig);
+    it('should handle empty task', async () => {
+      const enriched = await enrichTaskWithContext('', mockConfig);
       expect(enriched.length).toBeGreaterThan(0);
     });
 
-    it("should include focus path when provided", async () => {
-      const enriched = await enrichTaskWithContext("test task", mockConfig, "/path/to/file");
-      expect(enriched).toContain("/path/to/file");
+    it('should include focus path when provided', async () => {
+      const enriched = await enrichTaskWithContext('test task', mockConfig, '/path/to/file');
+      expect(enriched).toContain('/path/to/file');
     });
 
-    it("should include context header", async () => {
-      const enriched = await enrichTaskWithContext("test task", mockConfig);
-      expect(enriched).toContain("=== SHARED CONTEXT ===");
+    it('should include context header', async () => {
+      const enriched = await enrichTaskWithContext('test task', mockConfig);
+      expect(enriched).toContain('=== SHARED CONTEXT ===');
     });
   });
 
-  describe("formatSubAgentResults", () => {
-    it("should format empty results as JSON", () => {
+  describe('formatSubAgentResults', () => {
+    it('should format empty results as JSON', () => {
       const formatted = formatSubAgentResults([]);
       const parsed = JSON.parse(formatted);
       expect(parsed.ok).toBe(true);
-      expect(parsed.summary).toContain("0/0");
+      expect(parsed.summary).toContain('0/0');
       expect(parsed.agents).toBe(0);
       expect(parsed.successful).toBe(0);
-      expect(parsed.results).toBe("");
+      expect(parsed.results).toBe('');
     });
 
-    it("should format single successful result as JSON", () => {
+    it('should format single successful result as JSON', () => {
       const results: SubAgentResult[] = [
         {
-          name: "test-agent",
-          model: "test-model",
-          baseURL: "http://localhost:1234",
+          name: 'test-agent',
+          model: 'test-model',
+          baseURL: 'http://localhost:1234',
           ok: true,
-          output: "Result 1",
+          output: 'Result 1',
           error: undefined,
           toolCalls: 0,
           durationMs: 100,
@@ -97,29 +97,29 @@ describe("subagents.ts - Sub-agent Management", () => {
       const formatted = formatSubAgentResults(results);
       const parsed = JSON.parse(formatted);
       expect(parsed.ok).toBe(true);
-      expect(parsed.summary).toContain("1/1");
+      expect(parsed.summary).toContain('1/1');
       expect(parsed.agents).toBe(1);
       expect(parsed.successful).toBe(1);
     });
 
-    it("should format multiple results as JSON", () => {
+    it('should format multiple results as JSON', () => {
       const results: SubAgentResult[] = [
         {
-          name: "agent-1",
-          model: "model-1",
-          baseURL: "http://localhost:1234",
+          name: 'agent-1',
+          model: 'model-1',
+          baseURL: 'http://localhost:1234',
           ok: true,
-          output: "Result 1",
+          output: 'Result 1',
           error: undefined,
           toolCalls: 0,
           durationMs: 100,
         },
         {
-          name: "agent-2",
-          model: "model-2",
-          baseURL: "http://localhost:1234",
+          name: 'agent-2',
+          model: 'model-2',
+          baseURL: 'http://localhost:1234',
           ok: true,
-          output: "Result 2",
+          output: 'Result 2',
           error: undefined,
           toolCalls: 0,
           durationMs: 150,
@@ -128,20 +128,20 @@ describe("subagents.ts - Sub-agent Management", () => {
       const formatted = formatSubAgentResults(results);
       const parsed = JSON.parse(formatted);
       expect(parsed.ok).toBe(true);
-      expect(parsed.summary).toContain("2/2");
+      expect(parsed.summary).toContain('2/2');
       expect(parsed.agents).toBe(2);
       expect(parsed.successful).toBe(2);
     });
 
-    it("should format errors in results", () => {
+    it('should format errors in results', () => {
       const results: SubAgentResult[] = [
         {
-          name: "failing-agent",
-          model: "test-model",
-          baseURL: "http://localhost:1234",
+          name: 'failing-agent',
+          model: 'test-model',
+          baseURL: 'http://localhost:1234',
           ok: false,
-          output: "",
-          error: "Test error",
+          output: '',
+          error: 'Test error',
           toolCalls: 0,
           durationMs: 50,
         },
@@ -149,35 +149,38 @@ describe("subagents.ts - Sub-agent Management", () => {
       const formatted = formatSubAgentResults(results);
       const parsed = JSON.parse(formatted);
       expect(parsed.ok).toBe(true);
-      expect(parsed.summary).toContain("0/1");
+      expect(parsed.summary).toContain('0/1');
       expect(parsed.successful).toBe(0);
-      expect(parsed.results).toContain("ERROR: Test error");
+      expect(parsed.results).toContain('ERROR: Test error');
     });
   });
 
-  describe("MAX_CONCURRENT_SUBAGENTS", () => {
-    it("should be a positive number", () => {
+  describe('MAX_CONCURRENT_SUBAGENTS', () => {
+    it('should be a positive number', () => {
       expect(MAX_CONCURRENT_SUBAGENTS).toBeGreaterThan(0);
     });
 
-    it("should be a reasonable limit", () => {
+    it('should be a reasonable limit', () => {
       expect(MAX_CONCURRENT_SUBAGENTS).toBeLessThanOrEqual(10);
     });
 
-    it("should match agent.ts default", () => {
+    it('should match agent.ts default', () => {
       expect(MAX_CONCURRENT_SUBAGENTS).toBe(3);
     });
   });
 
-  describe("resolveSubAgentPool", () => {
-    it("should return undefined for config with disabled subagents", async () => {
+  describe('resolveSubAgentPool', () => {
+    it('should return undefined for config with disabled subagents', async () => {
       const cfg: Partial<Config> = { subagents: { enabled: false, endpoints: [] } };
       const result = await resolveSubAgentPool(cfg as Config);
       expect(result).toBeUndefined();
     });
 
-    it("should return explicit pool config when provided", async () => {
-      const explicitPool = { enabled: true, endpoints: [{ name: "test", model: "test-m", baseURL: "http://localhost:1234" }] };
+    it('should return explicit pool config when provided', async () => {
+      const explicitPool = {
+        enabled: true,
+        endpoints: [{ name: 'test', model: 'test-m', baseURL: 'http://localhost:1234' }],
+      };
       const cfg: Partial<Config> = { subagents: explicitPool };
       const result = await resolveSubAgentPool(cfg as Config);
       expect(result).toEqual(explicitPool);

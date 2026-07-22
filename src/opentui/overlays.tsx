@@ -1,10 +1,10 @@
 /** @jsxImportSource @opentui/react */
 
-import { useState, useEffect, useRef } from "react";
-import type { ScrollBoxRenderable } from "@opentui/core";
-import { useKeyboard } from "@opentui/react";
-import type { Session } from "../types";
-import type { Theme } from "./theme";
+import { useState, useEffect, useRef } from 'react';
+import type { ScrollBoxRenderable } from '@opentui/core';
+import { useKeyboard } from '@opentui/react';
+import type { Session } from '../types';
+import type { Theme } from './theme';
 
 /* ─── Help Overlay ─── */
 
@@ -15,7 +15,7 @@ interface HelpOverlayProps {
 
 export function HelpOverlay({ theme, onClose }: HelpOverlayProps) {
   useKeyboard((keyEvent) => {
-    if (keyEvent.name === "escape" || keyEvent.name === "Escape") {
+    if (keyEvent.name === 'escape' || keyEvent.name === 'Escape') {
       onClose();
     }
   });
@@ -36,66 +36,69 @@ export function HelpOverlay({ theme, onClose }: HelpOverlayProps) {
       <text> </text>
 
       <text fg={theme.userFg}>Commands:</text>
-      <text fg={theme.agentFg}>  /new           Start a new session (clear all)</text>
-      <text fg={theme.agentFg}>  /clear         Clear chat history</text>
-      <text fg={theme.agentFg}>  /compact       Compact conversation</text>
-      <text fg={theme.agentFg}>  /auto ...      Autonomous mode</text>
-      <text fg={theme.agentFg}>  /todo          Toggle todo sidebar</text>
+      <text fg={theme.agentFg}> /new Start a new session (clear all)</text>
+      <text fg={theme.agentFg}> /clear Clear chat history</text>
+      <text fg={theme.agentFg}> /compact Compact conversation</text>
+      <text fg={theme.agentFg}> /auto ... Autonomous mode</text>
+      <text fg={theme.agentFg}> /todo Toggle todo sidebar</text>
       <text fg={theme.agentFg}></text>
-      <text fg={theme.agentFg}>  /todo add ...  Add a todo</text>
-      <text fg={theme.agentFg}>  /skill         List loaded skills</text>
-      <text fg={theme.agentFg}>  /skills        Manage skills (F8) - create, enable, disable</text>
-      <text fg={theme.agentFg}>  /sessions      List saved sessions</text>
-      <text fg={theme.agentFg}>  /resume [id]   Resume latest or specific session</text>
-      <text fg={theme.agentFg}>  /rename [name] Rename current session</text>
-      <text fg={theme.agentFg}>  /copy [id]     Copy message content to clipboard</text>
-      <text fg={theme.agentFg}>  /save [name]   Save conversation</text>
-      <text fg={theme.agentFg}>  /load          Load a saved conversation</text>
-      <text fg={theme.agentFg}>  /reload        Reload config, skills, and LM Studio metadata</text>
-      <text fg={theme.agentFg}>  /theme [name]  Switch theme</text>
-      <text fg={theme.agentFg}>  /connect       Connect a provider - browse runtimes, enter API keys, select models</text>
-      <text fg={theme.agentFg}>  /doctor        Config + LM Studio health (same as CLI doctor)</text>
-  <text fg={theme.agentFg}>  /models        List models, context, load state (same as CLI models)</text>
-  <text fg={theme.agentFg}>  /graph [sub]   Memory graph — build|stats|report</text>
-  <text fg={theme.agentFg}>  /cd [path]     Change the workspace for tools</text>
-      <text fg={theme.agentFg}>  /allow [path]  Approve extra tool access outside the workspace</text>
-      <text fg={theme.agentFg}>  /export        Export chat to markdown</text>
-      <text fg={theme.agentFg}>  /exit          Quit (auto-saves session)</text>
+      <text fg={theme.agentFg}> /todo add ... Add a todo</text>
+      <text fg={theme.agentFg}> /skill List loaded skills</text>
+      <text fg={theme.agentFg}> /skills Manage skills (F8) - create, enable, disable</text>
+      <text fg={theme.agentFg}> /sessions List saved sessions</text>
+      <text fg={theme.agentFg}> /resume [id] Resume latest or specific session</text>
+      <text fg={theme.agentFg}> /rename [name] Rename current session</text>
+      <text fg={theme.agentFg}> /copy [id] Copy message content to clipboard</text>
+      <text fg={theme.agentFg}> /save [name] Save conversation</text>
+      <text fg={theme.agentFg}> /load Load a saved conversation</text>
+      <text fg={theme.agentFg}> /reload Reload config, skills, and LM Studio metadata</text>
+      <text fg={theme.agentFg}> /theme [name] Switch theme</text>
+      <text fg={theme.agentFg}>
+        {' '}
+        /connect Connect a provider - browse runtimes, enter API keys, select models
+      </text>
+      <text fg={theme.agentFg}> /doctor Config + LM Studio health (same as CLI doctor)</text>
+      <text fg={theme.agentFg}> /models List models, context, load state (same as CLI models)</text>
+      <text fg={theme.agentFg}> /graph [sub] Memory graph — build|stats|report</text>
+      <text fg={theme.agentFg}> /cd [path] Change the workspace for tools</text>
+      <text fg={theme.agentFg}> /allow [path] Approve extra tool access outside the workspace</text>
+      <text fg={theme.agentFg}> /export Export chat to markdown</text>
+      <text fg={theme.agentFg}> /exit Quit (auto-saves session)</text>
       <text> </text>
 
       <text fg={theme.userFg}>Shortcuts:</text>
-      <text fg={theme.mutedFg}>  F1      Help</text>
-      <text fg={theme.mutedFg}>  F2      Clear chat</text>
-      <text fg={theme.mutedFg}>  F3      Prefill /auto</text>
-      <text fg={theme.mutedFg}>  F4      Todo sidebar</text>
-      <text fg={theme.mutedFg}>  F5      Save session</text>
-      <text fg={theme.mutedFg}>  F6      Load session</text>
-      <text fg={theme.mutedFg}>  F7      Toggle mouse capture</text>
-      <text fg={theme.mutedFg}>  F9      Cycle theme</text>
-      <text fg={theme.mutedFg}>  F10     Exit</text>
+      <text fg={theme.mutedFg}> F1 Help</text>
+      <text fg={theme.mutedFg}> F2 Clear chat</text>
+      <text fg={theme.mutedFg}> F3 Prefill /auto</text>
+      <text fg={theme.mutedFg}> F4 Todo sidebar</text>
+      <text fg={theme.mutedFg}> F5 Save session</text>
+      <text fg={theme.mutedFg}> F6 Load session</text>
+      <text fg={theme.mutedFg}> F7 Toggle mouse capture</text>
+      <text fg={theme.mutedFg}> F9 Cycle theme</text>
+      <text fg={theme.mutedFg}> F10 Exit</text>
       <text> </text>
 
       <text fg={theme.userFg}>Scrolling:</text>
-      <text fg={theme.mutedFg}>  ↑ / ↓         Scroll line by line</text>
-      <text fg={theme.mutedFg}>  Shift+↑/↓     Scroll page by page</text>
-      <text fg={theme.mutedFg}>  Mouse wheel   Scroll (terminal dependent)</text>
+      <text fg={theme.mutedFg}> ↑ / ↓ Scroll line by line</text>
+      <text fg={theme.mutedFg}> Shift+↑/↓ Scroll page by page</text>
+      <text fg={theme.mutedFg}> Mouse wheel Scroll (terminal dependent)</text>
       <text> </text>
       <text fg={theme.userFg}>Input:</text>
       <text> </text>
       <text fg={theme.userFg}>Headless CLI (same app, other terminal):</text>
-      <text fg={theme.mutedFg}>  bun run start              This TUI (default)</text>
-      <text fg={theme.mutedFg}>  bun run src/main.ts run -p "task" -w .</text>
-      <text fg={theme.mutedFg}>  bun run src/main.ts doctor --json</text>
+      <text fg={theme.mutedFg}> bun run start This TUI (default)</text>
+      <text fg={theme.mutedFg}> bun run src/main.ts run -p "task" -w .</text>
+      <text fg={theme.mutedFg}> bun run src/main.ts doctor --json</text>
       <text> </text>
       <text fg={theme.userFg}>Input:</text>
-      <text fg={theme.mutedFg}>  Shift+Enter   Multi-line input</text>
-      <text fg={theme.mutedFg}>  Ctrl+↑/↓     Select message</text>
-      <text fg={theme.mutedFg}>  Ctrl+C       Copy selected message</text>
+      <text fg={theme.mutedFg}> Shift+Enter Multi-line input</text>
+      <text fg={theme.mutedFg}> Ctrl+↑/↓ Select message</text>
+      <text fg={theme.mutedFg}> Ctrl+C Copy selected message</text>
       <text> </text>
 
       <text fg={theme.userFg}>Copying text:</text>
-      <text fg={theme.mutedFg}>  Hold Shift + drag to select and copy</text>
-      <text fg={theme.mutedFg}>  Or press F7 to disable mouse capture, then drag normally</text>
+      <text fg={theme.mutedFg}> Hold Shift + drag to select and copy</text>
+      <text fg={theme.mutedFg}> Or press F7 to disable mouse capture, then drag normally</text>
     </scrollbox>
   );
 }
@@ -125,24 +128,24 @@ export function HistoryOverlay({
   }, [selected]);
 
   useKeyboard((keyEvent) => {
-    if (keyEvent.name === "escape" || keyEvent.name === "Escape") {
+    if (keyEvent.name === 'escape' || keyEvent.name === 'Escape') {
       onClose();
       return;
     }
-    if (keyEvent.name === "up" || keyEvent.name === "ArrowUp") {
+    if (keyEvent.name === 'up' || keyEvent.name === 'ArrowUp') {
       setSelected((s) => Math.max(0, s - 1));
       return;
     }
-    if (keyEvent.name === "down" || keyEvent.name === "ArrowDown") {
+    if (keyEvent.name === 'down' || keyEvent.name === 'ArrowDown') {
       setSelected((s) => Math.min(sessions.length - 1, s + 1));
       return;
     }
-    if (keyEvent.name === "return" || keyEvent.name === "Enter") {
+    if (keyEvent.name === 'return' || keyEvent.name === 'Enter') {
       const sess = sessions[selected];
       if (sess) onLoad(sess);
       return;
     }
-    if (keyEvent.name === "delete" || keyEvent.name === "Delete") {
+    if (keyEvent.name === 'delete' || keyEvent.name === 'Delete') {
       const sess = sessions[selected];
       if (sess) {
         onDelete(sess.id);
@@ -171,10 +174,8 @@ export function HistoryOverlay({
       ) : (
         sessions.map((sess, i) => {
           const isSel = i === selected;
-          const firstUser = sess.messages.find((m) => m.role === "user");
-          const preview = firstUser
-            ? firstUser.content.slice(0, 40).replace(/\n/g, " ")
-            : "Empty";
+          const firstUser = sess.messages.find((m) => m.role === 'user');
+          const preview = firstUser ? firstUser.content.slice(0, 40).replace(/\n/g, ' ') : 'Empty';
           const date = new Date(sess.updatedAt).toLocaleString();
           return (
             <text
@@ -183,7 +184,7 @@ export function HistoryOverlay({
               fg={isSel ? theme.headerFg : theme.mutedFg}
               bg={isSel ? theme.bgSelected : undefined}
             >
-              {isSel ? "> " : "  "}
+              {isSel ? '> ' : '  '}
               {date} ({sess.messages.length}) {preview}
             </text>
           );

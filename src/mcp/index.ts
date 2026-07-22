@@ -1,30 +1,33 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import type {
   McpServerConfig,
   McpServerState,
   McpLocalServerConfig,
   McpRemoteServerConfig,
-} from "../types";
-import type { Tool } from "../tools";
+} from '../types';
+import type { Tool } from '../tools';
 
 /**
  * Interpolates {env:VAR} and {file:path} placeholders in a string value.
  */
 function interpolateEnv(value: string): string {
-  return value.replace(/\{env:([^}]+)\}/g, (_, varName) => {
-    return process.env[varName] ?? "";
-  }).replace(/\{file:([^}]+)\}/g, (_, filePath) => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { readFileSync } = require("fs");
-      return readFileSync(filePath, "utf-8").trim();
-    } catch { /* file not found or not readable */
-      return "";
-    }
-  });
+  return value
+    .replace(/\{env:([^}]+)\}/g, (_, varName) => {
+      return process.env[varName] ?? '';
+    })
+    .replace(/\{file:([^}]+)\}/g, (_, filePath) => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { readFileSync } = require('fs');
+        return readFileSync(filePath, 'utf-8').trim();
+      } catch {
+        /* file not found or not readable */
+        return '';
+      }
+    });
 }
 
 /**
@@ -72,12 +75,12 @@ export class McpManager {
         batch.map(([name, config]) => this.connectServer(name, config))
       );
       for (const result of results) {
-        if (result.status === "fulfilled") {
+        if (result.status === 'fulfilled') {
           states.push(result.value);
         } else {
           states.push({
-            name: "unknown",
-            status: "error",
+            name: 'unknown',
+            status: 'error',
             toolCount: 0,
             error: result.reason?.message ?? String(result.reason),
           });
@@ -91,20 +94,17 @@ export class McpManager {
   /**
    * Connect to a single MCP server.
    */
-  private async connectServer(
-    name: string,
-    config: McpServerConfig
-  ): Promise<McpServerState> {
+  private async connectServer(name: string, config: McpServerConfig): Promise<McpServerState> {
     // Check if explicitly disabled
     if (config.enabled === false) {
-      const state: McpServerState = { name, status: "disabled", toolCount: 0 };
+      const state: McpServerState = { name, status: 'disabled', toolCount: 0 };
       return state;
     }
 
-    const client = new Client({ name: "qwen-agent-tui", version: "1.1.0" });
+    const client = new Client({ name: 'qwen-agent-tui', version: '1.1.0' });
 
     try {
-      if (config.type === "local") {
+      if (config.type === 'local') {
         await this.connectLocal(client, name, config);
       } else {
         await this.connectRemote(client, name, config);
@@ -115,13 +115,13 @@ export class McpManager {
       const tools = mcpTools.map((t) => ({
         name: t.name,
         description: t.description ?? `MCP tool: ${t.name}`,
-        inputSchema: t.inputSchema ?? { type: "object", properties: {} },
+        inputSchema: t.inputSchema ?? { type: 'object', properties: {} },
       }));
 
       const serverInfo = client.getServerVersion() ?? undefined;
       const state: McpServerState = {
         name,
-        status: "connected",
+        status: 'connected',
         toolCount: tools.length,
         serverInfo: serverInfo ? { name: serverInfo.name, version: serverInfo.version } : undefined,
       };
@@ -132,12 +132,16 @@ export class McpManager {
       const e = err as { message?: string };
       const state: McpServerState = {
         name,
-        status: "error",
+        status: 'error',
         toolCount: 0,
         error: e.message ?? String(err),
       };
       // Try to close client on error
-      try { await client.close(); } catch { /* cleanup best-effort */ }
+      try {
+        await client.close();
+      } catch {
+        /* cleanup best-effort */
+      }
       return state;
     }
   }
@@ -151,7 +155,7 @@ export class McpManager {
     config: McpLocalServerConfig
   ): Promise<void> {
     const [command, ...args] = config.command;
-    const env: Record<string, string> = { ...process.env as Record<string, string> };
+    const env: Record<string, string> = { ...(process.env as Record<string, string>) };
     if (config.env) {
       for (const [k, v] of Object.entries(config.env)) {
         env[k] = interpolateEnv(v);
@@ -207,7 +211,7 @@ export class McpManager {
     const result: Tool[] = [];
 
     for (const [serverName, conn] of this.connections) {
-      if (conn.state.status !== "connected") continue;
+      if (conn.state.status !== 'connected') continue;
 
       for (const mcpTool of conn.tools) {
         const toolName = `mcp_${serverName}_${mcpTool.name}`;
@@ -216,9 +220,14 @@ export class McpManager {
           description: `[MCP: ${serverName}] ${mcpTool.description}`,
           parameters: mcpTool.inputSchema,
           execute: (_args: unknown, _workspace: string) => {
-            return JSON.stringify({ ok: false, error: "MCP tools require async execution" });
+            return JSON.stringify({ ok: false, error: 'MCP tools require async execution' });
           },
-          executeAsync: async (args: unknown, _workspace: string, _cfg?: unknown, signal?: AbortSignal) => {
+          executeAsync: async (
+            args: unknown,
+            _workspace: string,
+            _cfg?: unknown,
+            signal?: AbortSignal
+          ) => {
             return this.callTool(serverName, mcpTool.name, args as Record<string, unknown>, signal);
           },
         });
@@ -241,8 +250,11 @@ export class McpManager {
     if (!conn) {
       return JSON.stringify({ ok: false, error: `MCP server "${serverName}" not connected` });
     }
-    if (conn.state.status !== "connected") {
-      return JSON.stringify({ ok: false, error: `MCP server "${serverName}" status: ${conn.state.status}` });
+    if (conn.state.status !== 'connected') {
+      return JSON.stringify({
+        ok: false,
+        error: `MCP server "${serverName}" status: ${conn.state.status}`,
+      });
     }
 
     try {
@@ -252,11 +264,9 @@ export class McpManager {
       const content = result.content;
       if (Array.isArray(content)) {
         const texts = content as Array<{ type?: string; text?: string }>;
-        const filtered = texts
-          .filter((c) => c.type === "text")
-          .map((c) => c.text);
+        const filtered = texts.filter((c) => c.type === 'text').map((c) => c.text);
         if (filtered.length === 1) return filtered[0]!;
-        if (filtered.length > 1) return JSON.stringify({ ok: true, output: filtered.join("\n") });
+        if (filtered.length > 1) return JSON.stringify({ ok: true, output: filtered.join('\n') });
         // Non-text content (images, etc.)
         return JSON.stringify({ ok: true, content });
       }
@@ -281,9 +291,8 @@ export class McpManager {
    * Get the number of connected servers.
    */
   get connectedCount(): number {
-    return Array.from(this.connections.values()).filter(
-      (c) => c.state.status === "connected"
-    ).length;
+    return Array.from(this.connections.values()).filter((c) => c.state.status === 'connected')
+      .length;
   }
 
   /**
@@ -291,7 +300,7 @@ export class McpManager {
    */
   get totalTools(): number {
     return Array.from(this.connections.values()).reduce(
-      (sum, c) => sum + (c.state.status === "connected" ? c.state.toolCount : 0),
+      (sum, c) => sum + (c.state.status === 'connected' ? c.state.toolCount : 0),
       0
     );
   }
@@ -302,9 +311,7 @@ export class McpManager {
   async disconnectAll(): Promise<void> {
     const closePromises: Promise<void>[] = [];
     for (const conn of this.connections.values()) {
-      closePromises.push(
-        conn.client.close().catch(() => {})
-      );
+      closePromises.push(conn.client.close().catch(() => {}));
     }
     await Promise.allSettled(closePromises);
     this.connections.clear();
@@ -316,7 +323,11 @@ export class McpManager {
   async disconnectServer(name: string): Promise<void> {
     const conn = this.connections.get(name);
     if (conn) {
-      try { await conn.client.close(); } catch { /* cleanup best-effort */ }
+      try {
+        await conn.client.close();
+      } catch {
+        /* cleanup best-effort */
+      }
       this.connections.delete(name);
     }
   }
@@ -325,16 +336,16 @@ export class McpManager {
    * Check if a tool name belongs to an MCP server.
    */
   isMcpTool(toolName: string): boolean {
-    return toolName.startsWith("mcp_");
+    return toolName.startsWith('mcp_');
   }
 
   /**
    * Parse an MCP tool name back to server and tool names.
    */
   parseMcpToolName(prefixedName: string): { server: string; tool: string } | null {
-    if (!prefixedName.startsWith("mcp_")) return null;
+    if (!prefixedName.startsWith('mcp_')) return null;
     const rest = prefixedName.slice(4); // remove "mcp_"
-    const underscoreIdx = rest.indexOf("_");
+    const underscoreIdx = rest.indexOf('_');
     if (underscoreIdx === -1) return null;
     return {
       server: rest.slice(0, underscoreIdx),
@@ -346,8 +357,6 @@ export class McpManager {
 /**
  * Create an McpManager from config.
  */
-export function createMcpManager(
-  mcpConfigs?: Record<string, McpServerConfig>
-): McpManager {
+export function createMcpManager(mcpConfigs?: Record<string, McpServerConfig>): McpManager {
   return new McpManager(mcpConfigs);
 }

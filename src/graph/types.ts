@@ -21,7 +21,16 @@ export interface GraphEdge {
   id: string;
   source: string;
   target: string;
-  type: 'imports' | 'exports' | 'calls' | 'uses' | 'extends' | 'implements' | 'depends_on' | 'related_to' | 'part_of';
+  type:
+    | 'imports'
+    | 'exports'
+    | 'calls'
+    | 'uses'
+    | 'extends'
+    | 'implements'
+    | 'depends_on'
+    | 'related_to'
+    | 'part_of';
   weight?: number;
   metadata?: Record<string, unknown>;
   createdAt: number;
@@ -57,7 +66,11 @@ export interface GraphAnalysis {
   density: number;
   communities: GraphCommunity[];
   godNodes: GodNode[];
-  surprisingConnections: Array<{ edge: GraphEdge; sourceCommunity: number; targetCommunity: number }>;
+  surprisingConnections: Array<{
+    edge: GraphEdge;
+    sourceCommunity: number;
+    targetCommunity: number;
+  }>;
   topLanguages: Array<{ language: string; count: number }>;
   topTypes: Array<{ type: string; count: number }>;
 }
