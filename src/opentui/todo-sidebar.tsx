@@ -14,9 +14,9 @@ interface TodoSidebarProps {
 export function TodoSidebar({
   theme,
   todos,
-  onToggle,
-  onDelete,
-  onClose,
+  onToggle: _onToggle,
+  onDelete: _onDelete,
+  onClose: _onClose,
 }: TodoSidebarProps) {
   const visibleTodos = todos.filter((t) => !t.done);
 

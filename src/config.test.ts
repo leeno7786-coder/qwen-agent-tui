@@ -37,7 +37,7 @@ describe("config.ts - Configuration Management", () => {
     });
 
     it("should have baseURL and model for each entry", () => {
-      for (const [key, value] of Object.entries(MODELS)) {
+      for (const [, value] of Object.entries(MODELS)) {
         expect(value.baseURL).toBeDefined();
         expect(value.model).toBeDefined();
       }

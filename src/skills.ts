@@ -31,7 +31,7 @@ const BUILTIN_SKILL_DIR = join(
 function ensureSkillDirs(): void {
   for (const dir of SKILL_DIRS) {
     if (!existsSync(dir)) {
-      try { mkdirSync(dir, { recursive: true }); } catch {}
+      try { mkdirSync(dir, { recursive: true }); } catch { /* dir may already exist */ }
     }
   }
 }
@@ -63,8 +63,8 @@ export function isSkillPathAllowed(sourcePath: string, allowedPaths?: string[]):
   return false;
 }
 
-function parseYamlFrontmatter(text: string): { name?: string; description?: string; triggers?: string[]; [key: string]: any } {
-  const result: { name?: string; description?: string; triggers?: string[]; [key: string]: any } = {};
+function parseYamlFrontmatter(text: string): { name?: string; description?: string; triggers?: string[]; [key: string]: unknown } {
+  const result: { name?: string; description?: string; triggers?: string[]; [key: string]: unknown } = {};
 
   // Normalize line endings (handle both CRLF and LF)
   const normalizedText = text.replace(/\r\n/g, "\n");
@@ -91,7 +91,7 @@ function parseYamlFrontmatter(text: string): { name?: string; description?: stri
       } else {
         // End of block value
         if (currentKey === "description") {
-          result.description = blockValue.map(l => l.replace(/^  /, "")).join("\n").trim();
+          result.description = blockValue.map(l => l.replace(/^ {2}/, "")).join("\n").trim();
         } else if (currentKey === "triggers") {
           result.triggers = blockValue
             .filter(l => l.trim().startsWith("- "))
@@ -125,7 +125,7 @@ function parseYamlFrontmatter(text: string): { name?: string; description?: stri
       if (value.startsWith("[")) {
         try {
           result.triggers = JSON.parse(value.replace(/'/g, '"'));
-        } catch {}
+        } catch { /* not valid JSON, skip inline parse */ }
       } else if (value === "") {
         // Triggers as block list: triggers:\n  - item
         currentKey = "triggers";
@@ -139,7 +139,7 @@ function parseYamlFrontmatter(text: string): { name?: string; description?: stri
   // Handle trailing block value
   if (isBlockValue && currentKey) {
     if (currentKey === "description") {
-      result.description = blockValue.map(l => l.replace(/^  /, "")).join("\n").trim();
+      result.description = blockValue.map(l => l.replace(/^ {2}/, "")).join("\n").trim();
     } else if (currentKey === "triggers") {
       result.triggers = blockValue
         .filter(l => l.trim().startsWith("- "))
@@ -254,7 +254,7 @@ function scanDirForSkills(dir: string): Map<string, Skill> {
         if (skill) map.set(skill.name, skill);
       }
     }
-  } catch {}
+  } catch { /* skill dir not readable */ }
 
   return map;
 }
@@ -393,14 +393,14 @@ export function deleteSkill(name: string): boolean {
       try {
         writeFileSync(skill.sourcePath, ""); // clear it
         return true;
-      } catch {}
+      } catch { /* skill not writable */ }
     }
     const filename = `${skill.name.replace(/[^a-zA-Z0-9_-]/g, "_")}.json`;
     const path = join(dir, filename);
     try {
       writeFileSync(path, "");
       return true;
-    } catch {}
+    } catch { /* skill dir not writable */ }
   }
   return false;
 }
@@ -440,7 +440,7 @@ function loadSkillConfig(): Record<string, boolean> {
 export function saveSkillConfig(config: Record<string, boolean>): void {
   try {
     writeFileSync(SKILL_CONFIG_FILE, JSON.stringify(config, null, 2), "utf-8");
-  } catch {}
+  } catch { /* config file not writable */ }
 }
 
 export function getSkillConfig(): Record<string, boolean> {

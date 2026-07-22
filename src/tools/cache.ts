@@ -5,7 +5,7 @@
 
 import { createHash } from 'crypto';
 import { watch, type FSWatcher, existsSync, statSync, readdirSync } from 'fs';
-import { relative, resolve, dirname } from 'path';
+import { resolve } from 'path';
 import type { Config } from '../types';
 
 /**
@@ -165,8 +165,7 @@ export function extractDependencies(
         }
         break;
 
-      default:
-        // For other tools, try to extract path from common fields
+      default: {
         const pathFields = ['path', 'file', 'filePath', 'directory', 'dir'];
         for (const field of pathFields) {
           if (args[field]) {
@@ -177,6 +176,7 @@ export function extractDependencies(
           }
         }
         break;
+      }
     }
   } catch {
     // Ignore errors in dependency extraction
@@ -402,7 +402,7 @@ export class ToolCacheManager {
     if (this.fileWatchers.has(absPath)) return;
 
     try {
-      const watcher = watch(absPath, (eventType: string) => {
+      const watcher = watch(absPath, (_eventType: string) => {
         this.invalidateByFile(absPath);
       });
       this.fileWatchers.set(absPath, watcher);

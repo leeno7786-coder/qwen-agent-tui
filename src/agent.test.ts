@@ -6,7 +6,6 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "bun:test";
 import { AgentCore } from "./agent";
-import { createSecurityManager } from "./security";
 import type { Config, Message, AgentState } from "./types";
 
 // Default test config - only include properties that exist in Config
@@ -151,7 +150,8 @@ describe("AgentCore", () => {
 
     it("should handle missing workspace", () => {
       const configWithoutWorkspace = { ...defaultConfig, workspace: undefined };
-      expect(() => new AgentCore(configWithoutWorkspace as any)).not.toThrow();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  expect(() => new AgentCore(configWithoutWorkspace as any)).not.toThrow();
     });
   });
 
@@ -195,7 +195,7 @@ describe("AgentCore", () => {
     });
 
     it("should have max background sub-agents limit", () => {
-      expect(agent.maxBackgroundSubAgents).toBe(3);
+      expect(agent.maxBackgroundSubAgents).toBe(4);
     });
 
     it("should return sub-agent snapshot", () => {

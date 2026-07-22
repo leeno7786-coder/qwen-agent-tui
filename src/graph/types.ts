@@ -12,7 +12,7 @@ export interface GraphNode {
   column?: number;
   code?: string;
   language?: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
 }
@@ -23,7 +23,7 @@ export interface GraphEdge {
   target: string;
   type: 'imports' | 'exports' | 'calls' | 'uses' | 'extends' | 'implements' | 'depends_on' | 'related_to' | 'part_of';
   weight?: number;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   createdAt: number;
   updatedAt?: number;
   extraction?: 'ast' | 'inferred' | 'llm';
@@ -73,7 +73,7 @@ export interface GraphData {
 
 export interface GraphQuery {
   type: 'node' | 'edge' | 'path' | 'pattern' | 'semantic';
-  query: string | Record<string, any>;
+  query: string | Record<string, unknown>;
   limit?: number;
   offset?: number;
 }

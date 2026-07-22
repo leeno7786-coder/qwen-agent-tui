@@ -42,7 +42,7 @@ function sanitizeBaseURL(url: string): string {
   try {
     // Remove basic auth (user:password@host) - preserve protocol
     // Match protocol://user:password@ and replace with protocol://
-    let sanitized = url.replace(/(https?:\/\/)[^\/]+:[^@]+@/, '$1');
+    let sanitized = url.replace(/(https?:\/\/)[^/]+:[^@]+@/, '$1');
     
     // Remove API key from query string
     // Match ?key=value or &key=value and replace with just the separator
@@ -82,7 +82,7 @@ function getDefault(): Config {
   return {
     baseURL: "http://127.0.0.1:1234/",
     model: "model-identifier",
-    apiKey: "",
+    apiKey: null,
     maxIterations: 50,
     workspace: process.cwd(),
     // Small model defaults — undefined means auto-detect from model id
@@ -461,6 +461,34 @@ export function validateConfig(cfg: Config): {
   if (cfg.maxBackgroundSubAgents !== undefined) {
     if (cfg.maxBackgroundSubAgents < 1 || cfg.maxBackgroundSubAgents > 10) {
       warnings.push(`maxBackgroundSubAgents should be between 1 and 10 for stability, got ${cfg.maxBackgroundSubAgents}`);
+    }
+  }
+
+  // MCP server configuration validation
+  if (cfg.mcp && typeof cfg.mcp === "object") {
+    for (const [name, serverCfg] of Object.entries(cfg.mcp)) {
+      if (!serverCfg || typeof serverCfg !== "object") {
+        errors.push(`mcp.${name}: must be an object`);
+        continue;
+      }
+      const cfg = serverCfg as unknown as Record<string, unknown>;
+      if (!cfg.type) {
+        errors.push(`mcp.${name}: "type" is required (local or remote)`);
+      } else if (cfg.type === "local") {
+        if (!cfg.command || !Array.isArray(cfg.command) || cfg.command.length === 0) {
+          errors.push(`mcp.${name}: "command" must be a non-empty array for local servers`);
+        }
+      } else if (cfg.type === "remote") {
+        if (!cfg.url || typeof cfg.url !== "string") {
+          errors.push(`mcp.${name}: "url" is required for remote servers`);
+        } else {
+          try { new URL(cfg.url); } catch {
+            errors.push(`mcp.${name}: "url" is not a valid URL: ${cfg.url}`);
+          }
+        }
+      } else {
+        errors.push(`mcp.${name}: unknown type "${cfg.type}", expected "local" or "remote"`);
+      }
     }
   }
 

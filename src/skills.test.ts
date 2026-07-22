@@ -25,7 +25,6 @@ describe("skills.ts - Skill Management", () => {
     });
 
     it("should have skill names", () => {
-      const skills = loadSkills();
       const names = getSkillNames();
       expect(names.length).toBeGreaterThan(0);
     });
@@ -34,6 +33,7 @@ describe("skills.ts - Skill Management", () => {
   describe("matchSkillTriggers", () => {
     it("should match exact triggers", () => {
       const skills = new Map([
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ["test-skill", { name: "test-skill", triggers: ["test-trigger"], content: "test" } as any]
       ]);
       const matched = matchSkillTriggers("test-trigger", skills);
@@ -49,6 +49,7 @@ describe("skills.ts - Skill Management", () => {
 
     it("should match partial triggers", () => {
       const skills = new Map([
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ["test-skill", { name: "test-skill", triggers: ["prefix-test"], content: "test" } as any]
       ]);
       const matched = matchSkillTriggers("prefix-test", skills);
@@ -66,6 +67,7 @@ describe("skills.ts - Skill Management", () => {
   describe("getSkillCommands", () => {
     it("should return array of commands", () => {
       const skills = new Map([
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ["test-skill", { name: "test-skill", triggers: ["trigger1"], content: "test", enabled: true } as any]
       ]);
       const commands = getSkillCommands(skills);
@@ -80,6 +82,7 @@ describe("skills.ts - Skill Management", () => {
 
     it("should exclude disabled skills", () => {
       const skills = new Map([
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ["test-skill", { name: "test-skill", triggers: ["trigger1"], content: "test", enabled: false } as any]
       ]);
       const commands = getSkillCommands(skills);

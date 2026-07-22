@@ -3,7 +3,7 @@
  * Prevents context overflow and manages conversation history.
  */
 
-import { countTokens, estimateModelContextSize, effectiveContextSize } from "../llm";
+import { countTokens, effectiveContextSize } from "../llm";
 import type { Config, Message } from "../types";
 import { getModelCompactionSettings } from "../llm";
 

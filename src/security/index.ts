@@ -5,7 +5,6 @@
 
 import { resolve, relative, isAbsolute } from 'path';
 import { existsSync, statSync } from 'fs';
-import { homedir } from 'os';
 
 /**
  * Security configuration options.
@@ -478,8 +477,8 @@ export class SecurityManager {
     sanitized = sanitized.replace(/eyJ[a-zA-Z0-9\-_]+\.eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+/g, '[JWT_REDACTED]');
 
     // Bearer tokens (check before other auth patterns)
-    sanitized = sanitized.replace(/auth:\s*Bearer\s+[^\s,;\"']+/gi, 'auth: Bearer [REDACTED]');
-    sanitized = sanitized.replace(/bearer\s+[^\s,;\"']+/gi, 'Bearer [REDACTED]');
+    sanitized = sanitized.replace(/auth:\s*Bearer\s+[^\s,;"']+/gi, 'auth: Bearer [REDACTED]');
+    sanitized = sanitized.replace(/bearer\s+[^\s,;"']+/gi, 'Bearer [REDACTED]');
 
     // Passwords and secrets
     sanitized = sanitized.replace(/password[=:]\s*[^\s]+/gi, 'password=[REDACTED]');
@@ -494,9 +493,8 @@ export class SecurityManager {
 
     // AWS credentials
     sanitized = sanitized.replace(/AKIA[0-9A-Z]{16}/g, '[AWS_ACCESS_KEY_REDACTED]');
-    sanitized = sanitized.replace(/[a-zA-Z0-9/+]{40}/g, (match) => {
-      // Only redact if it looks like a secret (not a hash or ID)
-      if (/^[a-zA-Z0-9]{40}$/.test(match) && !/^[0-9a-f]{40}$/i.test(match)) {
+    sanitized = sanitized.replace(/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[a-zA-Z0-9/+]{40}/g, (match) => {
+      if (!/^[0-9a-f]{40}$/i.test(match)) {
         return '[POSSIBLE_SECRET_REDACTED]';
       }
       return match;

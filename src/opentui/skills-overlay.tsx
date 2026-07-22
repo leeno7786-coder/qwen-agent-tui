@@ -46,11 +46,7 @@ export const BUILTIN_COMMANDS: { name: string; description: string }[] = [
   { name: "/exit", description: "Quit (F10)" },
 ];
 
-function findFirstActionIndex(items: ItemType[]): number {
-  return items.findIndex(item => item.type === "action");
-}
-
-export function SkillsOverlay({ theme, onClose, onSkillSelect, skills: propSkills, onSkillsChange }: SkillsOverlayProps) {
+export function SkillsOverlay({ theme, onClose, onSkillSelect, skills: propSkills, onSkillsChange: _onSkillsChange }: SkillsOverlayProps) {
   const [selected, setSelected] = useState(0);
   const scrollRef = useRef<ScrollBoxRenderable>(null);
   const [mode, setMode] = useState<"list" | "create" | "detail" | "commands" | "install">("list");
@@ -201,13 +197,13 @@ export function SkillsOverlay({ theme, onClose, onSkillSelect, skills: propSkill
       if (!skill.tools) skill.tools = [];
       saveSkill(skill);
       setMessage(`Installed skill: ${skill.name}`);
-      if (typeof (globalThis as any).__refreshSkills === 'function') {
-        (globalThis as any).__refreshSkills();
+      if (typeof (globalThis as Record<string, unknown>).__refreshSkills === 'function') {
+        ((globalThis as Record<string, unknown>).__refreshSkills as (() => void) | undefined)?.();
       }
       setMode("list");
       setInstallUrl("");
-    } catch (e: any) {
-      setError(`Install failed: ${e.message}`);
+    } catch (e: unknown) {
+      setError(`Install failed: ${(e as Error).message}`);
     } finally {
       setInstalling(false);
     }
@@ -260,11 +256,11 @@ export function SkillsOverlay({ theme, onClose, onSkillSelect, skills: propSkill
       setNewSkillDesc("");
       setNewSkillPrompt("");
       // Notify main app to refresh skills
-      if (typeof (globalThis as any).__refreshSkills === 'function') {
-        (globalThis as any).__refreshSkills();
+      if (typeof (globalThis as Record<string, unknown>).__refreshSkills === 'function') {
+        ((globalThis as Record<string, unknown>).__refreshSkills as (() => void) | undefined)?.();
       }
-    } catch (e: any) {
-      setError(`Failed to create skill: ${e.message}`);
+    } catch (e: unknown) {
+      setError(`Failed to create skill: ${(e as Error).message}`);
     } finally {
       setCreating(false);
     }
@@ -277,8 +273,9 @@ export function SkillsOverlay({ theme, onClose, onSkillSelect, skills: propSkill
     setMode("list");
     setSelectedSkill(null);
     // Notify main app to refresh skills
-    if (typeof (globalThis as any).__refreshSkills === 'function') {
-      (globalThis as any).__refreshSkills();
+    const refreshSkills = globalThis as { __refreshSkills?: () => void };
+    if (typeof refreshSkills.__refreshSkills === 'function') {
+      refreshSkills.__refreshSkills();
     }
   }, [selectedSkill]);
 
@@ -286,9 +283,9 @@ export function SkillsOverlay({ theme, onClose, onSkillSelect, skills: propSkill
     if (!selectedSkill) return;
     deleteSkill(selectedSkill.name);
     setMode("list");
-    // Notify main app to refresh skills
-    if (typeof (globalThis as any).__refreshSkills === 'function') {
-      (globalThis as any).__refreshSkills();
+    const refreshSkills = globalThis as { __refreshSkills?: () => void };
+    if (typeof refreshSkills.__refreshSkills === 'function') {
+      refreshSkills.__refreshSkills();
     }
   }, [selectedSkill]);
 

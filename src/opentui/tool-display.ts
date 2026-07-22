@@ -9,7 +9,7 @@ export interface ToolDisplayBlock {
 }
 
 
-function parseJSON(value: string): any | undefined {
+function parseJSON(value: string): Record<string, unknown> | undefined {
   try {
     return JSON.parse(value);
   } catch {
@@ -53,25 +53,25 @@ const ACTION_LABELS: Record<string, string> = {
   linear_graphql: "GraphQL",
 };
 
-function actionLabel(toolName: string, result?: any): string {
+function actionLabel(toolName: string, result?: Record<string, unknown>): string {
   if (toolName === "write_file") {
     if (result?.action === "update") return "Update";
     if (result?.action === "write") return "Write";
-    if ((result?.removed ?? 0) > 0) return "Update";
+    if ((result?.removed as number ?? 0) > 0) return "Update";
   }
   return ACTION_LABELS[toolName] || toolName.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function targetFromArgs(toolName: string, args: any, result?: any): string {
+function targetFromArgs(toolName: string, args: Record<string, unknown>, result?: Record<string, unknown>): string {
   if (toolName === "execute_command" || toolName === "run_command") {
-    return String(args?.command || result?.command || "").trim() || "(command)";
+    return String((args?.command ?? result?.command ?? "") as string).trim() || "(command)";
   }
 
   if (toolName === "manage_todos") {
     return [args?.action, args?.text || args?.id].filter(Boolean).join(": ") || "todo";
   }
   if (toolName === "grep_search" || toolName === "search_files") {
-    const path = normalizePath(args?.path);
+    const path = normalizePath(args?.path as string | undefined);
     const pattern = String(args?.pattern || args?.query || "");
     return `${path}: "${pattern}"`;
   }
@@ -79,12 +79,12 @@ function targetFromArgs(toolName: string, args: any, result?: any): string {
     return String(args?.message || result?.message || "").slice(0, 120) || "commit";
   }
   if (toolName === "batch_read_files" && Array.isArray(args?.paths)) {
-    return args.paths.map(normalizePath).join(", ");
+    return args.paths.map(normalizePath as (p: unknown) => string).join(", ");
   }
-  return normalizePath(args?.path || result?.path || args?.command || ".");
+  return normalizePath((args?.path || result?.path || args?.command || ".") as string);
 }
 
-function firstOutputLine(data: any): string {
+function firstOutputLine(data: Record<string, unknown>): string {
   const stdout = typeof data?.stdout === "string" ? data.stdout.trim() : "";
   const stderr = typeof data?.stderr === "string" ? data.stderr.trim() : "";
   const error = typeof data?.error === "string" ? data.error.trim() : "";
@@ -94,7 +94,7 @@ function firstOutputLine(data: any): string {
   return line.length > 140 ? line.slice(0, 139) + "…" : line;
 }
 
-function previewLinesFromOutput(data: any, limit = 8): string[] | undefined {
+function previewLinesFromOutput(data: Record<string, unknown>, limit = 8): string[] | undefined {
   const stdout = typeof data?.stdout === "string" ? data.stdout : "";
   const stderr = typeof data?.stderr === "string" ? data.stderr : "";
   const text = [stdout, stderr].filter(Boolean).join("\n").trim();
@@ -112,17 +112,17 @@ function formatLineChangeSummary(added: number, removed: number): string {
   return parts.join(" ");
 }
 
-export function buildSummary(toolName: string, args: any, result: any, ok: boolean): string {
+export function buildSummary(toolName: string, args: Record<string, unknown>, result: Record<string, unknown>, ok: boolean): string {
   if (!ok) {
     return String(result?.error || result?.message || "failed").slice(0, 160);
   }
 
   if (typeof result?.added === "number" || typeof result?.removed === "number") {
-    return formatLineChangeSummary(result.added ?? 0, result.removed ?? 0);
+    return formatLineChangeSummary(result.added as number ?? 0, result.removed as number ?? 0);
   }
 
   if (toolName === "read_file") {
-    if (result?.total_lines != null) return `${result.total_lines} lines`;
+    if (result?.total_lines != null) return `${result.total_lines as number} lines`;
     if (result?.content) {
       const lines = String(result.content).split("\n").length;
       return `${lines} line${lines === 1 ? "" : "s"}`;
@@ -130,7 +130,7 @@ export function buildSummary(toolName: string, args: any, result: any, ok: boole
   }
 
   if (toolName === "grep_search" || toolName === "search_files") {
-    const count = result?.matches ?? result?.results?.length;
+    const count = (result?.matches ?? (result?.results as unknown[] | undefined)?.length) as number | undefined;
     if (count != null) return `${count} match${count === 1 ? "" : "es"}`;
   }
 
@@ -139,17 +139,17 @@ export function buildSummary(toolName: string, args: any, result: any, ok: boole
   }
 
   if (toolName === "git_diff" && result?.diff === "") {
-    return result?.message || "clean working tree";
+    return (result?.message as string) || "clean working tree";
   }
 
   if (result?.stdout != null || result?.stderr != null || result?.code != null) {
-    const rc = result?.code ?? result?.returncode;
+    const rc = (result?.code ?? result?.returncode) as number | undefined;
     if (rc != null && rc !== 0) return `exit ${rc}`;
     return firstOutputLine(result);
   }
 
   if (result?.path && toolName === "write_file") {
-    return formatLineChangeSummary(result.added ?? 0, result.removed ?? 0);
+    return formatLineChangeSummary(result.added as number ?? 0, result.removed as number ?? 0);
   }
 
   return "ok";
@@ -163,15 +163,14 @@ export function buildToolDisplayBlock(
 ): ToolDisplayBlock {
   const args = parseJSON(argsRaw) ?? {};
   const result = parseJSON(resultRaw);
-  const ok = result ? result.ok !== false && result.success !== false : true;
+  const ok = result ? (result.ok !== false && result.success !== false) as boolean : true;
 
-  // Remote sub-agent result payload (emitted when a sub-agent finishes).
   if (result?.subagent) {
     const block: ToolDisplayBlock = {
       action: "SubAgent",
       target: String(result.subagent),
       ok,
-      summary: result?.toolCalls != null ? `${result.toolCalls} tool calls` : ok ? "done" : "failed",
+      summary: result?.toolCalls != null ? `${String(result.toolCalls)} tool calls` : ok ? "done" : "failed",
       durationMs,
     };
     if (result?.output) {
@@ -184,14 +183,13 @@ export function buildToolDisplayBlock(
     return block;
   }
 
-  // In-flight sub-agent spinner (toolName like "sub:qwen-remote-1").
   if (toolName.startsWith("sub:")) {
-    const model = args?.model ? ` · ${args.model}` : "";
+    const model = args?.model ? ` · ${args.model as string}` : "";
     return {
       action: "SubAgent",
       target: `${toolName.slice(4)}${model}`,
       ok: true,
-      summary: `running ${args?.tool ?? "tool"}…`,
+      summary: `running ${(args?.tool as string) ?? "tool"}…`,
       durationMs,
     };
   }
@@ -200,7 +198,7 @@ export function buildToolDisplayBlock(
     action: actionLabel(toolName, result),
     target: targetFromArgs(toolName, args, result),
     ok,
-    summary: buildSummary(toolName, args, result ?? {}, ok),
+    summary: buildSummary(toolName, args, result ?? ({} as Record<string, unknown>), ok),
     durationMs,
   };
 
@@ -213,7 +211,7 @@ export function buildToolDisplayBlock(
   }
 
   if (!block.diff) {
-    block.previewLines = previewLinesFromOutput(result);
+    block.previewLines = previewLinesFromOutput(result ?? ({} as Record<string, unknown>));
   }
 
 

@@ -751,7 +751,7 @@ export function sanitizeBaseURL(url: string): string {
   try {
     // Remove basic auth (user:password@host) - preserve protocol
     // Match protocol://user:password@ and replace with protocol://
-    let sanitized = url.replace(/(https?:\/\/)[^\/]+:[^@]+@/, '$1');
+    let sanitized = url.replace(/(https?:\/\/)[^/]+:[^@]+@/, '$1');
     
     // Remove API key from query string
     // Match ?key=value or &key=value and replace with just the separator
@@ -896,23 +896,25 @@ export async function fetchLocalModels(baseURL: string): Promise<ModelInfo[]> {
       throw new Error(`Failed to fetch models: ${response.statusText}`);
     }
 
-    const data: any = await response.json();
+    const body: unknown = await response.json();
+
+    const modelResponse = body as { data?: Array<Record<string, unknown>> } | null;
     
     // Handle OpenAI format: { data: [{ id: string, ... }] }
-    if (data?.data && Array.isArray(data.data)) {
-      return data.data.map((m: any) => ({
-        id: m.id,
-        name: m.id || m.name,
-        description: m.description,
+    if (modelResponse?.data && Array.isArray(modelResponse.data)) {
+      return modelResponse.data.map((m: Record<string, unknown>) => ({
+        id: m.id as string,
+        name: (m.id as string) || (m.name as string),
+        description: m.description as string | undefined,
       }));
     }
     
     // Handle simple array format
-    if (Array.isArray(data)) {
-      return data.map((m: any) => ({
-        id: m.id || m.name,
-        name: m.name || m.id,
-        description: m.description,
+    if (Array.isArray(body)) {
+      return body.map((m: Record<string, unknown>) => ({
+        id: (m.id as string) || (m.name as string),
+        name: (m.name as string) || (m.id as string),
+        description: m.description as string | undefined,
       }));
     }
     
@@ -950,7 +952,7 @@ export async function checkRuntimeHealth(baseURL: string): Promise<boolean> {
     });
 
     return response.ok;
-  } catch (error) {
+  } catch {
     return false;
   }
 }
@@ -983,23 +985,26 @@ export async function fetchOpenRouterModels(apiKey?: string): Promise<ModelInfo[
       return [];
     }
 
-    const data: any = await response.json();
+    const body: unknown = await response.json();
+
+    const modelResponse = body as { data?: Array<Record<string, unknown>> } | null;
     
     // OpenRouter API returns { data: [...] }
-    if (data?.data && Array.isArray(data.data)) {
-      return data.data.map((model: any) => ({
-        id: model.id,
-        name: model.name || model.id,
-        description: model.description || "",
-        contextLength: model.context_length,
-        maxContextLength: model.context_length,
-        // Include pricing info if available
-        ...(model.pricing && {
-          pricing: {
-            prompt: model.pricing.prompt,
-            completion: model.pricing.completion,
-          },
-        }),
+    if (modelResponse?.data && Array.isArray(modelResponse.data)) {
+      return modelResponse.data.map((model: Record<string, unknown>) => ({
+        id: model.id as string,
+        name: (model.name as string) || (model.id as string),
+        description: (model.description as string) || "",
+        contextLength: model.context_length as number | undefined,
+        maxContextLength: model.context_length as number | undefined,
+        ...(model.pricing
+          ? {
+              pricing: {
+                prompt: (model.pricing as Record<string, unknown>).prompt as number,
+                completion: (model.pricing as Record<string, unknown>).completion as number,
+              },
+            }
+          : {}),
       }));
     }
     

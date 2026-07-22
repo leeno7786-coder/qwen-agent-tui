@@ -1,4 +1,4 @@
-import { exec, execSync, spawn, spawnSync, type ChildProcess } from "child_process";
+import { spawn, spawnSync, type ChildProcess } from "child_process";
 import * as MemoryGraphTools from "../graph/tools";
 import {
   existsSync,
@@ -10,12 +10,15 @@ import {
   realpathSync
 } from "fs";
 import { basename, dirname, relative, resolve } from "path";
-import { homedir, tmpdir } from "os";
+
 import type { Config } from "../types";
-import { isSmallModelFromConfig, modelIdsMatch } from "../model-runtime";
+import { isSmallModelFromConfig } from "../model-runtime";
+
+// eslint-disable-next-line no-control-regex
+const NULL_BYTE_RE = /\u0000/g;
+const REPLACEMENT_CHAR_RE = /[\uFFFD]/g;
 import { fileChangeDiff } from "../lib/file-diff";
-import { ToolCacheManager, createToolCacheManager, globalToolCache } from "./cache";
-import type { SecurityManager } from "../security";
+
 
 /** A tool that the agent can invoke. */
 export interface Tool {
@@ -26,9 +29,11 @@ export interface Tool {
   /** JSON Schema describing expected arguments. */
   parameters: object;
   /** Execute the tool and return a JSON string. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   execute: (args: any, workspace: string, cfg?: Config) => string;
   /** Optional async execution (e.g. sub-agent LLM loop). */
   executeAsync?: (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     args: any,
     workspace: string,
     cfg?: Config,
@@ -278,7 +283,7 @@ const SMALL_TOOL_DESCRIPTIONS: Record<string, string> = {
  * Validate and resolve a path relative to the workspace.
  * Throws if the path attempts to escape the workspace boundary.
  */
-function safe(p: string, ws: string, cfg?: Config): string {
+function safe(p: string, ws: string, _cfg?: Config): string {
   const resolved = resolve(ws, p || ".");
   
   // Check if the resolved path is within the workspace
@@ -297,7 +302,7 @@ function safe(p: string, ws: string, cfg?: Config): string {
     }
     
     return resolved;
-  } catch (e) {
+  } catch {
     // If realpath fails, fall back to string comparison with the original paths
     const normResolved = resolved.replace(/\\/g, '/');
     const normWorkspace = ws.replace(/\\/g, '/');
@@ -345,8 +350,8 @@ function walk(root: string, ws: string, cfg: Config | undefined, visit: (file: s
 }
 
 function formatExecResult(ok: boolean, out: string, err?: string, code?: number | null): string {
-  const cleanOut = (out || "").replace(/\u0000/g, "").replace(/[\uFFFD]/g, "");
-  const cleanErr = (err || "").replace(/\u0000/g, "").replace(/[\uFFFD]/g, "");
+  const cleanOut = (out || "").replace(NULL_BYTE_RE, "").replace(REPLACEMENT_CHAR_RE, "");
+  const cleanErr = (err || "").replace(NULL_BYTE_RE, "").replace(REPLACEMENT_CHAR_RE, "");
   const truncatedOut = cleanOut.length > 30000
     ? cleanOut.slice(0, 30000) + `\n... [truncated, total output: ${cleanOut.length} characters]`
     : cleanOut;
@@ -375,8 +380,8 @@ function execCmd(cmd: string, ws: string, timeoutSeconds = 60): string {
     const env = getSanitizedEnv();
     
     // Helper to convert buffer or string to UTF-8 string
-    const toString = (data: any): string => {
-      if (Buffer.isBuffer(data)) return data.toString('utf-8');
+    const toString = (data: unknown): string => {
+      if (Buffer.isBuffer(data)) return (data as Buffer).toString('utf-8');
       if (typeof data === 'string') return data;
       return '';
     };
@@ -418,8 +423,8 @@ function execCmd(cmd: string, ws: string, timeoutSeconds = 60): string {
       return formatExecResult(false, toString(result.stdout), toString(result.stderr) || result.error.message, result.status ?? null);
     }
     return formatExecResult(true, toString(result.stdout));
-  } catch (e: any) {
-    return formatExecResult(false, "", e.message, e.status ?? null);
+  } catch (e: unknown) {
+    return formatExecResult(false, "", (e as { message?: string }).message, (e as { status?: number | null }).status ?? null);
   }
 }
 
@@ -470,8 +475,8 @@ function execCmdAsync(cmd: string, ws: string, timeoutSeconds = 60, signal?: Abo
           }
         );
       }
-    } catch (e: any) {
-      resolvePromise(formatExecResult(false, "", e.message, null));
+    } catch (e: unknown) {
+      resolvePromise(formatExecResult(false, "", (e as { message?: string }).message, null));
       return;
     }
     
@@ -506,7 +511,7 @@ function execCmdAsync(cmd: string, ws: string, timeoutSeconds = 60, signal?: Abo
     // Clear timeout when child closes or errors
     const clearTimeoutFn = () => clearTimeout(timeoutId);
     
-    child.on('close', (code, signal) => {
+    child.on('close', (code, _signal) => {
       clearTimeoutFn();
       if (!resolved) {
         resolved = true;
@@ -580,13 +585,13 @@ function execGit(args: string[], ws: string, opts: { timeout?: number; maxBuffer
     );
     
     // Convert buffers to strings
-    const toString = (data: any): string => {
-      if (Buffer.isBuffer(data)) return data.toString('utf-8');
+    const toString = (data: unknown): string => {
+      if (Buffer.isBuffer(data)) return (data as Buffer).toString('utf-8');
       if (typeof data === 'string') return data;
       return '';
     };
-    const stdout = toString(result.stdout).replace(/\u0000/g, "");
-    const stderr = toString(result.stderr).replace(/\u0000/g, "");
+    const stdout = toString(result.stdout).replace(NULL_BYTE_RE, "");
+    const stderr = toString(result.stderr).replace(NULL_BYTE_RE, "");
     
     return {
       ok: result.status === 0,
@@ -594,10 +599,11 @@ function execGit(args: string[], ws: string, opts: { timeout?: number; maxBuffer
       stderr,
       code: result.status ?? null
     };
-  } catch (e: any) {
-    const stdout = (e.stdout || "").replace(/\u0000/g, "");
-    const stderr = (e.stderr || "").replace(/\u0000/g, "");
-    return { ok: false, stdout, stderr: stderr || e.message, code: e.status ?? null };
+  } catch (e: unknown) {
+    const err = e as { stdout?: string; stderr?: string; message?: string; status?: number | null };
+    const stdout = (err.stdout || "").replace(NULL_BYTE_RE, "");
+    const stderr = (err.stderr || "").replace(NULL_BYTE_RE, "");
+    return { ok: false, stdout, stderr: stderr || err.message || '', code: err.status ?? null };
   }
 }
 
@@ -620,8 +626,8 @@ export const tools: Tool[] = [
           return JSON.stringify({ ok: false, error: `Directory not found or not a directory: ${args.path}` });
         }
         return JSON.stringify({ ok: true, workspace: next, message: `Successfully changed active workspace to ${next}` });
-      } catch (e: any) {
-        return JSON.stringify({ ok: false, error: e.message });
+      } catch (e: unknown) {
+      return JSON.stringify({ ok: false, error: (e as { message?: string }).message });
       }
     }
   },
@@ -659,13 +665,13 @@ export const tools: Tool[] = [
               truncated: sliced.truncated,
               originalLength: sliced.originalLength
             };
-          } catch (e: any) {
-            results[rawPath] = { ok: false, error: e.message };
+          } catch (e: unknown) {
+            results[rawPath] = { ok: false, error: (e as { message?: string }).message };
           }
         }
         return JSON.stringify({ ok: true, results });
-      } catch (e: any) {
-        return JSON.stringify({ ok: false, error: e.message });
+      } catch (e: unknown) {
+        return JSON.stringify({ ok: false, error: (e as { message?: string }).message });
       }
     }
   },
@@ -710,7 +716,7 @@ export const tools: Tool[] = [
       const isSmall = checkSmallModel(cfg);
       const defaultLines = isSmall ? SMALL_MODEL_READ_LIMIT : DEFAULT_READ_LIMIT;
       const startLine = Math.max(1, Number(args.start_line || 1));
-      let endLine = args.end_line ? Number(args.end_line) : startLine + defaultLines - 1;
+      const endLine = args.end_line ? Number(args.end_line) : startLine + defaultLines - 1;
       const limit = Math.max(1, Math.min(endLine - startLine + 1, 2000));
       const offset = startLine - 1;
       const sliced = lines.slice(offset, offset + limit);
@@ -734,8 +740,9 @@ export const tools: Tool[] = [
         end_line: startLine + sliced.length - 1,
         line_count: lines.length,
       });
-    } catch (e: any) {
-      if (e.code === 'ENOENT') {
+    } catch (e: unknown) {
+      const err = e as { code?: string; message?: string };
+      if (err.code === 'ENOENT') {
         try {
           const dir = dirname(safe(args.path, ws, cfg));
           const dirFiles = readdirSync(dir).filter(f => {
@@ -753,7 +760,7 @@ export const tools: Tool[] = [
           return JSON.stringify({ ok: false, error: `File not found: ${rel(safe(args.path, ws, cfg), ws)}. Parent directory does not exist.` });
         }
       }
-      return JSON.stringify({ ok: false, error: e.message });
+      return JSON.stringify({ ok: false, error: err.message || 'Unknown error' });
     }
   },
 },
@@ -796,7 +803,7 @@ export const tools: Tool[] = [
         diff,
         bytes: Buffer.byteLength(newText),
       });
-    } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
+    } catch (e: unknown) { return JSON.stringify({ ok: false, error: (e as { message?: string }).message }); }
   },
 },
   {
@@ -886,7 +893,7 @@ export const tools: Tool[] = [
     const relPath = rel(p, ws);
     const { added, removed, diff } = fileChangeDiff(relPath, text, next);
     return JSON.stringify({ ok: true, path: relPath, action: "update", added, removed, diff, replacements: args.replace_all ? text.split(oldText).length - 1 : 1 });
-  } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
+  } catch (e: unknown) { return JSON.stringify({ ok: false, error: (e as { message?: string }).message }); }
 },
 },
   {
@@ -958,7 +965,7 @@ export const tools: Tool[] = [
       lines_removed: Math.min(endLine, lines.length) - startLine + 1,
       lines_added: newText ? newText.split("\n").length : 0,
     });
-  } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
+  } catch (e: unknown) { return JSON.stringify({ ok: false, error: (e as { message?: string }).message }); }
 },
 },
 
@@ -976,7 +983,7 @@ export const tools: Tool[] = [
         return { name: e.name, type: e.isDirectory() ? "dir" : e.isFile() ? "file" : "other", size: st.size };
       });
       return JSON.stringify({ ok: true, path: rel(p, ws), entries });
-    } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
+    } catch (e: unknown) { return JSON.stringify({ ok: false, error: (e as { message?: string }).message }); }
   },
 },
 {
@@ -1051,7 +1058,7 @@ export const tools: Tool[] = [
           }
           
           return result;
-        } catch (err) {
+        } catch {
           // If we can't read a directory, just return empty result
           return "";
         }
@@ -1077,8 +1084,8 @@ export const tools: Tool[] = [
         small_model_optimized: false,
         note: "Large model mode: Tree structure shown in markdown format with directory and file information."
       });
-    } catch (e: any) {
-      return JSON.stringify({ ok: false, error: e.message });
+      } catch (e: unknown) {
+        return JSON.stringify({ ok: false, error: (e as { message?: string }).message });
     }
   }
 },
@@ -1092,7 +1099,7 @@ export const tools: Tool[] = [
       if (!existsSync(p)) return JSON.stringify({ ok: true, exists: false, path: args.path });
       const st = statSync(p);
       return JSON.stringify({ ok: true, exists: true, path: rel(p, ws), type: st.isDirectory() ? "dir" : st.isFile() ? "file" : "other", size: st.size, modified: st.mtime.toISOString() });
-    } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
+    } catch (e: unknown) { return JSON.stringify({ ok: false, error: (e as { message?: string }).message }); }
   },
 },
 
@@ -1150,7 +1157,7 @@ export const tools: Tool[] = [
         });
       }
       return JSON.stringify({ ok: true, results, context_lines: ctxLines, truncated: results.length >= maxResults });
-    } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
+    } catch (e: unknown) { return JSON.stringify({ ok: false, error: (e as { message?: string }).message }); }
   },
 },
 {
@@ -1181,7 +1188,7 @@ export const tools: Tool[] = [
         return results.length < maxResults;
       }, 0, Number(args.max_depth || (isSmall ? 5 : 10)));
       return JSON.stringify({ ok: true, results, truncated: results.length >= maxResults, small_model_optimized: isSmall });
-    } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
+    } catch (e: unknown) { return JSON.stringify({ ok: false, error: (e as { message?: string }).message }); }
   },
 },
 {
@@ -1254,7 +1261,7 @@ export const tools: Tool[] = [
         }
       });
       return JSON.stringify({ ok: true, results, truncated: results.length >= maxResults, small_model_optimized: isSmall });
-    } catch (e: any) { return JSON.stringify({ ok: false, error: e.message }); }
+    } catch (e: unknown) { return JSON.stringify({ ok: false, error: (e as { message?: string }).message }); }
   },
 },
 
@@ -1432,7 +1439,7 @@ export const tools: Tool[] = [
     try {
       await MemoryGraphTools.build_memory_graph({ workspace: ws });
       return JSON.stringify(await MemoryGraphTools.query_memory_graph({ workspace: ws, query: args.query }));
-    } catch (e: any) { return JSON.stringify({ error: e.message }); }
+    } catch (e: unknown) { return JSON.stringify({ error: (e as { message?: string }).message }); }
   },
 },
 {
@@ -1555,8 +1562,9 @@ export const tools: Tool[] = [
       }
       const result = await exploreWithSubAgent(cfg!, pool, args.endpoint, await enrichTaskWithContext(task, cfg!, args.focus_path), signal, hooks);
       return formatSubAgentResults([result]);
-    } catch (e: any) {
-      return JSON.stringify({ ok: false, error: e?.message || String(e) });
+    } catch (e: unknown) {
+      const err = e as { message?: string } | undefined;
+      return JSON.stringify({ ok: false, error: err?.message || String(e) });
     }
   },
 },
@@ -1737,4 +1745,18 @@ export function groupToolsForParallelExecution(
   });
 
   return { parallel, sequential };
+}
+
+let externalTools: Tool[] = [];
+
+export function registerExternalTools(tools: Tool[]): void {
+  externalTools = tools;
+}
+
+export function getAllTools(): Tool[] {
+  return [...tools, ...externalTools];
+}
+
+export function findTool(name: string): Tool | undefined {
+  return getAllTools().find((t) => t.name === name);
 }

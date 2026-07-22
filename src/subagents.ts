@@ -11,13 +11,13 @@
  * tool result it can synthesise.
  */
 
-import { createClient, chat, streamChat } from "./llm";
+import { createClient, streamChat } from "./llm";
 import type { ChatMessage } from "./llm";
-import { tools, toOpenAI, type Tool, type ToolExecutionHooks, type SubAgentProgressEvent } from "./tools";
+import { tools, toOpenAI, findTool, type Tool, type ToolExecutionHooks, type SubAgentProgressEvent } from "./tools";
 import { createSecurityManager, type SecurityManager } from "./security";
 import { createToolCacheManager, type ToolCacheManager } from "./tools/cache";
 import { fetchLMStudioModels } from "./model-runtime";
-import { access, readdir, stat } from "fs/promises";
+import { access, readdir } from "fs/promises";
 import { resolve, join, normalize } from "path";
 import type {
   Config,
@@ -46,45 +46,84 @@ export interface SubAgentResult {
   toolCalls: number;
 }
 
-const SUBAGENT_SYSTEM_PROMPT = `You are a sub-agent worker running on a small remote model with a 256k context window, assisting the main coding agent.
-You have a curated READ-ONLY exploration tool set: read_file, batch_read_files, list_dir, map_project_tree, find_files, stat_path, grep_search, search_and_view, git_status, git_diff.
+const SUBAGENT_SYSTEM_PROMPT = `You are a sub-agent worker assisting the main coding agent.
+You have a curated READ-ONLY tool set: read_file, batch_read_files, list_dir, map_project_tree, find_files, stat_path, grep_search, search_and_view.
 
-CRITICAL RULES — follow exactly:
-- 12-ROUND BUDGET & MANDATORY WRAP-UP: You are granted up to 12 tool rounds per task and a 256k context window to ingest relevant files. Before your final turn (turn 11-12), you are ORDERED to STOP calling tools and immediately summarize your findings for the main agent.
-- Use ONLY the tools listed above. There is NO execute_command / shell. Never try to run bash, grep, rg, cat, find, or any terminal command.
-- PATH HANDLING: Use exact relative paths from the workspace root (e.g. "src/agent.ts" or "package.json"). Check list_dir or map_project_tree if unsure.
-- DO NOT REPEAT TOOL CALLS: Never call read_file on a file you already read, and never execute the exact same search twice. Refer to previous outputs in conversation history.
-- FILE INGESTION: Read the relevant files assigned in your prompt. Ingest enough context to give an accurate report, then output your summary before turn 12.
-- IF A SEARCH HAS 0 MATCHES: Do not repeat empty searches with minor text tweaks. Move on or write your final report based on what you have already inspected.
-- Keep your final answer detailed and structured under ~1500 words. Lead with clear findings, line numbers, and actionable recommendations for the main agent.
-- Return findings as plain text / markdown. No tool-call syntax in the final answer.`;
+## YOUR WORKFLOW
+
+1. You have a specific question to answer about a codebase.
+2. The FILE TREE is already provided in your context — DO NOT call list_dir, map_project_tree, or stat_path. Pick the relevant file paths directly from the tree.
+3. Use batch_read_files to read MULTIPLE files in one call. You have a large context window — read entire files.
+4. After reading the key files, write your structured report and STOP.
+
+## RULES
+
+- DO NOT call list_dir, map_project_tree, stat_path, or find_files — the file tree is already in your context.
+- BATCH YOUR READS: call batch_read_files ONCE with all paths, not read_file one at a time.
+- NEVER call read_file on the same file twice.
+- NEVER run the same grep_search twice with minor tweaks. Move on.
+- Use EXACT relative paths from the file tree (e.g. "src/agent.ts").
+- No shell commands. No git. No writes.
+
+## YOUR REPORT (required)
+
+- **Task**: What you were asked to investigate
+- **Key Findings**: Bullet points with file paths and line numbers
+- **Issues**: Problems, bugs, or concerns (if unknown)
+- **Recommendations**: Actionable next steps
+
+Make it specific. File paths and line numbers are critical.`;
 
 /**
- * Build a compact shared context block for a sub-agent: the absolute workspace
- * root and a flat top-level file/dir listing. The main agent is expected to
- * gather richer context (via its own tools) and feed it into the prompt; this
- * guarantees every sub-agent at least knows the REAL workspace path so it does
- * not guess (e.g. "G:\workspace") and send bad paths to list_dir/read_file.
+ * Build a shared context block for a sub-agent: the absolute workspace root
+ * and a recursive file tree so they can skip list_dir entirely and go
+ * straight to batch_read_files with the correct paths.
  */
 export async function buildSubAgentContext(cfg: Config): Promise<string> {
   const ws = cfg.workspace || process.cwd();
   const lines: string[] = [];
   lines.push(`WORKSPACE ROOT (absolute): ${ws}`);
-  lines.push(`You MUST use paths relative to or under that root. Never invent drive letters or other roots.`);
-  try {
-    const entries = (await readdir(ws, { withFileTypes: true }))
-      .filter((e) => !e.name.startsWith(".") && e.name !== "node_modules" && e.name !== "dist")
-      .sort((a, b) => {
-        if (a.isDirectory() && !b.isDirectory()) return -1;
-        if (!a.isDirectory() && b.isDirectory()) return 1;
-        return a.name.localeCompare(b.name);
-      })
-      .slice(0, 40)
-      .map((e) => (e.isDirectory() ? `${e.name}/` : e.name));
-    lines.push(`Top-level entries: ${entries.join(", ")}`);
-  } catch {
-    /* ignore — main agent should supply context if this fails */
+  lines.push(`Use paths RELATIVE to the workspace root. Example: "src/agent.ts" not "G:\\project\\src\\agent.ts".`);
+  lines.push(`DO NOT call list_dir, git_status, or stat_path — the file tree is provided below. Go straight to batch_read_files.`);
+
+  const SKIP = new Set(["node_modules", "dist", ".git", "__pycache__", ".next", ".cache", "bun.lock", "skills", "prerelease", "dist-opentui"]);
+  const files: string[] = [];
+  const MAX_FILES = 150;
+
+  async function walk(dir: string, prefix: string, depth: number): Promise<void> {
+    if (depth > 3 || files.length >= MAX_FILES) return;
+    try {
+      const entries = (await readdir(dir, { withFileTypes: true }))
+        .filter((e) => !SKIP.has(e.name) && !e.name.startsWith("."))
+        .sort((a, b) => {
+          if (a.isDirectory() && !b.isDirectory()) return -1;
+          if (!a.isDirectory() && b.isDirectory()) return 1;
+          return a.name.localeCompare(b.name);
+        });
+      for (const e of entries) {
+        if (files.length >= MAX_FILES) break;
+        const rel = prefix ? `${prefix}/${e.name}` : e.name;
+        if (e.isDirectory()) {
+          files.push(`${rel}/`);
+          await walk(join(dir, e.name), rel, depth + 1);
+        } else {
+          files.push(rel);
+        }
+      }
+    } catch { /* permission denied or similar */ }
   }
+
+  try {
+    await walk(ws, "", 0);
+  } catch { /* ignore */ }
+
+  if (files.length > 0) {
+    lines.push(`\nFILE TREE (${files.length} files):`);
+    lines.push(files.join("\n"));
+  } else {
+    lines.push(`\n(could not enumerate files — use list_dir if needed)`);
+  }
+
   return lines.join("\n");
 }
 
@@ -106,10 +145,9 @@ function buildWorkerContext(
     apiKey: endpoint.apiKey ?? "",
     maxTokens: base.subagents?.maxTokens ?? base.maxTokens ?? 1500,
     temperature: base.subagents?.temperature ?? base.temperature ?? 0.3,
-    // Small 2B models tend to over-call tools. Cap iterations tight so they
-    // stop and answer once they've gathered enough context (prompt also tells
-    // them to stop after ~4-8 key files).
-    maxIterations: base.subagents?.maxIterations ?? 12,
+    // Give sub-agents generous headroom — big codebases need many reads.
+    // The prompt enforces batching and a structured report format.
+    maxIterations: base.subagents?.maxIterations ?? 24,
     // Always treat remote small models as small model mode for concise output.
     smallModelMode: true,
     // Remote small models over a device link are slow, and exploring a large
@@ -133,7 +171,7 @@ function buildWorkerContext(
   return { endpoint, cfg, client: createClient(cfg), security, cache };
 }
 
-function parseArgs(tc: { name: string; arguments: string }): any {
+function parseArgs(tc: { name: string; arguments: string }): Record<string, unknown> {
   if (typeof tc.arguments !== "string") return tc.arguments;
   try {
     return JSON.parse(tc.arguments);
@@ -157,7 +195,7 @@ function parseArgs(tc: { name: string; arguments: string }): any {
  */
 function summarizeToolResult(tool: string | undefined, raw: string): string {
   if (!tool) return "";
-  let parsed: any = undefined;
+  let parsed: Record<string, unknown> | undefined = undefined;
   try {
     parsed = JSON.parse(raw);
   } catch {
@@ -171,21 +209,23 @@ function summarizeToolResult(tool: string | undefined, raw: string): string {
   }
 
   // grep / search style: "Found N matches"
+  const _res = parsed?.result as Record<string, unknown> | undefined;
   const matchCount =
     parsed?.matches ??
-    parsed?.result?.matches ??
+    _res?.matches ??
     parsed?.count ??
     parsed?.total ??
-    (Array.isArray(parsed?.results) ? parsed.results.length : undefined) ??
-    (Array.isArray(parsed?.result?.results) ? parsed.result.results.length : undefined);
+    (Array.isArray(parsed?.results) ? (parsed.results as unknown[]).length : undefined) ??
+    (Array.isArray(_res?.results) ? (_res.results as unknown[]).length : undefined);
   if (matchCount != null && /grep|search|find|pattern|rgit|rg/i.test(tool)) {
     return `${tool}: Found ${matchCount} matches`;
   }
 
   // read_file: report file + line count
   if (/read_file|batch_read|read/i.test(tool)) {
-    const path = parsed?.path ?? parsed?.file ?? parsed?.result?.path ?? "";
-    const lines = parsed?.line_count ?? parsed?.lines ?? parsed?.lineCount ?? parsed?.result?.line_count;
+    const _r = parsed?.result as Record<string, unknown> | undefined;
+    const path = parsed?.path ?? parsed?.file ?? _r?.path ?? "";
+    const lines = parsed?.line_count ?? parsed?.lines ?? parsed?.lineCount ?? _r?.line_count;
     const tail = lines != null ? ` (${lines} lines)` : "";
     const p = typeof path === "string" && path ? path.split(/[\\/]/).pop() : "";
     return p ? `${tool}: Read from ${p}${tail}` : `${tool}: read ${raw.length} bytes`;
@@ -193,7 +233,7 @@ function summarizeToolResult(tool: string | undefined, raw: string): string {
 
   // list_dir
   if (/list_dir|map_project|tree/i.test(tool)) {
-    const n = parsed?.entries?.length ?? parsed?.count ?? parsed?.files?.length;
+    const n = (parsed?.entries as unknown[] | undefined)?.length ?? parsed?.count ?? (parsed?.files as unknown[] | undefined)?.length;
     return n != null ? `${tool}: listed ${n} entries` : `${tool}: ok`;
   }
 
@@ -210,7 +250,7 @@ function summarizeToolResult(tool: string | undefined, raw: string): string {
   return `${tool}: ok (${raw.length} bytes)`;
 }
 
-/** Read-only exploration tools exposed to sub-agents (small 2B models). */
+/** Read-only exploration tools exposed to sub-agents. */
 const SUBAGENT_TOOLS = new Set([
   "read_file",
   "batch_read_files",
@@ -221,8 +261,6 @@ const SUBAGENT_TOOLS = new Set([
   "grep_search",
   "search_and_view",
   "search_files",
-  "git_status",
-  "git_diff",
 ]);
 
 /**
@@ -238,15 +276,14 @@ async function normalizeSubAgentPath(p: string | undefined, ws: string): Promise
   try {
     await access(original);
     return p;
-  } catch {}
-  // Strip a leading duplicated segment (src/src.ts -> src.ts).
+  } catch { /* original path not accessible */ }
   const segs = normalize(p).replace(/\\/g, "/").split("/").filter(Boolean);
   for (let drop = 1; drop <= Math.min(2, segs.length - 1); drop++) {
     const cand = resolve(ws, segs.slice(drop).join("/"));
     try {
       await access(cand);
       return segs.slice(drop).join("/");
-    } catch {}
+    } catch { /* candidate path not accessible */ }
   }
   return p;
 }
@@ -263,7 +300,7 @@ async function runWorkerTool(
       error: `Tool '${tc.name}' is not available to sub-agents. Use read_file, list_dir, or grep_search.`,
     });
   }
-  const tool: Tool | undefined = tools.find((t) => t.name === tc.name);
+  const tool: Tool | undefined = findTool(tc.name);
   const args = parseArgs(tc);
   // Fix 2B path guesses before the real tool runs.
   if (typeof args?.path === "string") {
@@ -305,8 +342,8 @@ async function runWorkerTool(
       }
     }
     return sanitized;
-  } catch (e: any) {
-    return JSON.stringify({ ok: false, error: e?.message || String(e) });
+  } catch (e: unknown) {
+    return JSON.stringify({ ok: false, error: (e as { message?: string } | undefined)?.message || String(e) });
   }
 }
 
@@ -337,6 +374,12 @@ async function runSingleSubAgent(
   let duplicateStrikes = 0;
   const seenSignatures = new Set<string>();
   const readPaths = new Set<string>();
+  // Track per-tool call counts to block wasteful repeated discovery calls
+  const toolCallCounts = new Map<string, number>();
+  // Discovery-only tools that should NOT be called more than once
+  const DISCOVERY_TOOLS = new Set(["list_dir", "map_project_tree", "stat_path", "find_files"]);
+  // Hard budget: after this many total tool calls, force the model to report
+  const TOOL_BUDGET = 18;
 
   emit({
     type: "subagent_start",
@@ -369,16 +412,21 @@ async function runSingleSubAgent(
       };
     }
 
-    // Force mandatory wrap-up before final turn (turn 11/12)
-    if (i >= maxIter - 2 && toolCallCount > 0) {
+    // Wrap-up nudges — remind the model to report before it runs out of turns.
+    if (i === 14 && toolCallCount > 0) {
       messages.push({
         role: "user",
-        content: `MANDATORY ORDER: You are on turn ${i + 1} of your ${maxIter} round limit. You are ORDERED to STOP calling tools now and immediately output your final summary of findings for the main agent.`,
+        content: `You are on turn ${i + 1} of ${maxIter}. Start writing your final report now. Use batch_read_files if you need to read more files, then summarize.`,
+      });
+    }
+    if (i >= maxIter - 4 && toolCallCount > 0) {
+      messages.push({
+        role: "user",
+        content: `TURN ${i + 1}/${maxIter}: You are running low on turns. Finish reading and output your full report NOW. Do NOT start new searches.`,
       });
     }
 
     let accumulatedContent = "";
-    let accumulatedReasoning = "";
     let streamedToolCalls: Array<{ id: string; name: string; arguments: string }> = [];
 
     const stream = streamChat(
@@ -401,7 +449,6 @@ async function runSingleSubAgent(
         });
       }
       if (chunk.reasoningContent) {
-        accumulatedReasoning += chunk.reasoningContent;
         emit({
           type: "subagent_chunk",
           agent: wctx.endpoint.name,
@@ -440,12 +487,31 @@ async function runSingleSubAgent(
         const sig = `${tc.function.name}:${JSON.stringify(parsedArgs)}`;
         const filePath = parsedArgs?.path || parsedArgs?.file;
 
-        // Intercept duplicate tool call loops
+        // --- GUARD 1: Hard tool budget ---
+        if (toolCallCount >= TOOL_BUDGET) {
+          const budgetResult = JSON.stringify({
+            ok: false,
+            error: `Tool budget exhausted (${TOOL_BUDGET} calls). You MUST output your final report now using only the information you have already gathered.`,
+          });
+          emit({
+            type: "subagent_tool_result",
+            agent: wctx.endpoint.name,
+            model: wctx.cfg.model,
+            tool: tc.function.name,
+            toolArgs: tc.function.arguments,
+            toolResult: `budget exhausted`,
+            toolResultRaw: budgetResult,
+            toolCalls: currentToolCallCount,
+          });
+          return { role: "tool" as const, content: budgetResult, tool_call_id: tc.id };
+        }
+
+        // --- GUARD 2: Exact duplicate signature ---
         if (seenSignatures.has(sig)) {
           duplicateStrikes++;
           const dupResult = JSON.stringify({
             ok: false,
-            error: `Duplicate call blocked. You already ran ${tc.function.name} with these exact inputs. Do not repeat tool calls. Output your final report now.`,
+            error: `Duplicate call blocked. You already ran ${tc.function.name} with these exact inputs. Output your final report now.`,
           });
           emit({
             type: "subagent_tool_result",
@@ -461,13 +527,37 @@ async function runSingleSubAgent(
         }
         seenSignatures.add(sig);
 
-        // Intercept re-reading the exact same file
+        // --- GUARD 3: Discovery tools called more than once ---
+        if (DISCOVERY_TOOLS.has(tc.function.name)) {
+          const prev = toolCallCounts.get(tc.function.name) ?? 0;
+          if (prev >= 1) {
+            duplicateStrikes++;
+            const dupResult = JSON.stringify({
+              ok: false,
+              error: `You already called ${tc.function.name} ${prev} time(s). You have the results. Do NOT call discovery tools again. Use batch_read_files to read the files you need, then write your report.`,
+            });
+            emit({
+              type: "subagent_tool_result",
+              agent: wctx.endpoint.name,
+              model: wctx.cfg.model,
+              tool: tc.function.name,
+              toolArgs: tc.function.arguments,
+              toolResult: `${tc.function.name}: already called`,
+              toolResultRaw: dupResult,
+              toolCalls: currentToolCallCount,
+            });
+            return { role: "tool" as const, content: dupResult, tool_call_id: tc.id };
+          }
+          toolCallCounts.set(tc.function.name, prev + 1);
+        }
+
+        // --- GUARD 4: Re-reading the exact same file ---
         if (tc.function.name === "read_file" && typeof filePath === "string") {
           if (readPaths.has(filePath)) {
             duplicateStrikes++;
             const reReadResult = JSON.stringify({
               ok: false,
-              error: `File '${filePath}' was already read in a previous turn. Refer to its contents in your conversation history and output your final report.`,
+              error: `File '${filePath}' was already read. Refer to its contents in conversation history and output your final report.`,
             });
             emit({
               type: "subagent_tool_result",
@@ -482,6 +572,25 @@ async function runSingleSubAgent(
             return { role: "tool" as const, content: reReadResult, tool_call_id: tc.id };
           }
           readPaths.add(filePath);
+        }
+
+        // --- GUARD 5: More than 3 duplicate strikes = stuck ---
+        if (duplicateStrikes >= 3) {
+          const stuckResult = JSON.stringify({
+            ok: false,
+            error: "You are stuck repeating calls. Stop all tool calls and output your final report NOW.",
+          });
+          emit({
+            type: "subagent_tool_result",
+            agent: wctx.endpoint.name,
+            model: wctx.cfg.model,
+            tool: tc.function.name,
+            toolArgs: tc.function.arguments,
+            toolResult: `stuck — forced report`,
+            toolResultRaw: stuckResult,
+            toolCalls: currentToolCallCount,
+          });
+          return { role: "tool" as const, content: stuckResult, tool_call_id: tc.id };
         }
 
         emit({
@@ -517,28 +626,6 @@ async function runSingleSubAgent(
       
       toolCallCount += msg.tool_calls.length;
       messages.push(...results);
-      
-      if (duplicateStrikes >= 3) {
-        const errStr = "Aborted: Subagent got stuck repeating duplicate tool calls.";
-        emit({
-          type: "subagent_done",
-          agent: wctx.endpoint.name,
-          model: wctx.cfg.model,
-          ok: false,
-          output: "",
-          toolCalls: toolCallCount,
-        });
-        return {
-          name: wctx.endpoint.name,
-          model: wctx.cfg.model,
-          baseURL: wctx.cfg.baseURL,
-          ok: false,
-          output: "",
-          durationMs: Math.round(performance.now() - start),
-          error: errStr,
-          toolCalls: toolCallCount,
-        };
-      }
       
       continue;
     }
@@ -685,7 +772,7 @@ export async function exploreWithSubAgent(
       ok: false,
       output: "",
       durationMs: 0,
-      error: "all sub-agent workers are busy (max 3 concurrent)",
+      error: "all sub-agent workers are busy (max 4 concurrent)",
       toolCalls: 0,
     };
   }

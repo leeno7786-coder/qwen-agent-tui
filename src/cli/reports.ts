@@ -1,6 +1,6 @@
-import type { Config, ModelInfo, RuntimeProvider } from "../types";
+import type { Config, ModelInfo } from "../types";
 import { loadConfig, validateConfig } from "../config";
-import { checkRuntimeHealth, fetchLocalModels, getProvider, RUNTIME_PROVIDERS } from "../providers";
+import { checkRuntimeHealth, fetchLocalModels, RUNTIME_PROVIDERS } from "../providers";
 import { enrichConfigWithRuntime, isSmallModelFromConfig } from "../model-runtime";
 import { isLocalProvider } from "../llm";
 

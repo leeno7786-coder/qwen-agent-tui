@@ -25,7 +25,7 @@ export function detectContext(workspace: string): RepoContext {
     ctx.files = readdirSync(workspace, { recursive: true, encoding: "utf-8" })
       .filter((f) => typeof f === "string" && !f.includes("node_modules") && !f.includes(".git"))
       .slice(0, 50) as string[];
-  } catch {}
+  } catch { /* workspace may not be readable */ }
 
   // Detect project type and primary language — prioritize manifest files over extensions
   const hasPackageJson = ctx.files.some(f => f === "package.json" || f.endsWith("/package.json"));
@@ -68,7 +68,7 @@ export function detectContext(workspace: string): RepoContext {
   if (existsSync(readmePath)) {
     try {
       ctx.readme = readFileSync(readmePath, "utf-8").slice(0, 2000);
-    } catch {}
+    } catch { /* README not readable */ }
   }
 
   return ctx;

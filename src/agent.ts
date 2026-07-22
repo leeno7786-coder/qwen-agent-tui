@@ -1,6 +1,6 @@
 import { createClient, chat, streamChat, isLocalProvider } from "./llm";
 import type { ChatMessage } from "./llm";
-import { tools, toOpenAI, type ToolExecutionHooks, ToolCacheManager, createToolCacheManager, groupToolsForParallelExecution, canRunInParallel } from "./tools";
+import { toOpenAI, type ToolExecutionHooks, ToolCacheManager, createToolCacheManager, groupToolsForParallelExecution, registerExternalTools, getAllTools, findTool } from "./tools";
 import type { SubAgentProgressEvent } from "./tools";
 import { detectContext } from "./context";
 import { SkillManager } from "./skill-manager";
@@ -11,7 +11,7 @@ import {
   isSmallModelFromConfig,
 } from "./model-runtime";
 import { loadConfig, applySubAgentDefaults } from "./config";
-import type { Config, Message, ToolResult, AgentState, Todo, Skill } from "./types";
+import type { Config, Message, ToolResult, AgentState, Todo } from "./types";
 import { subAgentAvailable } from "./tools";
 import {
   resolveSubAgentPool,
@@ -21,6 +21,9 @@ import {
 } from "./subagents";
 import { ContextManager, createContextManager } from "./context/manager";
 import { SecurityManager, createSecurityManager } from "./security";
+import { McpManager, createMcpManager } from "./mcp";
+import { autoSaveSession } from "./store";
+import type { McpServerState } from "./types";
 
 /**
  * Detached background sub-agent handle.
@@ -40,7 +43,7 @@ interface BackgroundSubAgent {
   result?: SubAgentResult;
   promise: Promise<void>;
   resolve: (value: void) => void;
-  reject: (reason?: any) => void;
+  reject: (reason?: unknown) => void;
 }
 
 /**
@@ -86,6 +89,10 @@ export class AgentCore {
   public contextManager: ContextManager;
   /** Security manager for command and file access validation. */
   public securityManager: SecurityManager;
+  /** MCP manager for connecting to local/remote MCP servers. */
+  public mcpManager: McpManager;
+  /** MCP server connection states. */
+  public mcpStates: McpServerState[] = [];
 
   /** Active background sub-agents keyed by id. */
   public backgroundSubAgents: Map<string, BackgroundSubAgent> = new Map();
@@ -123,7 +130,7 @@ export class AgentCore {
     this.client = createClient(cfg);
     this.toolCache = createToolCacheManager(cfg, cfg.workspace);
     this.contextManager = createContextManager(cfg, []);
-    this.maxBackgroundSubAgents = cfg.maxBackgroundSubAgents ?? 3;
+    this.maxBackgroundSubAgents = cfg.maxBackgroundSubAgents ?? 4;
     this.securityManager = createSecurityManager(
       {
         enabled: cfg.securityEnabled,
@@ -137,6 +144,7 @@ export class AgentCore {
       },
       cfg.workspace
     );
+    this.mcpManager = createMcpManager(cfg.mcp);
   }
 
    /**
@@ -145,9 +153,8 @@ export class AgentCore {
   async reconfigure(newCfg: Partial<Config>) {
     const modelChanged =
       newCfg.model !== undefined || newCfg.baseURL !== undefined;
-    const workspaceChanged = newCfg.workspace !== undefined;
-    const oldWorkspace = this.cfg.workspace;
-    
+const workspaceChanged = newCfg.workspace !== undefined;
+
     this.cfg = { ...this.cfg, ...newCfg };
     applySubAgentDefaults(this.cfg);
     
@@ -252,6 +259,16 @@ export class AgentCore {
   async init() {
     await this.applyRuntimeProfile();
 
+    // Connect to MCP servers if configured
+    if (this.cfg.mcp && Object.keys(this.cfg.mcp).length > 0) {
+      this.mcpStates = await this.mcpManager.connectAll();
+      const mcpTools = this.mcpManager.getTools();
+      registerExternalTools(mcpTools);
+      if (process.env.QWEN_DEBUG_LLM) {
+        console.error("[QWEN_DEBUG] MCP:", this.mcpManager.connectedCount, "servers,", this.mcpManager.totalTools, "tools");
+      }
+    }
+
     const ctx = detectContext(this.cfg.workspace);
     const allSkills = loadSkills();
     this.skillManager = new SkillManager();
@@ -291,7 +308,14 @@ export class AgentCore {
           : isLocalProvider(subBase)
             ? "Local"
             : "Cloud";
-      system += `\nSub-agents: ${providerName} \`${this.cfg.subAgentModel}\` — explore_subagent (emit up to 3 in one message for parallel dispatch). NOTE: Sub-agent dispatches are synchronous tool calls. When explore_subagent returns, the batch is 100% finished. Never reason that sub-agents are "still running" or "waiting to complete". Synthesize immediately.`;
+      system += `\nSub-agents: ${providerName} \`${this.cfg.subAgentModel}\` — explore_subagent (emit up to 4 in one message for parallel dispatch). Give each a NARROW task with specific file paths. They batch-read files and report structured findings. Sub-agent dispatches are synchronous — when explore_subagent returns, the batch is done. Synthesize immediately.`;
+    }
+    if (this.mcpManager.totalTools > 0) {
+      const serverNames = this.mcpStates
+        .filter((s) => s.status === "connected")
+        .map((s) => `${s.name} (${s.toolCount} tools)`)
+        .join(", ");
+      system += `\nMCP tools connected: ${serverNames}. MCP tool names are prefixed with "mcp_<server>_".`;
     }
     this.messages = [
       { id: "system-base", role: "system", content: system, timestamp: now() },
@@ -418,6 +442,82 @@ export class AgentCore {
       return;
     }
 
+    if (trimmed === "/mcp") {
+      if (this.mcpStates.length === 0) {
+        this.addAssistantMessage(
+          "No MCP servers configured. Add `mcp` to ~/.qwen-agent.json.\n\n" +
+          "Example:\n```json\n\"mcp\": {\n  \"filesystem\": {\n    \"type\": \"local\",\n    \"command\": [\"npx\", \"-y\", \"@modelcontextprotocol/server-filesystem\", \"/path/to/dir\"]\n  },\n  \"remote\": {\n    \"type\": \"remote\",\n    \"url\": \"https://mcp.example.com/sse\"\n  }\n}\n```\n\nYou can also ask me to add an MCP server — just describe what you need and I'll use manage_mcp to configure it."
+        );
+      } else {
+        const lines = [
+          `## MCP Servers (${this.mcpManager.connectedCount} connected, ${this.mcpManager.totalTools} tools)`,
+          "",
+          ...this.mcpStates.map((s) => {
+            const icon = s.status === "connected" ? "+" : s.status === "error" ? "!" : "-";
+            const info = s.serverInfo ? ` (${s.serverInfo.name}${s.serverInfo.version ? ` v${s.serverInfo.version}` : ""})` : "";
+            const err = s.error ? ` - ${s.error}` : "";
+            return `- [${icon}] ${s.name}${info}: ${s.status}, ${s.toolCount} tools${err}`;
+          }),
+          "",
+          "Commands: `/mcp-add`, `/mcp-remove`, or ask me to manage MCP servers.",
+        ];
+        this.addAssistantMessage(lines.join("\n"));
+      }
+      this.setState("idle");
+      return;
+    }
+
+    if (trimmed === "/mcp-add" || trimmed.startsWith("/mcp-add ")) {
+      const input = trimmed.slice("/mcp-add".length).trim();
+      if (!input) {
+        this.addAssistantMessage(
+          "Usage: `/mcp-add <name> <type> <connection>`\n\n" +
+          "Examples:\n" +
+          "- `/mcp-add filesystem local npx -y @modelcontextprotocol/server-filesystem /home/user/docs`\n" +
+          "- `/mcp-add github remote https://mcp.github.com/sse`\n\n" +
+          "Or just ask me in natural language: \"Add an MCP server for reading files in /tmp\""
+        );
+      } else {
+        // Parse: name type [...args]
+        const parts = input.split(/\s+/);
+        const name = parts[0];
+        const type = parts[1];
+        if (type === "local") {
+          const command = parts.slice(2);
+          if (command.length === 0) {
+            this.addAssistantMessage("Local servers need a command. Example: `/mcp-add filesystem local npx -y @modelcontextprotocol/server-filesystem /path`");
+          } else {
+            const toolResult = await this.executeToolDirect("manage_mcp", { action: "add", name, type: "local", command });
+            this.addAssistantMessage(toolResult ?? "Added. Restart to connect.");
+          }
+        } else if (type === "remote") {
+          const url = parts[2];
+          if (!url) {
+            this.addAssistantMessage("Remote servers need a URL. Example: `/mcp-add api remote https://mcp.example.com/sse`");
+          } else {
+            const toolResult = await this.executeToolDirect("manage_mcp", { action: "add", name, type: "remote", url });
+            this.addAssistantMessage(toolResult ?? "Added. Restart to connect.");
+          }
+        } else {
+          this.addAssistantMessage("Type must be 'local' or 'remote'. Example: `/mcp-add filesystem local npx -y ...`");
+        }
+      }
+      this.setState("idle");
+      return;
+    }
+
+    if (trimmed === "/mcp-remove" || trimmed.startsWith("/mcp-remove ")) {
+      const name = trimmed.slice("/mcp-remove".length).trim();
+      if (!name) {
+        this.addAssistantMessage("Usage: `/mcp-remove <server-name>` — e.g. `/mcp-remove filesystem`");
+      } else {
+        const toolResult = await this.executeToolDirect("manage_mcp", { action: "remove", name });
+        this.addAssistantMessage(toolResult ?? "Removed. Restart to apply.");
+      }
+      this.setState("idle");
+      return;
+    }
+
     if (!skipUserMessage) {
       this.addUserMessage(userText);
     }
@@ -458,15 +558,14 @@ export class AgentCore {
             this.client,
             this.cfg,
             this.toChatMessages(),
-            toOpenAI(tools, this.cfg, activeSkills),
+            toOpenAI(getAllTools(), this.cfg, activeSkills),
             signal
           );
 
           let hasToolCalls = false;
           let toolCallBuffers: Array<{ id: string; name: string; arguments: string }> = [];
-          let streamUsage: { input_tokens: number; output_tokens: number } | undefined;
 
-          // Use iterator protocol to capture the generator's return value (usage)
+          let inThinkTag = false;
           const iter = stream[Symbol.asyncIterator]();
           let iterResult = await iter.next();
           while (!iterResult.done) {
@@ -478,17 +577,32 @@ export class AgentCore {
               console.error("[QWEN_DEBUG] agent chunk:", JSON.stringify(chunk.content), "reasoning:", JSON.stringify(chunk.reasoningContent), "toolCalls:", chunk.toolCalls?.length);
             }
 
-            assistantMsg.content += chunk.content || "";
             if (chunk.reasoningContent) {
               assistantMsg.reasoningContent = (assistantMsg.reasoningContent || "") + chunk.reasoningContent;
             }
 
-            // Fallback: some models embed reasoning in <think>…</think> tags inside content
-            if (!assistantMsg.reasoningContent && assistantMsg.content.includes("<think>")) {
-              const thinkMatch = assistantMsg.content.match(/<think>([\s\S]*?)<\/think>/);
-              if (thinkMatch) {
-                assistantMsg.reasoningContent = thinkMatch[1].trim();
-                assistantMsg.content = assistantMsg.content.replace(/<think>[\s\S]*?<\/think>/, "").trim();
+            const rawChunkText = chunk.content || "";
+            if (rawChunkText) {
+              let textToProcess = rawChunkText;
+
+              if (!inThinkTag && textToProcess.includes("<think>")) {
+                const parts = textToProcess.split("<think>");
+                assistantMsg.content += parts[0];
+                inThinkTag = true;
+                textToProcess = parts.slice(1).join("<think>");
+              }
+
+              if (inThinkTag) {
+                if (textToProcess.includes("</think>")) {
+                  const parts = textToProcess.split("</think>");
+                  assistantMsg.reasoningContent = (assistantMsg.reasoningContent || "") + parts[0];
+                  inThinkTag = false;
+                  assistantMsg.content += parts.slice(1).join("</think>");
+                } else {
+                  assistantMsg.reasoningContent = (assistantMsg.reasoningContent || "") + textToProcess;
+                }
+              } else {
+                assistantMsg.content += textToProcess;
               }
             }
 
@@ -505,7 +619,7 @@ export class AgentCore {
             iterResult = await iter.next();
           }
 
-          streamUsage = (iterResult.value as { usage?: { input_tokens: number; output_tokens: number } })?.usage;
+          const streamUsage = (iterResult.value as { usage?: { input_tokens: number; output_tokens: number } })?.usage;
           if (streamUsage) {
             this.lastUsage = streamUsage;
             this.totalUsage.input_tokens += streamUsage.input_tokens;
@@ -560,16 +674,16 @@ export class AgentCore {
             continue;
           }
 
-          // No tool calls = we're done (has real content, this is the final answer)
           if (!assistantMsg.toolCalls || assistantMsg.toolCalls.length === 0) {
             reasoningOnlyStreak = 0;
             this.setState("idle");
             this.onUpdate?.();
             return;
           }
-        } catch (err: any) {
-          const status = err?.status || err?.status_code;
-          const msg = err?.message || String(err);
+        } catch (err: unknown) {
+          const e = err as { status?: number; status_code?: number; message?: string };
+          const status = e.status || e.status_code;
+          const msg = e.message || String(err);
           if (status === 401) {
             const envVar = this.cfg.baseURL?.includes("mistral.ai")
               ? "MISTRAL_API_KEY"
@@ -596,16 +710,17 @@ export class AgentCore {
          
          try {
            const activeSkills = new Set(this.skillManager.getAllWithStatus().filter(s => s.active).map(s => s.name));
-           response = await chat(
-             this.client,
-             this.cfg,
-             this.toChatMessages(),
-             toOpenAI(tools, this.cfg, activeSkills),
-             signal
+            response = await chat(
+              this.client,
+              this.cfg,
+              this.toChatMessages(),
+              toOpenAI(getAllTools(), this.cfg, activeSkills),
+              signal
            );
-        } catch (err: any) {
-          const status = err?.status || err?.status_code;
-          const msg = err?.message || String(err);
+        } catch (err: unknown) {
+          const e = err as { status?: number; status_code?: number; message?: string };
+          const status = e.status || e.status_code;
+          const msg = e.message || String(err);
           if (status === 401) {
             const envVar = this.cfg.baseURL?.includes("mistral.ai")
               ? "MISTRAL_API_KEY"
@@ -713,7 +828,7 @@ export class AgentCore {
 
     const id = `sa-${rnd()}`;
     let resolveFn!: (value: void) => void;
-    let rejectFn!: (reason?: any) => void;
+    let rejectFn!: (reason?: unknown) => void;
     const promise = new Promise<void>((res, rej) => {
       resolveFn = res;
       rejectFn = rej;
@@ -765,7 +880,8 @@ export class AgentCore {
           this.buildSubAgentHooks(id)
         );
         handle.status = handle.result.ok ? "done" : "error";
-      } catch (e: any) {
+      } catch (e: unknown) {
+        const err = e as { message?: string };
         handle.status = "error";
         handle.result = {
           name: id,
@@ -774,7 +890,7 @@ export class AgentCore {
           ok: false,
           output: "",
           durationMs: 0,
-          error: e?.message || String(e),
+          error: err.message || String(e),
           toolCalls: 0,
         };
       } finally {
@@ -825,7 +941,7 @@ export class AgentCore {
    * their results into the conversation as a single `explore_subagent` result
    * block. Called from the run loop after tool execution when any are pending.
    */
-  async awaitAllBackgroundSubAgents(signal?: AbortSignal): Promise<void> {
+  async awaitAllBackgroundSubAgents(_signal?: AbortSignal): Promise<void> {
     if (this.backgroundSubAgents.size === 0) return;
 
     const handles = [...this.backgroundSubAgents.values()];
@@ -871,8 +987,8 @@ export class AgentCore {
   /**
    * Parse tool arguments from a tool call.
    */
-  private parseToolArgs(tc: { name: string; arguments: string }): any {
-    let args: any;
+  private parseToolArgs(tc: { name: string; arguments: string }): Record<string, unknown> {
+    let args: unknown;
     if (typeof tc.arguments === 'string') {
       try {
         args = JSON.parse(tc.arguments);
@@ -891,14 +1007,28 @@ export class AgentCore {
     } else {
       args = tc.arguments;
     }
-    return args;
+    return args as Record<string, unknown>;
   }
 
   /**
    * Execute a single tool sequentially.
    */
+  /**
+   * Execute a tool directly by name (used by slash commands).
+   * Returns the tool output string.
+   */
+  async executeToolDirect(toolName: string, args: Record<string, unknown>): Promise<string> {
+    const tool = findTool(toolName);
+    if (!tool) return JSON.stringify({ ok: false, error: `Unknown tool: ${toolName}` });
+    const configWithSecurity = { ...this.cfg, securityManager: this.securityManager };
+    if (tool.executeAsync) {
+      return tool.executeAsync(args, this.cfg.workspace, configWithSecurity);
+    }
+    return tool.execute(args, this.cfg.workspace, configWithSecurity);
+  }
+
   private async executeToolSequential(tc: { name: string; arguments: string; id: string }, signal?: AbortSignal): Promise<void> {
-    const tool = tools.find((t) => t.name === tc.name);
+    const tool = findTool(tc.name);
     
     this.currentTool = { name: tc.name, args: tc.arguments };
     this.setState("executing_tool");
@@ -945,6 +1075,36 @@ export class AgentCore {
           tc.name === "explore_subagent"
             ? {
                 onSubAgentProgress: (progress) => {
+                  const saId = progress.agent || `sa-sync-${tc.id}`;
+                  let handle = this.backgroundSubAgents.get(saId);
+                  if (!handle) {
+                    let pPrompt = tc.arguments;
+                    try { pPrompt = JSON.parse(tc.arguments).prompt || tc.arguments; } catch { /* not JSON */ }
+                    handle = {
+                      id: saId,
+                      prompt: progress.task || pPrompt,
+                      status: "running",
+                      promise: Promise.resolve(),
+                      resolve: () => {},
+                      reject: () => {},
+                    };
+                    this.backgroundSubAgents.set(saId, handle);
+                  }
+                  handle.log = handle.log ?? [];
+                  if (handle.log.length < 200) handle.log.push(progress);
+                  if (progress.type === "subagent_done") {
+                    handle.status = progress.ok ? "done" : "error";
+                    handle.result = {
+                      name: saId,
+                      model: progress.model,
+                      baseURL: "",
+                      ok: progress.ok ?? false,
+                      output: progress.output ?? "",
+                      durationMs: 0,
+                      toolCalls: progress.toolCalls ?? 0,
+                      error: progress.ok ? undefined : (progress.output || "sub-agent failed"),
+                    };
+                  }
                   this.currentTool = {
                     name: tc.name,
                     args: tc.arguments,
@@ -966,13 +1126,14 @@ export class AgentCore {
           ? tool.execute(args, this.cfg.workspace, configWithSecurity)
           : JSON.stringify({ ok: false, error: `Unknown tool: ${tc.name}`, tool: tc.name });
       }
-    } catch (e: any) {
-      const errMsg = e?.message || String(e);
+    } catch (e: unknown) {
+      const err = e as { message?: string; stack?: string };
+      const errMsg = err.message || String(e);
       output = JSON.stringify({
         ok: false,
         error: errMsg,
         tool: tc.name,
-        ...(process.env.QWEN_DEBUG_LLM ? { stack: e?.stack } : {}),
+        ...(process.env.QWEN_DEBUG_LLM ? { stack: err.stack } : {}),
       });
     }
     const duration = performance.now() - start;
@@ -1021,13 +1182,12 @@ export class AgentCore {
     signal?: AbortSignal
   ): Promise<void> {
     this.setState("executing_tool");
-    
-    const start = performance.now();
+
     const results: Array<{ index: number; id: string; output: string; duration: number; wasCached: boolean }> = [];
     
     // Execute all parallel tools concurrently
     const promises = parallelTools.map(async (tc) => {
-      const tool = tools.find((t) => t.name === tc.name);
+      const tool = findTool(tc.name);
       const toolStart = performance.now();
       let output: string;
       let wasCached = false;
@@ -1055,6 +1215,29 @@ export class AgentCore {
             tc.name === "explore_subagent"
               ? {
                   onSubAgentProgress: (progress) => {
+                    const saId = progress.agent || `sa-sync-${tc.id}`;
+                    let handle = this.backgroundSubAgents.get(saId);
+                    if (!handle) {
+                      let pPrompt = tc.arguments;
+                      try {
+                        pPrompt = JSON.parse(tc.arguments).prompt || tc.arguments;
+                      } catch { /* not JSON */ }
+                      handle = {
+                        id: saId,
+                        prompt: progress.task || pPrompt,
+                        status: "running",
+                        promise: Promise.resolve(),
+                        resolve: () => {},
+                        reject: () => {},
+                        log: [],
+                      };
+                      this.backgroundSubAgents.set(saId, handle);
+                    }
+                    handle.log = handle.log ?? [];
+                    if (handle.log.length < 200) handle.log.push(progress);
+                    if (progress.type === "subagent_done") {
+                      handle.status = progress.ok ? "done" : "error";
+                    }
                     this.currentTool = {
                       name: tc.name,
                       args: tc.arguments,
@@ -1093,10 +1276,11 @@ export class AgentCore {
         }
         
         return { index: tc.index, id: tc.id, output, duration: performance.now() - toolStart, wasCached };
-      } catch (e: any) {
+      } catch (e: unknown) {
         // Log the full error including stack trace for debugging
+        const pErr = e as { message?: string };
         console.error(`Parallel tool execution error [${tc.name}]:`, e);
-        return { index: tc.index, id: tc.id, output: JSON.stringify({ ok: false, error: e.message }), duration: performance.now() - toolStart, wasCached: false };
+        return { index: tc.index, id: tc.id, output: JSON.stringify({ ok: false, error: pErr.message || String(e) }), duration: performance.now() - toolStart, wasCached: false };
       }
     });
     
@@ -1150,7 +1334,7 @@ export class AgentCore {
   /**
    * Handle special tool results that require agent state updates.
    */
-  private handleSpecialToolResults(toolName: string, output: string, toolCallId: string): void {
+  private handleSpecialToolResults(toolName: string, output: string, _toolCallId: string): void {
     // Intercept change_workspace results to sync agent state
     if (toolName === "change_workspace") {
       try {
@@ -1437,6 +1621,20 @@ export class AgentCore {
     this.todos = this.todos.filter((x) => x.id !== id);
     this.syncTodoMessage();
     this.onUpdate?.();
+  }
+
+  /** Graceful shutdown: cancel sub-agents, disconnect MCP, save state. */
+  async shutdown(): Promise<void> {
+    const ws = this.cfg.workspace;
+    if (this.messages.length > 0 && ws) {
+      autoSaveSession(this.messages, this.todos, ws);
+    }
+    try {
+      this.mcpManager?.disconnectAll();
+    } catch (err) {
+      console.warn("MCP disconnect error during shutdown:", err);
+    }
+    this.backgroundSubAgents.clear();
   }
 
 }

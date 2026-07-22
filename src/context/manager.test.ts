@@ -2,7 +2,7 @@
  * Tests for context window management system.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'bun:test';
+import { describe, it, expect, beforeEach } from 'bun:test';
 import { ContextManager, createContextManager, DEFAULT_CONTEXT_CONFIG } from './manager';
 import type { Config, Message } from '../types';
 
@@ -83,7 +83,8 @@ describe('ContextManager', () => {
       // Mock console.warn BEFORE adding messages
       const originalWarn = console.warn;
       const warnings: string[] = [];
-      console.warn = (...args: any[]) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  console.warn = (...args: any[]) => {
         warnings.push(args[0]);
         originalWarn(...args);
       };

@@ -34,27 +34,13 @@ const BUILTIN_COMMANDS: Command[] = [
   { name: "/doctor", description: "Health check (config + LM Studio)" },
   { name: "/models", description: "List local models and context" },
   { name: "/graph", description: "Build/query memory graph — /graph build|stats|report" },
+  { name: "/mcp", description: "List connected MCP servers" },
+  { name: "/mcp-add", description: "Add an MCP server" },
+  { name: "/mcp-remove", description: "Remove an MCP server" },
   { name: "/exit", description: "Quit (F10)" },
 ];
 
-const ARG_BEARING = new Set([
-  "/auto",
-  "/cd",
-  "/allow",
-  "/export",
-  "/theme",
-  "/connect",
-  "/graph",
-  "/resume",
-  "/delete-session",
-  "/rename",
-  "/copy",
-  "/todo",
-  "/unload",
-  "/skill-load",
-  "/skill",
-  "/skills",
-]);
+
 
 interface CommandDropdownProps {
   inputValue: string;
@@ -266,7 +252,7 @@ export function CommandDropdown({
       flexShrink={0}
       backgroundColor={theme.bgPanel}
     >
-      {displayItems.map((item, displayIndex) => {
+      {displayItems.map((item, _displayIndex) => {
         if (item.type === "header") {
           return (
             <text

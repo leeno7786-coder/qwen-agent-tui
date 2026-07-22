@@ -38,12 +38,12 @@ describe("subagents.ts - Sub-agent Management", () => {
 
     it("should include usage instructions", async () => {
       const context = await buildSubAgentContext(mockConfig);
-      expect(context).toContain("You MUST use paths relative");
+      expect(context).toContain("RELATIVE to the workspace root");
     });
 
-    it("should list directory entries", async () => {
+    it("should list file tree", async () => {
       const context = await buildSubAgentContext(mockConfig);
-      expect(context).toContain("Top-level entries:");
+      expect(context).toContain("FILE TREE");
     });
   });
 

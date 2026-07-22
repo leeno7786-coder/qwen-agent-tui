@@ -155,34 +155,39 @@ describe("providers.ts - Provider Resolution", () => {
   });
 
   describe("checkRuntimeHealth", () => {
-    it.skip("should return true for healthy LM Studio", async () => {
-      // Skipping - requires proper fetch mocking
-      const mockFetch = vi.fn() as any;
-      mockFetch.mockResolvedValueOnce({
+    let origFetch: typeof globalThis.fetch;
+
+    beforeEach(() => {
+      origFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+      globalThis.fetch = origFetch;
+    });
+
+    it("should return true for healthy LM Studio", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValueOnce({
         ok: true,
         status: 200,
         json: () => Promise.resolve({ models: [] }),
-      } as Response);
+      }) as unknown as typeof fetch;
 
       const healthy = await checkRuntimeHealth("http://localhost:1234");
       expect(healthy).toBe(true);
-      expect(mockFetch).toHaveBeenCalled();
     });
 
-    it.skip("should return false for unhealthy runtime", async () => {
-      const mockFetch = vi.fn() as any;
-      mockFetch.mockResolvedValueOnce({
+    it("should return false for unhealthy runtime", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValueOnce({
         ok: false,
         status: 500,
-      } as Response);
+      }) as unknown as typeof fetch;
 
       const healthy = await checkRuntimeHealth("http://localhost:1234");
       expect(healthy).toBe(false);
     });
 
-    it.skip("should handle network errors", async () => {
-      const mockFetch = vi.fn() as any;
-      mockFetch.mockRejectedValueOnce(new Error("Network error"));
+    it("should handle network errors", async () => {
+      globalThis.fetch = vi.fn().mockRejectedValueOnce(new Error("Network error")) as unknown as typeof fetch;
 
       const healthy = await checkRuntimeHealth("http://localhost:1234");
       expect(healthy).toBe(false);

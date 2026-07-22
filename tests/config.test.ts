@@ -79,8 +79,8 @@ describe("config.ts", () => {
       });
 
       // CRITICAL: API key should NOT be set for Mistral
-      // It should remain empty, not fall back to OPENAI_API_KEY
-      expect(cfg.apiKey).toBe("");
+      // It should remain null, not fall back to OPENAI_API_KEY
+      expect(cfg.apiKey).toBe(null);
     });
 
     it("S-001: should NOT use OPENAI_API_KEY for Anthropic provider", () => {
@@ -91,7 +91,7 @@ describe("config.ts", () => {
         model: "claude-3-sonnet",
       });
 
-      expect(cfg.apiKey).toBe("");
+      expect(cfg.apiKey).toBe(null);
     });
 
     it("S-001: SHOULD use OPENAI_API_KEY for OpenAI provider", () => {

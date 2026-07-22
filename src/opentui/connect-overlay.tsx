@@ -6,7 +6,6 @@ import { useKeyboard } from "@opentui/react";
 import type { Theme } from "./theme";
 import {
   RUNTIME_PROVIDERS,
-  getProvider,
   getProviderBaseURL,
   providerRequiresAuth,
   getApiKeyEnvVar,

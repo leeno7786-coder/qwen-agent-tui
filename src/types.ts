@@ -8,8 +8,8 @@ export interface Config {
   baseURL: string;
   /** Model name to use for completions. */
   model: string;
-  /** API key for authentication. */
-  apiKey: string;
+  /** API key for authentication (null when not configured). */
+  apiKey: string | null;
   /** Maximum number of tool-call iterations per turn. */
   maxIterations: number;
   /** Working directory for file and shell operations. */
@@ -90,6 +90,8 @@ export interface Config {
   subAgentApiKey?: string;
   /** Maximum number of concurrent background sub-agents (default: 3). */
   maxBackgroundSubAgents?: number;
+  /** MCP server configurations (local stdio or remote HTTP). */
+  mcp?: Record<string, McpServerConfig>;
 }
 
 /**
@@ -306,6 +308,51 @@ export interface Session {
   createdAt: number;
   /** Last update timestamp. */
   updatedAt: number;
+}
+
+/**
+ * Configuration for a local MCP server (stdio transport).
+ */
+export interface McpLocalServerConfig {
+  type: "local";
+  /** Command to spawn the MCP server (e.g. ["npx", "-y", "@modelcontextprotocol/server-filesystem"]). */
+  command: string[];
+  /** Optional environment variables for the child process. */
+  env?: Record<string, string>;
+  /** Whether this server is enabled (default: true). */
+  enabled?: boolean;
+  /** Optional working directory for the server process. */
+  cwd?: string;
+}
+
+/**
+ * Configuration for a remote MCP server (HTTP/SSE transport).
+ */
+export interface McpRemoteServerConfig {
+  type: "remote";
+  /** URL of the remote MCP server (e.g. "https://mcp.example.com/sse"). */
+  url: string;
+  /** Optional HTTP headers (supports {env:VAR} interpolation). */
+  headers?: Record<string, string>;
+  /** Whether this server is enabled (default: true). */
+  enabled?: boolean;
+}
+
+/** MCP server configuration — either local (stdio) or remote (HTTP/SSE). */
+export type McpServerConfig = McpLocalServerConfig | McpRemoteServerConfig;
+
+/** Runtime state of a connected MCP server. */
+export interface McpServerState {
+  /** Server config key name. */
+  name: string;
+  /** Connection status. */
+  status: "connected" | "connecting" | "error" | "disabled";
+  /** Tools discovered from this server. */
+  toolCount: number;
+  /** Error message if status is "error". */
+  error?: string;
+  /** Server info from the MCP handshake. */
+  serverInfo?: { name: string; version?: string };
 }
 
 /** User preferences for skill settings. */

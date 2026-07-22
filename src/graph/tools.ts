@@ -5,9 +5,8 @@
  */
 
 import { MemoryGraph } from './MemoryGraph';
-import type { GraphNode, GraphEdge, GraphQuery, GraphQueryResult, GraphCommunity, GodNode, GraphAnalysis } from './types';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import type { GraphNode, GraphEdge, GraphQuery, GraphQueryResult, GraphCommunity, GodNode } from './types';
+
 
 // Global graph instance cache
 const graphCache: Map<string, MemoryGraph> = new Map();
@@ -82,10 +81,10 @@ export async function build_memory_graph(args: { workspace?: string }): Promise<
       edges: stats.edgeCount,
       time: Date.now() - startTime
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       ok: false,
-      message: `Failed to build memory graph: ${err.message}`
+      message: `Failed to build memory graph: ${(err as { message?: string }).message}`
     };
   }
 }
@@ -102,7 +101,7 @@ export async function query_memory_graph(args: {
   try {
     const graph = await getMemoryGraph(workspace);
     return graph.query(args.query);
-  } catch (error) {
+  } catch {
     return {
       nodes: [],
       edges: [],
@@ -130,7 +129,7 @@ export async function get_graph_stats(args: { workspace?: string }): Promise<{
   try {
     const graph = await getMemoryGraph(workspace);
     return graph.getStats();
-  } catch (error) {
+  } catch {
     return {
       nodeCount: 0,
       edgeCount: 0,
@@ -158,7 +157,7 @@ export async function search_nodes_by_type(args: {
       limit: args.limit || 50
     });
     return result.nodes;
-  } catch (error) {
+  } catch {
     return [];
   }
 }
@@ -181,7 +180,7 @@ export async function search_nodes_by_name(args: {
       limit: args.limit || 50
     });
     return result.nodes;
-  } catch (error) {
+  } catch {
     return [];
   }
 }
@@ -204,7 +203,7 @@ export async function search_nodes_by_path(args: {
       limit: args.limit || 50
     });
     return result.nodes;
-  } catch (error) {
+  } catch {
     return [];
   }
 }
@@ -229,7 +228,7 @@ export async function find_dependencies(args: {
       limit: args.maxDepth ? (args.maxDepth * 10) : 50
     });
     return result.nodes;
-  } catch (error) {
+  } catch {
     return [];
   }
 }
@@ -256,7 +255,7 @@ export async function find_path(args: {
       }
     });
     return result.paths;
-  } catch (error) {
+  } catch {
     return [];
   }
 }
@@ -279,7 +278,7 @@ export async function pattern_search(args: {
       limit: args.limit || 50
     });
     return result.nodes;
-  } catch (error) {
+  } catch {
     return [];
   }
 }
@@ -304,7 +303,7 @@ export async function get_file_info(args: {
       limit: 1
     });
     return result.nodes[0] || null;
-  } catch (error) {
+  } catch {
     return null;
   }
 }
@@ -331,7 +330,7 @@ export async function get_function_info(args: {
       limit: 10
     });
     return result.nodes;
-  } catch (error) {
+  } catch {
     return [];
   }
 }
@@ -358,7 +357,7 @@ export async function get_class_info(args: {
       limit: 10
     });
     return result.nodes;
-  } catch (error) {
+  } catch {
     return [];
   }
 }
@@ -380,7 +379,7 @@ export async function list_files(args: {
       limit: args.limit || 100
     });
     return result.nodes;
-  } catch (error) {
+  } catch {
     return [];
   }
 }
@@ -402,7 +401,7 @@ export async function list_functions(args: {
       limit: args.limit || 100
     });
     return result.nodes;
-  } catch (error) {
+  } catch {
     return [];
   }
 }
@@ -424,7 +423,7 @@ export async function list_classes(args: {
       limit: args.limit || 100
     });
     return result.nodes;
-  } catch (error) {
+  } catch {
     return [];
   }
 }
@@ -442,7 +441,7 @@ export function clear_graph_cache(): void {
 export async function get_graph(workspace: string): Promise<MemoryGraph | null> {
   try {
     return await getMemoryGraph(workspace);
-  } catch (error) {
+  } catch {
     return null;
   }
 }
@@ -458,8 +457,8 @@ export async function get_communities(args: {
     const graph = await getMemoryGraph(workspace);
     const communities = graph.getCommunities();
     return { ok: true, communities };
-  } catch (e: any) {
-    return { ok: false, communities: [], error: e.message };
+  } catch (e: unknown) {
+    return { ok: false, communities: [], error: (e as { message?: string }).message };
   }
 }
 
@@ -475,8 +474,8 @@ export async function get_god_nodes(args: {
     const graph = await getMemoryGraph(workspace);
     const godNodes = graph.getGodNodes(args.limit || 10);
     return { ok: true, godNodes };
-  } catch (e: any) {
-    return { ok: false, godNodes: [], error: e.message };
+  } catch (e: unknown) {
+    return { ok: false, godNodes: [], error: (e as { message?: string }).message };
   }
 }
 
@@ -492,8 +491,8 @@ export async function get_surprising_connections(args: {
     const graph = await getMemoryGraph(workspace);
     const connections = graph.getSurprisingConnections(args.limit || 20);
     return { ok: true, connections };
-  } catch (e: any) {
-    return { ok: false, connections: [], error: e.message };
+  } catch (e: unknown) {
+    return { ok: false, connections: [], error: (e as { message?: string }).message };
   }
 }
 
@@ -508,8 +507,8 @@ export async function get_analysis_report(args: {
     const graph = await getMemoryGraph(workspace);
     const report = graph.generateAnalysisReport();
     return { ok: true, report };
-  } catch (e: any) {
-    return { ok: false, error: e.message };
+  } catch (e: unknown) {
+    return { ok: false, error: (e as { message?: string }).message };
   }
 }
 

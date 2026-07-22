@@ -1,7 +1,6 @@
 import OpenAI from "openai";
-import type { ChatCompletionMessageFunctionToolCall } from "openai/resources/chat/completions";
 import { createRequire } from "module";
-import type { Config, Message } from "./types";
+import type { Config } from "./types";
 import type { StreamChunk } from "./streaming";
 
 /**
@@ -48,24 +47,23 @@ export interface ChatResponse {
   finishReason?: string;
 }
 
-export function normalizeContent(v: any): string {
+export function normalizeContent(v: unknown): string {
   if (v === null || v === undefined) return "";
   if (typeof v === "string") return v;
   if (typeof v === "object" && v !== null) {
     if (Array.isArray(v)) {
-      // OpenAI content parts array: [{ type: "text", text: "..." }, { content: "..." }]
-      return v.map((part: any) => {
+      return v.map((part: unknown) => {
         if (part === null || part === undefined) return "";
         if (typeof part === "string") return part;
-        // Prefer text or content sub-field for content part objects
-        if (part.text) return String(part.text);
-        if (part.content) return String(part.content);
+        const p = part as Record<string, unknown>;
+        if (p.text) return String(p.text);
+        if (p.content) return String(p.content);
         return String(part);
       }).join("");
     }
-    // Single object: try common text-bearing fields
-    if (v.text) return String(v.text);
-    if (v.content) return String(v.content);
+    const obj = v as Record<string, unknown>;
+    if (obj.text) return String(obj.text);
+    if (obj.content) return String(obj.content);
     return String(v);
   }
   return String(v);
@@ -112,7 +110,7 @@ export function isSmallModel(
  * @param modelId - The model identifier
  * @returns Estimated context size in tokens
  */
-const _tkEncoders = new Map<string, any>();
+const _tkEncoders = new Map<string, unknown>();
 function getTKEncoder(modelId?: string) {
   const cacheKey = modelId || "default";
   if (_tkEncoders.has(cacheKey)) return _tkEncoders.get(cacheKey);
@@ -122,7 +120,7 @@ function getTKEncoder(modelId?: string) {
     const tk = requireOptional("tiktoken");
     // Use encoding_for_model if a model name is provided, otherwise fall back to cl100k_base
     if (modelId) {
-      try { encoder = tk.encoding_for_model(modelId); } catch {}
+      try { encoder = tk.encoding_for_model(modelId); } catch { /* model not supported */ }
     }
     if (!encoder) {
       encoder = tk.get_encoding("cl100k_base");
@@ -141,7 +139,7 @@ function getTKEncoder(modelId?: string) {
 export function countTokens(text: string, modelId?: string): number {
   const enc = getTKEncoder(modelId);
   if (enc) {
-    try { return enc.encode(text).length; } catch {}
+    try { return enc.encode(text).length; } catch { /* encoding failed */ }
   }
   return Math.ceil(text.length / 4);
 }
@@ -185,7 +183,7 @@ export function doesChatFitInContext(
   return totalTokens < contextLength;
 }
 
-export function estimateModelContextSize(modelId: string, maxTokens?: number): number {
+export function estimateModelContextSize(modelId: string, _maxTokens?: number): number {
   const lowerModelId = modelId.toLowerCase();
   
   // Check for explicit context size in model name
@@ -361,22 +359,24 @@ export function getModelCompactionSettings(
 /**
  * Normalise OpenAI-compatible API errors into human-readable strings.
  */
-export function extractDeltaText(delta: any): {
+export function extractDeltaText(delta: unknown): {
   content: string;
   reasoningContent: string;
 } {
   if (!delta) return { content: "", reasoningContent: "" };
 
+  const d = delta as Record<string, unknown>;
+
   const content =
-    normalizeContent(delta.content) ||
-    normalizeContent(delta.text) ||
-    normalizeContent(delta.response) ||
-    normalizeContent(delta.message?.content) ||
+    normalizeContent(d.content) ||
+    normalizeContent(d.text) ||
+    normalizeContent(d.response) ||
+    normalizeContent((d.message as Record<string, unknown>)?.content) ||
     "";
 
   const reasoningContent =
-    normalizeContent(delta.reasoning_content) ||
-    normalizeContent(delta.reasoningContent);
+    normalizeContent(d.reasoning_content) ||
+    normalizeContent(d.reasoningContent);
 
   return { content, reasoningContent };
 }
@@ -408,21 +408,25 @@ export function createClient(cfg: Config) {
  * @param attempt - Current retry attempt (1-based).
  * @returns Localised error message.
  */
-function extractApiMessage(err: any): string {
+function extractApiMessage(err: unknown): string {
+  const e = err as Record<string, unknown>;
   // OpenAI: { error: { message } }
-  if (err?.error?.message) return err.error.message;
+  const errObj = e.error as Record<string, unknown> | undefined;
+  if (errObj?.message) return errObj.message as string;
   // Mistral: { message } at root level
-  if (err?.message && !err.message.startsWith("HTTP ")) return err.message;
+  const msg = e.message as string | undefined;
+  if (msg && !msg.startsWith("HTTP ")) return msg;
   // Provider-specific: error_object, error_detail
-  if (err?.error_object?.message) return err.error_object.message;
-  if (err?.error_detail) return err.error_detail;
+  const errObj2 = e.error_object as Record<string, unknown> | undefined;
+  if (errObj2?.message) return errObj2.message as string;
+  if (e.error_detail) return e.error_detail as string;
   return "";
 }
 
 function errorMessage(
   status: number,
   attempt: number,
-  originalErr?: any,
+  originalErr?: unknown,
   maxAttempts = 3
 ): string {
   if (status === 401) {
@@ -471,13 +475,14 @@ const NON_RETRIABLE_ERRORS = [
   "insufficient_quota",
 ];
 
-function isRetriable(err?: any): boolean {
+function isRetriable(err?: unknown): boolean {
   if (!err) return true;
-  const msg = (err.message || err.code || err.type || "").toLowerCase();
+  const e = err as Record<string, unknown>;
+  const msg = ((e.message as string) || (e.code as string) || (e.type as string) || "").toLowerCase();
   return !NON_RETRIABLE_ERRORS.some((kw) => msg.includes(kw));
 }
 
-function shouldRetry(status?: number, attempt?: number, err?: any): boolean {
+function shouldRetry(status?: number, attempt?: number, err?: unknown): boolean {
   if (!isRetriable(err)) return false;
   if (status === undefined) return true; // network error
   if (status === 429) return true;
@@ -525,7 +530,7 @@ export async function chat(
   client: OpenAI,
   cfg: Config,
   messages: ChatMessage[],
-  tools?: any[],
+  tools?: unknown[],
   signal?: AbortSignal,
   options?: ChatRequestOptions
 ): Promise<ChatResponse> {
@@ -537,89 +542,89 @@ export async function chat(
       const isQwen = cfg.model.toLowerCase().includes("qwen");
       const enableThinking =
         options?.enableThinking ?? (isQwen ? true : false);
+      const reqParams: Record<string, unknown> = {
+        model: cfg.model,
+        messages: messages.map((m) => {
+          if (m.role === "tool") {
+            return {
+              role: "tool" as const,
+              content: m.content,
+              tool_call_id: m.tool_call_id ?? "",
+            };
+          }
+          if (m.role === "assistant" && m.tool_calls) {
+            return {
+              role: "assistant" as const,
+              content: m.content,
+              tool_calls: m.tool_calls,
+            };
+          }
+          return { role: m.role, content: m.content };
+        }),
+        temperature: cfg.temperature ?? 0.2,
+        max_tokens: getMaxOutputTokens(cfg.model, cfg.maxTokens),
+        tool_choice: tools?.length ? "auto" : undefined,
+      };
+      if (tools?.length) reqParams.tools = tools;
+      if (enableThinking) reqParams.enable_thinking = true;
       const completion = await client.chat.completions.create(
-        {
-          model: cfg.model,
-          messages: messages.map((m) => {
-            if (m.role === "tool") {
-              // ChatMessage uses snake_case; Message uses camelCase
-              // Access both and use whatever is available
-              const toolCallId = (m as any).tool_call_id ?? (m as any).toolCallId;
-              return {
-                role: "tool" as const,
-                content: m.content,
-                tool_call_id: toolCallId ?? `fallback-${(m as any).id}`,
-              };
-            }
-            if (m.role === "assistant" && ((m as any).tool_calls ?? (m as any).toolCalls)) {
-              const toolCalls = (m as any).tool_calls ?? (m as any).toolCalls;
-              return {
-                role: "assistant" as const,
-                content: m.content,
-                tool_calls: toolCalls,
-              };
-            }
-            return { role: m.role, content: m.content };
-          }),
-          temperature: cfg.temperature ?? 0.2,
-      max_tokens: getMaxOutputTokens(cfg.model, cfg.maxTokens),
-      tools: tools?.length ? tools : undefined,
-      tool_choice: tools?.length ? "auto" as const : undefined,
-      ...(isLocalProvider(cfg.baseURL) && tools?.length ? { parallel_tool_calls: false } : {}),
-      ...(enableThinking ? { enable_thinking: true } : {}),
-    },
-    { signal }
-  );
+        reqParams as unknown as Parameters<typeof client.chat.completions.create>[0],
+        { signal }
+      ) as unknown as { choices: Array<Record<string, unknown>>; usage?: { prompt_tokens: number; completion_tokens: number } };
 
-  const choice = completion.choices[0];
-  const msg = choice?.message;
+  const completionObj = completion as unknown as {
+    choices: Array<Record<string, unknown>>;
+    usage?: { prompt_tokens: number; completion_tokens: number };
+  };
+  const choice = completionObj.choices[0] as Record<string, unknown> | undefined;
+  const msg = choice?.message as Record<string, unknown> | undefined;
 
       return {
         message: {
-          role: msg?.role || "assistant",
+          role: (msg?.role as string) || "assistant",
           content: normalizeContent(msg?.content),
           reasoning_content:
-            (msg as any).reasoning_content ||
-            (choice as any).reasoning_content ||
+            (msg?.reasoning_content as string) ||
+            (choice?.reasoning_content as string) ||
             undefined,
-          tool_calls: msg?.tool_calls?.map((tc) => {
-            const func = tc as ChatCompletionMessageFunctionToolCall;
-               // Validate required fields; generate missing id, skip calls with no name
-               if (!func.function?.name) {
+          tool_calls: ((msg?.tool_calls as Array<Record<string, unknown>> | undefined) || [])
+            .map((tc: Record<string, unknown>) => {
+               if (!(tc.function as Record<string, unknown> | undefined)?.name) {
                  return null;
                }
                return {
-                 id: func.id || `call_${Math.random().toString(36).slice(2, 10)}`,
+                 id: (tc.id as string) || `call_${Math.random().toString(36).slice(2, 10)}`,
                  type: "function" as const,
                  function: {
-                   name: func.function.name,
-                   arguments: func.function.arguments || "{}",
+                   name: (tc.function as Record<string, unknown>).name as string,
+                   arguments: ((tc.function as Record<string, unknown>).arguments as string) || "{}",
                  },
                };
              }).filter((x): x is NonNullable<typeof x> => x !== null),
            },
-           usage: completion.usage
+           usage: completionObj.usage
              ? {
-               input_tokens: completion.usage.prompt_tokens,
-               output_tokens: completion.usage.completion_tokens,
+               input_tokens: completionObj.usage.prompt_tokens,
+               output_tokens: completionObj.usage.completion_tokens,
               }
               : undefined,
-            finishReason: choice?.finish_reason || undefined,
-          };
-    } catch (err: any) {
-      if (err.name === 'AbortError' || signal?.aborted) {
+             finishReason: choice?.finish_reason as string | undefined,
+           };
+     } catch (err: unknown) {
+      const e = err as { name: string; status?: number; status_code?: number; response?: { status?: number } };
+      if (e.name === 'AbortError' || signal?.aborted) {
         throw err;
       }
-      const status = err?.status || err?.status_code || err?.response?.status;
-      lastError = err;
+      const errStatus = e.status || e.status_code || e.response?.status || 0;
+      lastError = err as Error;
 
-      if (!shouldRetry(status, attempt, err)) {
-        throw new ApiError(errorMessage(status, attempt, err, maxRetries), status);
+      if (!shouldRetry(errStatus, attempt, err)) {
+        throw new ApiError(errorMessage(errStatus, attempt, err, maxRetries), errStatus);
       }
 
-      const message = errorMessage(status, attempt, err, maxRetries);
+      const message = errorMessage(errStatus, attempt, err, maxRetries);
       if (attempt === maxRetries) {
-        throw new ApiError(message, status);
+        throw new ApiError(message, errStatus);
       }
 
       // Exponential backoff with jitter: 1-2s, 2-4s, 4-8s
@@ -640,7 +645,7 @@ export async function* streamChat(
   client: OpenAI,
   cfg: Config,
   messages: ChatMessage[],
-  tools?: any[],
+  tools?: unknown[],
   signal?: AbortSignal,
   options?: ChatRequestOptions
 ): AsyncGenerator<StreamChunk, { usage?: { input_tokens: number; output_tokens: number } }, void> {
@@ -652,38 +657,36 @@ export async function* streamChat(
       const isQwen = cfg.model.toLowerCase().includes("qwen");
       const enableThinking =
         options?.enableThinking ?? (isQwen ? true : false);
+      const streamReqParams: Record<string, unknown> = {
+        model: cfg.model,
+        messages: messages.map((m) => {
+          if (m.role === "tool") {
+            return {
+              role: "tool" as const,
+              content: m.content,
+              tool_call_id: m.tool_call_id ?? "",
+            };
+          }
+          if (m.role === "assistant" && m.tool_calls) {
+            return {
+              role: "assistant" as const,
+              content: m.content,
+              tool_calls: m.tool_calls,
+            };
+          }
+          return { role: m.role, content: m.content };
+        }),
+        temperature: cfg.temperature ?? 0.2,
+        max_tokens: getMaxOutputTokens(cfg.model, cfg.maxTokens),
+        tool_choice: tools?.length ? "auto" : undefined,
+        stream: true,
+      };
+      if (tools?.length) streamReqParams.tools = tools;
+      if (enableThinking) streamReqParams.enable_thinking = true;
       const stream = await client.chat.completions.create(
-        {
-          model: cfg.model,
-          messages: messages.map((m) => {
-            if (m.role === "tool") {
-              const toolCallId = (m as any).tool_call_id ?? (m as any).toolCallId;
-              return {
-                role: "tool" as const,
-                content: m.content,
-                tool_call_id: toolCallId ?? `fallback-${(m as any).id}`,
-              };
-            }
-            if (m.role === "assistant" && ((m as any).tool_calls ?? (m as any).toolCalls)) {
-              const toolCalls = (m as any).tool_calls ?? (m as any).toolCalls;
-              return {
-                role: "assistant" as const,
-                content: m.content,
-                tool_calls: toolCalls,
-              };
-            }
-            return { role: m.role, content: m.content };
-          }),
-          temperature: cfg.temperature ?? 0.2,
-          max_tokens: getMaxOutputTokens(cfg.model, cfg.maxTokens),
-          tools: tools?.length ? tools : undefined,
-          tool_choice: tools?.length ? "auto" as const : undefined,
-          ...(isLocalProvider(cfg.baseURL) && tools?.length ? { parallel_tool_calls: false } : {}),
-          stream: true,
-          ...(enableThinking ? { enable_thinking: true } : {}),
-        },
+        streamReqParams as unknown as Parameters<typeof client.chat.completions.create>[0],
         { signal }
-      );
+      ) as AsyncIterable<{ choices: Array<{ delta: Record<string, unknown>; finish_reason?: string; index: number; reasoning_content?: string }> }>;
 
       const toolCallBuffers = new Map<number, { id: string; name: string; args: string }>();
       let finishReason: string | undefined;
@@ -699,11 +702,12 @@ export async function* streamChat(
         finishReason = choice?.finish_reason || finishReason;
 
         // Capture usage from the final chunk if present
-        if ((chunk as any).usage) {
-          const u = (chunk as any).usage;
+        const chunkAny = chunk as unknown as Record<string, unknown>;
+        if (chunkAny.usage) {
+          const u = chunkAny.usage as Record<string, unknown>;
           usage = {
-            input_tokens: u.prompt_tokens,
-            output_tokens: u.completion_tokens,
+            input_tokens: u.prompt_tokens as number,
+            output_tokens: u.completion_tokens as number,
           };
         }
 
@@ -715,25 +719,29 @@ export async function* streamChat(
         if (!delta) continue;
 
         // Accumulate tool calls (providers vary: tool_calls can appear on delta OR message)
+        const deltaAny = delta as Record<string, unknown>;
+        const choiceAny = choice as Record<string, unknown>;
         const toolCallsAny =
-          (delta as any).tool_calls ||
-          (choice as any).tool_calls ||
-          (choice as any).message?.tool_calls ||
+          deltaAny.tool_calls ||
+          choiceAny.tool_calls ||
+          (choiceAny.message as Record<string, unknown>)?.tool_calls ||
           [];
 
         if (Array.isArray(toolCallsAny) && toolCallsAny.length > 0) {
-          for (const tc of toolCallsAny) {
-            const idx = tc.index ?? 0;
-            let buf = toolCallBuffers.get(idx);
-            if (!buf) {
-              const fallbackId = tc.id || `call_${idx}_${Math.random().toString(36).slice(2, 10)}`;
-              buf = { id: fallbackId, name: tc.function?.name || "", args: "" };
-              toolCallBuffers.set(idx, buf);
-            } else if (tc.id && !buf.id) {
-              buf.id = tc.id;
+          for (const tcRaw of toolCallsAny as Array<Record<string, unknown>>) {
+            const idx = (tcRaw.index ?? 0) as number;
+            const tcId = tcRaw.id as string | undefined;
+            const tcFn = tcRaw.function as Record<string, unknown> | undefined;
+            if (!toolCallBuffers.has(idx)) {
+              const fallbackId = tcId || `call_${idx}_${Math.random().toString(36).slice(2, 10)}`;
+              toolCallBuffers.set(idx, { id: fallbackId, name: (tcFn?.name as string) || "", args: "" });
             }
-            if (tc.function?.name) buf.name = tc.function.name;
-            if (tc.function?.arguments) buf.args += tc.function.arguments;
+            const buf = toolCallBuffers.get(idx)!;
+            if (tcId && !buf.id) {
+              buf.id = tcId;
+            }
+            if (tcFn?.name) buf.name = tcFn.name as string;
+            if (tcFn?.arguments) buf.args += tcFn.arguments as string;
           }
         }
 
@@ -741,8 +749,8 @@ export async function* streamChat(
         const { content, reasoningContent: drc } = extractDeltaText(delta);
         // Also check choice-level reasoning_content (some providers put it here instead of delta)
         const reasoningContent = drc ||
-          normalizeContent((choice as any).reasoning_content) ||
-          normalizeContent((choice as any).reasoning);
+          normalizeContent((choiceAny.reasoning_content as string) ?? "") ||
+          normalizeContent((choiceAny.reasoning as string) ?? "");
 
         // Build complete tool calls from buffers
         const completeToolCalls: Array<{ id: string; name: string; arguments: string }> = [];
@@ -786,20 +794,21 @@ export async function* streamChat(
       }
 
       return { usage };
-    } catch (err: any) {
-      if (err.name === 'AbortError' || signal?.aborted) {
+    } catch (err: unknown) {
+      const e = err as { name: string; status?: number; status_code?: number; response?: { status?: number } };
+      if (e.name === 'AbortError' || signal?.aborted) {
         throw err;
       }
-      const status = err?.status || err?.status_code || err?.response?.status;
-      lastError = err;
+      const errStatus = e.status || e.status_code || e.response?.status || 0;
+      lastError = err as Error;
 
-      if (!shouldRetry(status, attempt, err)) {
-        throw new ApiError(errorMessage(status, attempt, err, maxRetries), status);
+      if (!shouldRetry(errStatus, attempt, err)) {
+        throw new ApiError(errorMessage(errStatus, attempt, err, maxRetries), errStatus);
       }
 
-      const message = errorMessage(status, attempt, err, maxRetries);
+      const message = errorMessage(errStatus, attempt, err, maxRetries);
       if (attempt === maxRetries) {
-        throw new ApiError(message, status);
+        throw new ApiError(message, errStatus);
       }
 
       // Exponential backoff with jitter: 1-2s, 2-4s, 4-8s

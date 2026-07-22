@@ -272,7 +272,7 @@ export function ChatScreen({
        <CommandDropdown 
          inputValue={inputValue} 
          theme={theme} 
-         onSubmit={useCallback((v: any) => { handleSubmitLocal(v); }, [handleSubmitLocal])} 
+         onSubmit={useCallback((v: string) => { handleSubmitLocal(v); }, [handleSubmitLocal])} 
          onPick={useCallback((cmd: string) => {
             const trimmed = inputValue.trim();
             if (trimmed === cmd || trimmed.startsWith(cmd + " ")) {
@@ -292,7 +292,8 @@ export function ChatScreen({
           placeholder={busy ? "Working…" : "Type a message or / for commands…"} 
           value={inputValue} 
           onInput={setInputValue} 
-          onSubmit={useCallback((v: any) => { if (!dropdownOpen && typeof v === "string" && v.trim()) handleSubmitLocal(v); }, [dropdownOpen, handleSubmitLocal])} 
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          onSubmit={useCallback((v: any) => { if (!dropdownOpen && v.trim()) handleSubmitLocal(v); }, [dropdownOpen, handleSubmitLocal])} 
           focused 
         />
       </box>
@@ -331,15 +332,13 @@ const DONE = "done";
 const ERROR = "error";
 
 /**
- * Live sub-agent stream, rendered inline in the chat flow (no bordered box).
- * Each sub-agent reads like a streamed transcript straight from the remote
- * endpoint — nothing is mocked:
+ * Live sub-agent stream, rendered inline in the chat flow.
+ * Compact format: agent name, task, and tool calls.
  *
- *   Thought
- *   Running explore agent: <prompt>
- *   → grep: Found 100 matches          (one line per tool call, live)
- *   → read_file: Read from x.ts (111 lines)
- *   Agent completed in 8 turns          (one line when it finishes)
+ *   subagent-1: security audit
+ *     ● grep_search(src/auth.ts)
+ *     ● read_file(src/config.ts)
+ *     ✓ Completed in 4 turns · 1.2s
  */
 function SubAgentPanel({
   subAgents,
@@ -363,83 +362,83 @@ function SubAgentPanel({
 
   return (
     <box flexDirection="column" marginY={1}>
-      {subAgents.map((sa) => {
+      {subAgents.map((sa, idx) => {
         const log = sa.log ?? [];
         const turns = sa.result?.toolCalls ?? 0;
         const isRunning = sa.status === RUNNING;
 
-        const elements: React.ReactNode[] = [];
-        let currentText = "";
-        let chunkIndex = 0;
+        // Derive short agent name: "subagent-1", "subagent-2", etc.
+        const agentName = `subagent-${idx + 1}`;
 
-        const runningToolMap = new Map<string, any>();
+        // Extract a short task label from the prompt.
+        // If enriched with shared context, grab the task after the context block.
+        let rawPrompt = sa.prompt;
+        const endCtxIdx = rawPrompt.indexOf("=== END CONTEXT ===");
+        if (endCtxIdx !== -1) {
+          rawPrompt = rawPrompt.slice(endCtxIdx + "=== END CONTEXT ===".length).trim();
+        }
+        // Also strip leading === SHARED CONTEXT === wrapper if present without END
+        if (rawPrompt.startsWith("=== SHARED CONTEXT ===")) {
+          rawPrompt = rawPrompt.replace(/^=== SHARED CONTEXT ===[\s\S]*?=== END CONTEXT ===\s*/m, "").trim();
+        }
+        const taskLabel = rawPrompt
+          .split("\n")[0]
+          .replace(/^(analyze|review|investigate|check|audit|explore|find|search|look)\s+/i, "")
+          .slice(0, 60)
+          .replace(/[.,;:]+$/, "");
 
+        // Collect completed tool calls
+        const toolCalls: Array<{ name: string; ok: boolean }> = [];
         for (const ev of log) {
-          if (ev.type === "subagent_chunk") {
-            currentText += (ev.reasoning || ev.text || "");
-          } else if (ev.type === "subagent_tool" && ev.tool) {
-            runningToolMap.set(ev.tool, {
-              key: `${sa.id}-t-${chunkIndex++}`,
-              tool: ev.tool,
-              args: ev.toolArgs,
-            });
-          } else if (ev.type === "subagent_tool_result" && ev.tool) {
-            const running = runningToolMap.get(ev.tool);
-            const argsRaw = running?.args || ev.toolArgs || "{}";
-            // Use toolResultRaw if available to allow full diff generation, else fallback to a basic payload
-            const resultRaw = ev.toolResultRaw || JSON.stringify({ ok: true, summary: ev.toolResult });
-            const block = buildToolDisplayBlock(ev.tool, argsRaw, resultRaw, undefined);
-            
-            elements.push(
-              <box key={`${sa.id}-tr-${chunkIndex++}`} marginLeft={2}>
-                <ToolActivityBlock block={block} theme={theme} />
-              </box>
-            );
-            runningToolMap.delete(ev.tool);
+          if (ev.type === "subagent_tool_result" && ev.tool) {
+            toolCalls.push({ name: ev.tool, ok: ev.ok !== false });
           }
         }
 
-        const pendingElements: React.ReactNode[] = [];
-        for (const [toolName, item] of runningToolMap.entries()) {
-          const pending = buildToolDisplayBlock(item.tool, item.args || "{}", "", undefined);
-          pendingElements.push(
-            <box key={item.key} flexDirection="column" marginLeft={2}>
-              <text fg={theme.statusTool}>
-                {`  ${spin} → running ${pending.action}(${pending.target})…`}
-              </text>
-            </box>
-          );
+        // Find currently running tool
+        const runningTools = new Map<string, string>();
+        for (const ev of log) {
+          if (ev.type === "subagent_tool" && ev.tool) {
+            runningTools.set(ev.tool, ev.toolArgs ?? "");
+          }
+        }
+        for (const ev of log) {
+          if (ev.type === "subagent_tool_result" && ev.tool) {
+            runningTools.delete(ev.tool);
+          }
         }
 
         return (
           <box key={sa.id} flexDirection="column" marginY={0}>
+            {/* Header: agent name + task */}
             <text fg={sa.status === DONE ? theme.toolFg : sa.status === ERROR ? theme.errorFg : theme.statusTool}>
               {isRunning ? `${spin} ` : sa.status === DONE ? "✓ " : "✗ "}
-              Running explore agent: {sa.prompt}
+              {agentName}: {taskLabel || "working…"}
             </text>
 
-            {elements}
-            
-            {isRunning && currentText.trim() !== "" && (
-              <box flexDirection="column" marginLeft={2}>
-                {currentText.trim().split("\n").slice(-3).map((line, i) => (
-                  <text key={i} fg={theme.mutedFg}>
-                    {"  "}{line.slice(0, 120) || " "}
-                  </text>
-                ))}
-              </box>
-            )}
+            {/* Completed tool calls */}
+            {toolCalls.map((tc, i) => (
+              <text key={i} fg={tc.ok ? theme.mutedFg : theme.errorFg} marginLeft={2}>
+                {tc.ok ? "●" : "✗"} {tc.name}
+              </text>
+            ))}
 
-            {pendingElements}
+            {/* Currently running tools */}
+            {isRunning && [...runningTools.entries()].map(([toolName, _args], i) => (
+              <text key={`r-${i}`} fg={theme.statusTool} marginLeft={2}>
+                {spin} {toolName}…
+              </text>
+            ))}
 
+            {/* Status line */}
             {sa.status === DONE && (
-              <text fg={theme.mutedFg}>
-                {`  ✓ Agent completed in ${turns} turns${sa.result?.durationMs != null ? ` · ${Math.round(sa.result.durationMs)}ms` : ""}`}
+              <text fg={theme.mutedFg} marginLeft={2}>
+                ✓ {turns} turns{sa.result?.durationMs != null ? ` · ${(sa.result.durationMs / 1000).toFixed(1)}s` : ""}
               </text>
             )}
             {sa.status === ERROR && (
-              <text fg={theme.errorFg}>
-                {`  ✗ Agent failed after ${turns} turns${sa.result?.error ? `: ${sa.result.error.slice(0, 100)}` : ""}`}
+              <text fg={theme.errorFg} marginLeft={2}>
+                ✗ {sa.result?.error?.slice(0, 80) || "failed"}
               </text>
             )}
           </box>

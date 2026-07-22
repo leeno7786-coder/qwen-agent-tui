@@ -78,7 +78,7 @@ export function renameSession(oldId: string, newId: string): boolean {
     }
     session.id = newId;
     session.updatedAt = Date.now();
-    Bun.write(newPath, JSON.stringify(session, null, 2));
+    writeFileSync(newPath, JSON.stringify(session, null, 2), "utf-8");
     rmSync(oldPath);
     return true;
   } catch {
@@ -151,8 +151,7 @@ export function resumeSession(id?: string): Session | null {
  */
 export function copyToClipboard(text: string): boolean {
   try {
-    // Use clipboardy if available (recommended for cross-platform clipboard)
-    const clipboardy: any = requireOptional("clipboardy");
+    const clipboardy = requireOptional("clipboardy") as { writeSync?: (text: string) => void } | undefined;
     if (clipboardy?.writeSync) {
       clipboardy.writeSync(text);
       return true;

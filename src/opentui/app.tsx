@@ -3,11 +3,9 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useKeyboard } from "@opentui/react";
 import type { CliRenderer } from "@opentui/core";
-import { existsSync, statSync } from "fs";
-import { resolve } from "path";
 import { AgentCore } from "../agent";
 import { loadConfig } from "../config";
-import { estimateModelContextSize, getModelCompactionSettings, countTokens, doesChatFitInContext } from "../llm";
+import { getModelCompactionSettings, countTokens } from "../llm";
 import { tools } from "../tools";
 import {
   saveSession,
@@ -18,10 +16,8 @@ import {
   exportToMarkdown,
   autoSaveSession,
   resumeSession,
-  loadInputHistory,
-  saveInputHistory,
 } from "../store";
-import type { Message, AgentState, Todo, ToolResult, Session, Skill, SkillCommand, Config } from "../types";
+import type { Message, AgentState, Todo, ToolResult, Session, Skill, SkillCommand, Config, RuntimeProvider, ModelInfo } from "../types";
 import type { SubAgentProgressEvent } from "../tools";
 import type { SubAgentResult } from "../subagents";
 import { ChatScreen } from "./chat-screen";
@@ -49,7 +45,7 @@ import { build_memory_graph, get_graph_stats, get_analysis_report } from "../gra
  * @returns Estimated token count
  */
 function estimateTokenCount(text: string): number {
-  try { return countTokens(text); } catch {}
+  try { return countTokens(text); } catch { /* tokenizer not available */ }
   return Math.ceil(text.length / 4);
 }
 
@@ -251,7 +247,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     [messages]
   );
   const [skills, setSkills] = useState<Map<string, Skill>>(new Map());
-  const [skillCommands, setSkillCommands] = useState<SkillCommand[]>([]);
+  const [, setSkillCommands] = useState<SkillCommand[]>([]);
 
   const agentRef = useRef<AgentCore | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -297,14 +293,11 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     };
     
     // Store refresh handler in global scope for skills overlay to call
-    (globalThis as any).__refreshSkills = handleSkillRefresh;
+    (globalThis as Record<string, unknown>)['__refreshSkills'] = handleSkillRefresh;
 
-    // Graceful shutdown on SIGINT (Ctrl+C)
+    // Graceful shutdown on SIGINT (Ctrl+C) — cleanup is also handled by main.ts
     const handleSigint = () => {
-      if (agent && agent.messages.length > 0) {
-        autoSaveSession(agent.messages, agent.todos, cfg.workspace);
-      }
-      process.exit(0);
+      agent.shutdown().catch(() => {});
     };
     process.on("SIGINT", handleSigint);
 
@@ -335,7 +328,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
         autoSaveSession(agent.messages, agent.todos, agent.cfg.workspace);
       }
       // Clean up global skill refresh handler
-      delete (globalThis as any).__refreshSkills;
+      delete (globalThis as Record<string, unknown>)['__refreshSkills'];
     };
   }, []);
 
@@ -477,7 +470,6 @@ export function App({ renderer }: { renderer: CliRenderer }) {
       } else if (keyEvent.name === "Down" || keyEvent.name === "ArrowDown") {
         const agent = agentRef.current;
         if (agent && agent.messages.length > 0) {
-          const nonSystem = agent.messages.filter(m => m.role !== "system");
           setSelectedMessageIndex((prev) => {
             const current = prev !== null ? prev : 0;
             const newIndex = Math.max(current - 1, 0);
@@ -804,7 +796,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
                   setMessages([...agent.messages]);
                   return;
                 }
-              } catch (parseError) {
+              } catch {
                 agent.messages.push({
                   id: Math.random().toString(36).slice(2, 10),
                   role: "assistant",
@@ -1208,6 +1200,125 @@ export function App({ renderer }: { renderer: CliRenderer }) {
               }
               return;
             }
+            case "mcp": {
+              const states = agent.mcpStates;
+              const mgr = agent.mcpManager;
+              if (!states || states.length === 0) {
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: "assistant",
+                  content: "No MCP servers configured. Add `mcp` to ~/.qwen-agent.json.\n\nExample:\n```json\n\"mcp\": {\n  \"filesystem\": {\n    \"type\": \"local\",\n    \"command\": [\"npx\", \"-y\", \"@modelcontextprotocol/server-filesystem\", \"/path/to/dir\"]\n  },\n  \"remote\": {\n    \"type\": \"remote\",\n    \"url\": \"https://mcp.example.com/sse\"\n  }\n}\n```\n\nYou can also ask me to add an MCP server — just describe what you need and I'll use manage_mcp to configure it.",
+                  timestamp: Date.now(),
+                });
+              } else {
+                const connected = mgr?.connectedCount ?? 0;
+                const totalTools = mgr?.totalTools ?? 0;
+                const lines = [
+                  `## MCP Servers (${connected} connected, ${totalTools} tools)`,
+                  "",
+                  ...states.map((s) => {
+                    const icon = s.status === "connected" ? "+" : s.status === "error" ? "!" : "-";
+                    const info = s.serverInfo ? ` (${s.serverInfo.name}${s.serverInfo.version ? ` v${s.serverInfo.version}` : ""})` : "";
+                    const err = s.error ? ` - ${s.error}` : "";
+                    return `- [${icon}] ${s.name}${info}: ${s.status}, ${s.toolCount} tools${err}`;
+                  }),
+                  "",
+                  "Commands: `/mcp-add`, `/mcp-remove`, or ask me to manage MCP servers.",
+                ];
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: "assistant",
+                  content: lines.join("\n"),
+                  timestamp: Date.now(),
+                });
+              }
+              setMessages([...agent.messages]);
+              return;
+            }
+            case "mcp-add": {
+              if (!args) {
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: "assistant",
+                  content: "Usage: `/mcp-add <name> <type> <connection>`\n\nExamples:\n- `/mcp-add filesystem local npx -y @modelcontextprotocol/server-filesystem /home/user/docs`\n- `/mcp-add github remote https://mcp.github.com/sse`\n\nOr just ask me in natural language: \"Add an MCP server for reading files in /tmp\"",
+                  timestamp: Date.now(),
+                });
+                setMessages([...agent.messages]);
+                return;
+              }
+              const parts = args.split(/\s+/);
+              const name = parts[0];
+              const type = parts[1];
+              if (type === "local") {
+                const cmdParts = parts.slice(2);
+                if (cmdParts.length === 0) {
+                  agent.messages.push({
+                    id: Math.random().toString(36).slice(2, 10),
+                    role: "assistant",
+                    content: "Local servers need a command. Example: `/mcp-add filesystem local npx -y @modelcontextprotocol/server-filesystem /path`",
+                    timestamp: Date.now(),
+                  });
+                  setMessages([...agent.messages]);
+                  return;
+                }
+                const result = await agent.executeToolDirect("manage_mcp", { action: "add", name, type: "local", command: cmdParts });
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: "assistant",
+                  content: result ?? "Added. Restart to connect.",
+                  timestamp: Date.now(),
+                });
+              } else if (type === "remote") {
+                const url = parts[2];
+                if (!url) {
+                  agent.messages.push({
+                    id: Math.random().toString(36).slice(2, 10),
+                    role: "assistant",
+                    content: "Remote servers need a URL. Example: `/mcp-add api remote https://mcp.example.com/sse`",
+                    timestamp: Date.now(),
+                  });
+                  setMessages([...agent.messages]);
+                  return;
+                }
+                const result = await agent.executeToolDirect("manage_mcp", { action: "add", name, type: "remote", url });
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: "assistant",
+                  content: result ?? "Added. Restart to connect.",
+                  timestamp: Date.now(),
+                });
+              } else {
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: "assistant",
+                  content: "Type must be 'local' or 'remote'. Example: `/mcp-add filesystem local npx -y ...`",
+                  timestamp: Date.now(),
+                });
+              }
+              setMessages([...agent.messages]);
+              return;
+            }
+            case "mcp-remove": {
+              if (!args) {
+                agent.messages.push({
+                  id: Math.random().toString(36).slice(2, 10),
+                  role: "assistant",
+                  content: "Usage: `/mcp-remove <server-name>` — e.g. `/mcp-remove filesystem`",
+                  timestamp: Date.now(),
+                });
+                setMessages([...agent.messages]);
+                return;
+              }
+              const result = await agent.executeToolDirect("manage_mcp", { action: "remove", name: args.trim() });
+              agent.messages.push({
+                id: Math.random().toString(36).slice(2, 10),
+                role: "assistant",
+                content: result ?? "Removed. Restart to apply.",
+                timestamp: Date.now(),
+              });
+              setMessages([...agent.messages]);
+              return;
+            }
             default: {
               // Handle skill loading by name: /<skill-name>, /skill:name, /skill [name], or /skills [name]
               const cleanSkillName = command.replace(/^skill:/, "");
@@ -1293,7 +1404,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
     }
   }, []);
 
-  const handleConnectSelect = useCallback(async (provider: any, model: any, apiKey?: string) => {
+  const handleConnectSelect = useCallback(async (provider: RuntimeProvider, model: ModelInfo, apiKey?: string) => {
     const agent = agentRef.current;
     if (agent) {
       const newConfig: Partial<Config> = {
@@ -1405,6 +1516,7 @@ export function App({ renderer }: { renderer: CliRenderer }) {
           elapsedMs={elapsedMs}
           theme={theme}
           mouseEnabled={mouseEnabled}
+          mcpToolCount={agentRef.current?.mcpManager?.totalTools ?? 0}
         />
 
         <box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">

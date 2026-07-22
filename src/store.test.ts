@@ -4,26 +4,18 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { join } from "path";
-import { homedir } from "os";
 import {
   saveSession,
   loadSession,
   deleteSession,
   listSessions,
-  autoSaveSession,
   getLatestSession,
-  resumeSession,
   copyToClipboard,
   exportToMarkdown,
   loadInputHistory,
   saveInputHistory,
 } from "./store";
-import type { Session, Message, Config } from "./types";
-import type { AgentCore } from "./agent";
-
-// Use the actual session directory
-const SESSION_DIR = join(homedir(), ".qwen-agent-tui", "sessions");
+import type { Session, Message } from "./types";
 
 const createTestMessage = (content: string, role: Message["role"] = "user"): Message => ({
   id: `msg-${Math.random().toString(36).slice(2, 8)}`,

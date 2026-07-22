@@ -49,7 +49,7 @@ describe("tools", () => {
       expect(out.results["../outside-batch.txt"].ok).toBe(false);
       expect(out.results["../outside-batch.txt"].error).toContain("Path escapes workspace");
     } finally {
-      try { rmSync(parentFile, { force: true }); } catch {}
+      try { rmSync(parentFile, { force: true }); } catch { /* cleanup */ }
     }
   });
 
@@ -120,7 +120,7 @@ describe("tools", () => {
     const listDir = tools.find((t) => t.name === "list_dir")!;
     const out = JSON.parse(listDir.execute({ path: "." }, ws));
     expect(out.ok).toBe(true);
-    expect(out.entries.map((e: any) => e.name)).toContain("foo.txt");
+    expect(out.entries.map((e: { name: string }) => e.name)).toContain("foo.txt");
   });
 
   it("git_status returns status in a git repo", () => {
@@ -145,8 +145,7 @@ describe("tools", () => {
     expect(out.diff).toContain("modified");
   });
 
-  it.skip("git_commit stages and commits successfully", () => {
-    // Skipping - git operations may be environment-specific
+  it("git_commit stages and commits successfully", () => {
     execSync("git init", { cwd: ws, stdio: "ignore" });
     execSync("git config user.email \"test@example.com\"", { cwd: ws, stdio: "ignore" });
     execSync("git config user.name \"Test User\"", { cwd: ws, stdio: "ignore" });
@@ -156,6 +155,7 @@ describe("tools", () => {
     const out = JSON.parse(gitCommit.execute({ message: "test commit" }, ws));
     expect(out.ok).toBe(true);
     expect(out.stdout).toBeDefined();
+    expect(out.error).toBeUndefined();
     
     const status = execSync("git status --short", { cwd: ws, encoding: "utf-8" });
     expect(status.trim()).toBe(""); 
@@ -204,7 +204,7 @@ describe("tools", () => {
       expect(out.ok).toBe(false);
       expect(out.error).toContain("Path escapes workspace");
     } finally {
-      try { rmSync(parentFile, { force: true }); } catch {}
+      try { rmSync(parentFile, { force: true }); } catch { /* cleanup */ }
     }
   });
 

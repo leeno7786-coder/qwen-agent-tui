@@ -46,7 +46,7 @@ export function buildSmallModelPrompt(ctx: PromptContext): string {
  */
 export function buildLargeModelPrompt(
   ctx: PromptContext,
-  cfg?: Config
+  _cfg?: Config
 ): string {
   const lines = [
     `You are Qwen Agent, a senior software engineer. Workspace: ${ctx.workspace}`,
@@ -108,15 +108,16 @@ export function appendPromptExtras(
 
   system +=
     "\n\n## Remote sub-agents\n" +
-    "You have 3 remote sub-agents backed by small Qwen models (2B each) on another device, reached via this machine's LM Studio. " +
-    "They have READ-ONLY exploration tools (read_file, list_dir, grep_search, map_project_tree, git_status) against this workspace.\n" +
-    "- `explore_subagent` — dispatch ONE sub-agent with a SPECIFIC, FOCUSED `prompt` and an optional `focus_path` (a single file or directory). This is the ONLY sub-agent tool.\n" +
+    "You have 4 remote sub-agents backed by small Qwen models on another device, reached via this machine's LM Studio. " +
+    "They have READ-ONLY tools (read_file, batch_read_files, list_dir, grep_search, map_project_tree, search_and_view, find_files) against this workspace.\n" +
+    "- `explore_subagent` — dispatch ONE sub-agent with a SPECIFIC task and file paths. This is the ONLY sub-agent tool.\n" +
     "Rules:\n" +
-    "  - BEFORE dispatching, GATHER CONTEXT YOURSELF: run map_project_tree / list_dir / grep_search on the main workspace to learn the real structure, then weave the relevant findings into each sub-agent's prompt so it is NOT sent out blind. The workspace root is auto-injected, but richer leads make them far more effective.\n" +
-    "  - Give each sub-agent a focused research task with an explicit 12-round budget. Sub-agents have a 256k context window and can ingest full files. Explicitly instruct them: 'You have up to 12 rounds for this task. Before your 12th final turn, you are ORDERED to STOP calling tools and summarize your findings for the main agent.'\n" +
-    "  - To run all 3 at once, emit ALL `explore_subagent` calls in a SINGLE message. They then execute in PARALLEL on 3 different models and run simultaneously — each making its own tool calls, all visible on screen. Up to 3 concurrent.\n" +
-    "  - After explore_subagent returns, SYNTHESIZE their findings immediately. Sub-agents run synchronously inside the tool call — when it returns, ALL sub-agents have finished execution.\n" +
-    "  - BANNED REASONING PHRASES: NEVER write reasoning thoughts like 'waiting for sub-agents to complete', 'sub-agent is still running', or 'I will continue waiting'. Sub-agents NEVER run asynchronously outside tool calls. Synthesize the returned results right away.\n";
+    "  - The file tree is auto-injected into every sub-agent's context. DO NOT waste their turns on discovery.\n" +
+    "  - Give each sub-agent a NARROW task with EXACT file paths. Bad: 'audit the codebase'. Good: 'Read src/agent.ts and src/llm.ts. Check for error handling gaps and report findings with line numbers.'\n" +
+    "  - Each sub-agent gets 24 turns and can batch-read files. They report back with structured findings.\n" +
+    "  - Up to 4 can run in parallel — emit all `explore_subagent` calls in ONE message.\n" +
+    "  - After explore_subagent returns, SYNTHESIZE findings immediately. They run synchronously — when it returns, they are done.\n" +
+    "  - BANNED: NEVER write 'waiting for sub-agents' or 'sub-agent is still running'. Synthesize right away.\n";
 
   return system;
 }

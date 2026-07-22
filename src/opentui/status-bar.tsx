@@ -21,6 +21,7 @@ interface StatusBarProps {
   elapsedMs?: number;
   theme: Theme;
   mouseEnabled?: boolean;
+  mcpToolCount?: number;
 }
 
 function spinnerFrame(ms: number): string {
@@ -44,6 +45,7 @@ export function StatusBar({
   elapsedMs,
   theme,
   mouseEnabled = true,
+  mcpToolCount = 0,
 }: StatusBarProps) {
   const cfg: Record<AgentState, { color: string; label: string }> = {
     idle: { color: theme.statusIdle, label: "idle" },
@@ -79,6 +81,7 @@ export function StatusBar({
     : "";
   const elapsed =
     elapsedMs && elapsedMs > 0 ? `${(elapsedMs / 1000).toFixed(1)}s` : "";
+  const mcpIndicator = mcpToolCount > 0 ? ` · MCP:${mcpToolCount}` : "";
   const spin =
     state !== "idle" && state !== "error"
       ? spinnerFrame(elapsedMs || 0) + " "
@@ -92,6 +95,7 @@ export function StatusBar({
         <text fg={theme.mutedFg}>{displayModel}{smallModelIndicator}{ctxIndicator}</text>
         {lastTokens && <text fg={theme.mutedFg}> · {lastTokens}</text>}
         {totalTokens && <text fg={theme.mutedFg}> · {totalTokens}</text>}
+        {mcpIndicator && <text fg={theme.mutedFg}>{mcpIndicator}</text>}
         {elapsed && <text fg={theme.mutedFg}> · {elapsed}</text>}
         <text fg={s.color}>
           {spin}{s.label}{toolLabel}

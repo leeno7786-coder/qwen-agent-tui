@@ -13,9 +13,9 @@
  * - Incremental updates
  */
 
-import { GraphNode, GraphEdge, GraphQuery, GraphQueryResult, GraphBuildOptions, GraphCommunity, GodNode, GraphAnalysis } from './types';
+import { GraphNode, GraphEdge, GraphQuery, GraphQueryResult, GraphBuildOptions, GraphCommunity, GodNode } from './types';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, dirname } from 'node:path';
+import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 import * as ts from 'typescript';
 
@@ -167,7 +167,7 @@ export class MemoryGraph {
       }
 
       return true;
-    } catch (error) {
+    } catch {
       return false;
     }
   }
@@ -184,7 +184,7 @@ export class MemoryGraph {
         const content = readFileSync(file, 'utf-8');
         const hash = createHash('md5').update(content).digest('hex');
         hashes[relative(this.workspace, file)] = hash;
-      } catch (error) {
+      } catch {
         // Skip files that can't be read
       }
     }
@@ -243,7 +243,7 @@ export class MemoryGraph {
           }
         }
       }
-    } catch (error) {
+    } catch {
       // Skip directories that can't be read
     }
 
@@ -274,8 +274,8 @@ export class MemoryGraph {
     for (const file of files) {
       try {
       await this.processFile(file);
-    } catch (err: any) {
-      console.warn(`Error processing file ${file}:`, err.message);
+    } catch (err: unknown) {
+      console.warn(`Error processing file ${file}:`, (err as { message?: string }).message);
     }
     }
 
@@ -756,7 +756,7 @@ export class MemoryGraph {
           });
         }
       }
-    } catch (error) {
+    } catch {
       // Invalid JSON, skip
     }
   }
@@ -987,32 +987,31 @@ export class MemoryGraph {
   /**
    * Query nodes by criteria
    */
-  private queryNodes(criteria: any): GraphNode[] {
+  private queryNodes(criteria: string | Record<string, unknown>): GraphNode[] {
     const results: GraphNode[] = [];
+    let limit = 100;
 
     if (typeof criteria === 'string') {
-      // Query by ID
       const node = this.nodes.get(criteria);
       if (node) results.push(node);
     } else if (typeof criteria === 'object') {
-      for (const [id, node] of this.nodes) {
+      limit = (criteria.limit as number) || 100;
+      for (const [, node] of this.nodes) {
         let matches = true;
 
         for (const [key, value] of Object.entries(criteria)) {
-          if (key === 'limit') continue; // Skip non-filter keys
+          if (key === 'limit') continue;
           if (key === 'type' && node.type !== value) {
             matches = false;
             break;
           }
           if (key === 'name' && typeof value === 'string') {
-            // Substring match for name searches
             if (!node.name.toLowerCase().includes(value.toLowerCase())) {
               matches = false;
               break;
             }
           }
           if (key === 'path' && typeof value === 'string') {
-            // Substring match for path searches (OS-agnostic)
             const nodePath = node.path || '';
             const normNodePath = nodePath.replace(/\\/g, '/');
             const normValue = value.replace(/\\/g, '/');
@@ -1033,21 +1032,22 @@ export class MemoryGraph {
       }
     }
 
-    return results.slice(0, criteria.limit || 100);
+    return results.slice(0, limit);
   }
 
   /**
    * Query edges by criteria
    */
-  private queryEdges(criteria: any): GraphEdge[] {
+  private queryEdges(criteria: string | Record<string, unknown>): GraphEdge[] {
     const results: GraphEdge[] = [];
+    let limit = 100;
 
     if (typeof criteria === 'string') {
-      // Query by ID
       const edge = this.edges.get(criteria);
       if (edge) results.push(edge);
     } else if (typeof criteria === 'object') {
-      for (const [id, edge] of this.edges) {
+      limit = (criteria.limit as number) || 100;
+      for (const [, edge] of this.edges) {
         let matches = true;
 
         for (const [key, value] of Object.entries(criteria)) {
@@ -1071,15 +1071,17 @@ export class MemoryGraph {
       }
     }
 
-    return results.slice(0, criteria.limit || 100);
+    return results.slice(0, limit);
   }
 
-  /**
-   * Query paths between nodes
-   */
-  private queryPaths(criteria: any): string[][] {
-    if (typeof criteria === 'object' && criteria.from && criteria.to) {
-      return this.findPaths(criteria.from, criteria.to, criteria.maxDepth || 5);
+  private queryPaths(criteria: string | Record<string, unknown>): string[][] {
+    if (typeof criteria === 'object') {
+      const from = criteria.from as string | undefined;
+      const to = criteria.to as string | undefined;
+      const maxDepth = (criteria.maxDepth as number) || 5;
+      if (from && to) {
+        return this.findPaths(from, to, maxDepth);
+      }
     }
     return [];
   }
@@ -1108,7 +1110,7 @@ export class MemoryGraph {
       }
 
       // Find all edges from this node
-      for (const [edgeId, edge] of this.edges) {
+      for (const [, edge] of this.edges) {
         if (edge.source === current) {
           queue.push({
             current: edge.target,
@@ -1129,7 +1131,7 @@ export class MemoryGraph {
     const results: GraphNode[] = [];
     const regex = new RegExp(pattern, 'i');
 
-    for (const [id, node] of this.nodes) {
+    for (const [, node] of this.nodes) {
       if (
         regex.test(node.id) ||
         regex.test(node.name) ||
@@ -1147,20 +1149,19 @@ export class MemoryGraph {
   /**
    * Semantic query (more advanced)
    */
-  private querySemantic(criteria: any): GraphNode[] {
+  private querySemantic(criteria: string | Record<string, unknown>): GraphNode[] {
     const results: GraphNode[] = [];
 
-    if (criteria.relatedTo) {
-      // Find nodes related to a specific node
-      const nodeId = criteria.relatedTo;
+    if (typeof criteria === 'string') return results;
+    const relatedTo = criteria.relatedTo as string | undefined;
+    if (relatedTo) {
       const relatedNodes = new Set<string>();
 
-      // Find all nodes connected to this node
-      for (const [edgeId, edge] of this.edges) {
-        if (edge.source === nodeId) {
+      for (const [, edge] of this.edges) {
+        if (edge.source === relatedTo) {
           relatedNodes.add(edge.target);
         }
-        if (edge.target === nodeId) {
+        if (edge.target === relatedTo) {
           relatedNodes.add(edge.source);
         }
       }
@@ -1171,7 +1172,7 @@ export class MemoryGraph {
       }
     }
 
-    return results.slice(0, criteria.limit || 50);
+    return results.slice(0, (criteria.limit as number) || 50);
   }
 
   /**
@@ -1249,7 +1250,7 @@ export class MemoryGraph {
   /**
    * Export the graph as JSON
    */
-  export(): { nodes: GraphNode[]; edges: GraphEdge[]; stats: any } {
+  export(): { nodes: GraphNode[]; edges: GraphEdge[]; stats: Record<string, unknown> } {
     return {
       nodes: Array.from(this.nodes.values()),
       edges: Array.from(this.edges.values()),
@@ -1415,7 +1416,7 @@ export class MemoryGraph {
 
     const commNodes = new Map<number, string[]>();
     for (const [id, node] of this.nodes) {
-      const c = node.metadata?.community;
+      const c = node.metadata?.community as number | undefined;
       if (c !== undefined) {
         if (!commNodes.has(c)) commNodes.set(c, []);
         commNodes.get(c)!.push(id);
@@ -1490,8 +1491,8 @@ export class MemoryGraph {
       const tNode = this.nodes.get(edge.target);
       if (!sNode || !tNode) continue;
 
-      const sComm = sNode.metadata?.community;
-      const tComm = tNode.metadata?.community;
+      const sComm = sNode.metadata?.community as number | undefined;
+      const tComm = tNode.metadata?.community as number | undefined;
       if (sComm !== undefined && tComm !== undefined && sComm !== tComm) {
         results.push({ edge, sourceCommunity: sComm, targetCommunity: tComm });
       }
@@ -1555,7 +1556,7 @@ export class MemoryGraph {
 
     lines.push('## Communities');
     lines.push('');
-    communities.forEach((comm, i) => {
+    communities.forEach((comm, _i) => {
       lines.push(`### Community ${comm.id} (${comm.size} nodes)`);
       lines.push('');
       lines.push(`- **Size**: ${comm.size} nodes`);
