@@ -28,25 +28,22 @@ An ultra-lightweight, scalable CLI/TUI coding agent built from the ground up to 
 
 ## 🚀 Quick Start & Installation
 
-### Option 1: Global Install via NPM (Recommended)
+### Option 1: Global Install via Local Repo / Tarball (Recommended)
 ```bash
-npm install -g nanogent
+# In your repo folder:
+npm install -g .
+
+# Or install from release tarball:
+wget https://github.com/leeno7786-coder/qwen-agent-tui/raw/main/nanoagent-1.1.0-alpha.1.tgz
+npm install -g ./nanoagent-1.1.0-alpha.1.tgz
+
+# Launch instantly:
 nanoagent
 ```
 
-### Option 2: Run via `npx` (No installation required)
+### Option 2: Run via `npx`
 ```bash
 npx nanoagent
-```
-
-### Option 3: Download & Install Pre-built Release Package
-```bash
-# Download latest release tarball
-wget https://github.com/leeno7786-coder/qwen-agent-tui/raw/main/nanogent-1.1.0-alpha.1.tgz
-
-# Install globally from local package
-npm install -g ./nanogent-1.1.0-alpha.1.tgz
-nanoagent
 ```
 
 ### Option 4: Build from Source (Bun)
