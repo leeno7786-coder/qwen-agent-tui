@@ -1,0 +1,6 @@
+# Preserve binary files without CRLF line ending transformation
+*.tgz binary
+*.wasm binary
+*.lockb binary
+*.png binary
+*.jpg binary
