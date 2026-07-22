@@ -1,4 +1,4 @@
-# ⚡ NanoAgent (`nanogent`)
+# ⚡ NanoAgent (`nanoagent`)
 
 ```text
   _  _                 _                    _   
@@ -15,7 +15,7 @@ An ultra-lightweight, scalable CLI/TUI coding agent built from the ground up to 
 
 ## 🌟 Key Features
 
-- **⚡ Power Word Execution**: Launch instantly with `nanogent`, `npx nanogent`, `nano-agent`, or `nanogent-tui`.
+- **⚡ Instant Execution**: Launch directly by typing `nanoagent` (or `nanogent`, `npx nanoagent`, `nano-agent`).
 - **🎯 Tiny-Model First Optimization**: Specialized prompt formatting, compact token management, and small-model tool calling resilience.
 - **🖥️ Rich OpenTUI Terminal Interface**: Full-screen interactive dashboard featuring real-time response streaming, tool diff views, task sidebars, and keyboard overlays.
 - **⚙️ Dynamic Dual-Level Configuration**: Configurable globally via `~/.nanogent.json` or per-project via `.nanogent.json`. Editable directly in the TUI using `/config` and `/set` slash commands.
@@ -28,15 +28,15 @@ An ultra-lightweight, scalable CLI/TUI coding agent built from the ground up to 
 
 ## 🚀 Quick Start & Installation
 
-### Option 1: Run via `npx` (No installation needed)
-```bash
-npx nanogent
-```
-
-### Option 2: Global Install via NPM
+### Option 1: Global Install via NPM (Recommended)
 ```bash
 npm install -g nanogent
-nanogent
+nanoagent
+```
+
+### Option 2: Run via `npx` (No installation required)
+```bash
+npx nanoagent
 ```
 
 ### Option 3: Download & Install Pre-built Release Package
@@ -46,7 +46,7 @@ wget https://github.com/leeno7786-coder/qwen-agent-tui/raw/main/nanogent-1.1.0-a
 
 # Install globally from local package
 npm install -g ./nanogent-1.1.0-alpha.1.tgz
-nanogent
+nanoagent
 ```
 
 ### Option 4: Build from Source (Bun)
@@ -127,17 +127,17 @@ NanoAgent can also run headlessly for scripts, CI pipelines, and agent automatio
 
 ```bash
 # Run a single task non-interactively
-nanogent run --prompt "Refactor index.ts to use async/await" --workspace .
+nanoagent run --prompt "Refactor index.ts to use async/await" --workspace .
 
 # Pipe prompt via stdin
-cat task.txt | nanogent run --stdin --workspace . --quiet
+cat task.txt | nanoagent run --stdin --workspace . --quiet
 
 # Machine-readable JSON output
-nanogent run --prompt "check test coverage" --json
+nanoagent run --prompt "check test coverage" --json
 
 # Run health check or query models
-nanogent doctor --json
-nanogent models
+nanoagent doctor --json
+nanoagent models
 ```
 
 ---
